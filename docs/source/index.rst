@@ -35,13 +35,13 @@ Install from GitHub:
 
 .. code-block:: bash
 
-   pip install git+https://github.com/[username]/mice-py.git
+   pip install git+https://github.com/Zhanna-Lopuliak/mice-py.git
 
 Or clone and install in development mode:
 
 .. code-block:: bash
 
-   git clone https://github.com/[username]/mice-py.git
+   git clone https://github.com/Zhanna-Lopuliak/mice-py.git
    cd mice-py
    pip install -e .
 

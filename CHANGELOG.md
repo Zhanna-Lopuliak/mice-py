@@ -78,32 +78,12 @@ This package was developed as part of a master's thesis at Ludwig Maximilian Uni
 - [ ] Parallel processing for multiple imputations
 - [ ] Advanced diagnostics (convergence tests)
 - [ ] Export/import of imputation results
-- [ ] Integration with scikit-learn pipelines
 - [ ] GPU acceleration for large datasets
-- [ ] Interactive visualization dashboards
-
-### Under Consideration
-- [ ] Support for panel/longitudinal data
-- [ ] Time series imputation methods
-- [ ] Constraint-based imputation
-- [ ] Active learning for imputation model selection
-- [ ] Automated method selection based on data characteristics
-
----
-
-## Contributing
-
-We welcome contributions! Please see our contributing guidelines for:
-- Bug reports
-- Feature requests
-- Pull requests
-- Documentation improvements
 
 ## Links
 
 - **Documentation**: [Read the Docs](https://mice-py.readthedocs.io/)
-- **Repository**: [GitHub](https://github.com/[username]/mice-py)
-- **Issue Tracker**: [GitHub Issues](https://github.com/[username]/mice-py/issues)
+- **Repository**: [GitHub](https://github.com/Zhanna-Lopuliak/mice-py)
 
 ---
 

@@ -44,13 +44,13 @@ A comprehensive Python implementation of **Multiple Imputation by Chained Equati
 ### From GitHub
 
 ```bash
-pip install git+https://github.com/[username]/mice-py.git
+pip install git+https://github.com/Zhanna-Lopuliak/mice-py.git
 ```
 
 ### Development Installation
 
 ```bash
-git clone https://github.com/[username]/mice-py.git
+git clone https://github.com/Zhanna-Lopuliak/mice-py.git
 cd mice-py
 pip install -e .
 ```
@@ -217,7 +217,7 @@ See `LOGGING.md` for detailed logging documentation.
 
 ## Documentation
 
-Full documentation is available at [Read the Docs](https://implementation-of-pmm-by-mice.readthedocs.io/) (powered by Sphinx).
+Full documentation is available at [Read the Docs](https://mice-py.readthedocs.io/) (powered by Sphinx).
 
 ### Documentation includes:
 - Complete API reference
@@ -308,7 +308,7 @@ If you use this package in your research, please cite:
   title = {mice-py: Multiple Imputation by Chained Equations in Python},
   author = {Haensch, Anna-Carolina and Vu, The Anh and Lopuliak, Zhanna},
   year = {2025},
-  url = {https://github.com/[username]/mice-py}
+  url = {https://github.com/Zhanna-Lopuliak/mice-py}
 }
 ```
 
