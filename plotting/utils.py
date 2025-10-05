@@ -6,7 +6,6 @@ import numpy as np
 import os
 import logging
 
-# Get a logger for the current module
 logger = logging.getLogger('imputation.plotting.utils')
 
 

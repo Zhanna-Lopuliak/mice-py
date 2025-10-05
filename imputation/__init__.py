@@ -7,20 +7,15 @@ It follows Python logging best practices and allows users to configure logging a
 
 import logging
 
-# Add a null handler to prevent "No handlers" warnings when the package is used
-# This follows Python logging best practices for libraries
 package_logger = logging.getLogger(__name__)
 package_logger.addHandler(logging.NullHandler())
-package_logger.propagate = False  # Don't propagate to root logger by default
+package_logger.propagate = False
 
-# Import main classes and functions
 from .MICE import MICE
 from .logging_config import setup_logging, get_logger, disable_logging, reset_logging
 
-# Package logger for internal use
 logger = logging.getLogger(__name__)
 
-# Public API
 __all__ = [
     'MICE', 
     'setup_logging', 

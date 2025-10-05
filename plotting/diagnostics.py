@@ -6,14 +6,10 @@ import logging
 import os
 from pathlib import Path
 
-# Get a logger for the current module.
-# This will automatically inherit the root logger configuration.
 logger = logging.getLogger('imputation.plotting.diagnostics')
 
-# Set random seed for reproducibility
 np.random.seed(42)
-# Also set random seed for pandas
-pd.set_option('mode.chained_assignment', None)  # Suppress pandas warnings
+pd.set_option('mode.chained_assignment', None)
 pd.set_option('display.max_columns', None)
 
 
