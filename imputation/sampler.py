@@ -16,7 +16,7 @@ def sym(x):
 
         """
     return (x + x.T) / 2
-def norm_draw(y, ry, x, rank_adjust=True, **kwargs):
+def norm_draw(y, ry, x, rank_adjust=True, rng=None, **kwargs):
     """
         Bayesian linear regression draw of regression coefficients and residual variance,
         based on the least squares parameters from `estimice()`.
@@ -36,6 +36,8 @@ def norm_draw(y, ry, x, rank_adjust=True, **kwargs):
             If True, replaces any NaN coefficients with zeros. This is relevant only when
             the least squares method is "qr" and the predictor matrix is rank-deficient.
             Default is True.
+        rng : np.random.Generator, optional
+            Random number generator for reproducibility. If None, a fresh generator is used.
         **kwargs : dict
             Additional keyword arguments passed to `estimice()`, e.g., `ls_meth` to specify the least squares method.
 
@@ -68,16 +70,18 @@ def norm_draw(y, ry, x, rank_adjust=True, **kwargs):
         >>> result = norm_draw(y, ry, x, ls_meth='qr')
         >>> print(result['beta'])
         """
+    if rng is None:
+        rng = np.random.default_rng()
     #Draw from estimice
     p = estimice(x[ry, :], y[ry], **kwargs)
     #sqrt(sum((p$r)^2) / rchisq(n = 1,df = p$df)) #one random variate with p$df normal noise
     #sqrt because we need sigma not sigma^2 for beta later
-    sigma_star = np.sqrt(np.sum(p["r"] ** 2) / chi2.rvs(df = p["df"], size = 1))
+    sigma_star = np.sqrt(np.sum(p["r"] ** 2) / chi2.rvs(df = p["df"], size = 1, random_state=rng))
     # #cholesky needs matrix to be symmetrical, must be positive definite -> use sym() (A+A.T)/2
     # #np.linalg.cholesky returns lower triangular matrix
     chol = np.linalg.cholesky(sym(p["v"]))
     # #coef + lower triangular matrix from Cholesky Decomposition * random n draws from standard normal * sigma
-    beta_star = p["c"] + (chol.T @ np.random.normal(size=x.shape[1])) * sigma_star
+    beta_star = p["c"] + (chol.T @ rng.normal(size=x.shape[1])) * sigma_star
     #return list
     parm = {
         "coef": p["c"],

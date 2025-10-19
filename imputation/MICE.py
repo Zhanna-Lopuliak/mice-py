@@ -381,67 +381,6 @@ class MICE:
         logger.debug(f"Estimated predictor matrix:\n{predictor_matrix}")
         return predictor_matrix
 
-    #def pool(self, summ: bool = False):
-        # """Pool descriptive estimates across ``self.imputed_datasets`` using Rubin's rules.
-
-        # This method is a convenience wrapper around the standalone pooling module.
-        # For more flexibility, consider using ``imputation.pooling.pool_descriptive_statistics`` directly.
-
-        # What is pooled
-        # --------------
-        # - Numeric columns: the sample mean per column.
-        # - Categorical columns (object/category): the per-level proportions for each column.
-
-        # Within-imputation variance
-        # --------------------------
-        # - Numeric: ``Var(mean) = s^2 / n`` (with ``ddof=1`` for ``s^2``).
-        # - Categorical level proportion ``p``: ``Var(p) = p(1-p)/n``.
-
-        # Notes
-        # -----
-        # - Cross-parameter covariances are ignored and a diagonal covariance matrix is constructed.
-        # - Degrees of freedom small-sample adjustments are not applied.
-        # - Categorical level parameter names are formatted as ``<column>[<level>]``.
-
-        # Parameters
-        # ----------
-        # summ : bool, optional
-        #     If True, return ``self.result.summary()``.
-        # """
-        # logger.info("Starting pooling of imputed datasets using standalone pooling module")
-
-        # if not self.imputed_datasets:
-        #     msg = "No imputed datasets found – run `.impute()` first."
-        #     logger.error(msg)
-        #     raise ValueError(msg)
-
-        # # Use standalone pooling module
-        # pooling_result = pool_descriptive_statistics(self.imputed_datasets)
-        
-        # # Convert standalone result to MICE-compatible result for backward compatibility
-        # logger.debug("Converting pooling result to MICE-compatible format")
-        
-        # # Build diagonal covariance matrix
-        # cov_params = np.diag(pooling_result.variances)
-        
-        # # Make parameter names available for summaries
-        # self.exog_names = pooling_result.param_names
-
-        # # Create results object compatible with existing MICE interface
-        # logger.debug("Creating MICEresult object")
-        # self.result = MICEresult(self, pooling_result.estimates, cov_params)
-        # self.result.scale = 1.0
-        # self.result.frac_miss_info = pooling_result.frac_miss_info
-        
-        # # Store the standalone pooling result for advanced users
-        # self.pooling_result = pooling_result
-
-        # logger.info("Pooling completed successfully using standalone module")
-
-        # if summ:
-        #     logger.debug("Generating summary")
-        #     return self.result.summary()
-    
     def fit(self, formula: str) -> None:
         """
         Fit a statistical model to each imputed dataset using the specified formula.
@@ -758,9 +697,8 @@ class MICE:
                     param_name = key[len(prefix):]
                     method_params[param_name] = value
             
-            # Only pass rng if not using PMM
-            if method_name != 'pmm':
-                method_params['rng'] = rng
+            # Pass rng to all imputation methods for reproducibility
+            method_params['rng'] = rng
             
             if method_params:
                 logger.debug(f"Passing parameters to imputer: {method_params}")
@@ -844,16 +782,32 @@ class MICE:
             Visit sequence specification. Can be:
             - str: "monotone" or "random" for predefined sequences
             - List[str]: list of column names specifying the order to visit variables
+                        Must include all columns with missing values. Columns without
+                        missing values will be ignored with a warning.
         """
-        check_visit_sequence(visit_sequence, list(self.data.columns))
+        columns_with_missing = [col for col in self.data.columns if self.data[col].isna().any()]
+        
+        # Validate using centralized validator
+        validated_sequence, cols_without_missing = check_visit_sequence(
+            visit_sequence, 
+            list(self.data.columns),
+            columns_with_missing
+        )
         
         if isinstance(visit_sequence, list):
-            self.visit_sequence = visit_sequence
+            # Warn about columns without missing values if any were filtered out
+            if cols_without_missing:
+                logger.warning(
+                    f"Visit sequence includes columns without missing values: {cols_without_missing}. "
+                    f"These columns will be ignored during imputation."
+                )
+            self.visit_sequence = validated_sequence
         else:
-            columns_with_missing = [col for col in self.data.columns if self.data[col].isna().any()]
-            
+            # For string sequences, generate based on type
             if visit_sequence == VisitSequence.RANDOM.value:
-                self.visit_sequence = list(np.random.permutation(columns_with_missing))
+                # Use seeded RNG for reproducible random visit sequence
+                rng = np.random.default_rng(42)
+                self.visit_sequence = list(rng.permutation(columns_with_missing))
             elif visit_sequence == VisitSequence.MONOTONE.value:
                 nmis = np.array([self.id_mis[col].sum() for col in columns_with_missing])
                 ii = np.argsort(nmis)

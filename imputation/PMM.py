@@ -4,7 +4,6 @@ from .sampler import *
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.cross_decomposition import CCA
 from sklearn.neighbors import KDTree
-import random
 
 def pmm(y, id_obs, x, id_mis = None, donors = 5, matchtype = 1,
                     quantify = True, ridge = 1e-5, matcher = "NN", rng = None, **kwargs):
@@ -111,8 +110,12 @@ def pmm(y, id_obs, x, id_mis = None, donors = 5, matchtype = 1,
         else:
             ynum, id = pd.factorize(y)
 
+    # Create default RNG if not provided
+    if rng is None:
+        rng = np.random.default_rng()
+    
     # Parameter estimation
-    p = norm_draw(ynum, id_obs, x, ridge=ridge, **kwargs)
+    p = norm_draw(ynum, id_obs, x, ridge=ridge, rng=rng, **kwargs)
 
     #dotproduct x @ parameter = predicted values
     if matchtype == 0:
@@ -125,7 +128,7 @@ def pmm(y, id_obs, x, id_mis = None, donors = 5, matchtype = 1,
         yhatobs = np.dot(x[id_obs, :], p["beta"])
         yhatmis = np.dot(x[id_mis, :], p["beta"])
 
-    idx = matcherid(d = yhatobs, t = yhatmis, matcher = "NN", k = donors)
+    idx = matcherid(d = yhatobs, t = yhatmis, matcher = "NN", k = donors, rng = rng)
     
     # Get the observed values that were selected as donors
     donor_values = ynum[id_obs][idx]
@@ -183,7 +186,7 @@ def quantify_cca(y, id_obs, x):
     ynum[id_obs] = y_t
     id = pd.DataFrame([y_t], columns=y[id_obs].values)
     return ynum, id
-def matcherid(d, t, matcher = "NN", k = 10, radius = 3):
+def matcherid(d, t, matcher = "NN", k = 10, radius = 3, rng = None):
     """
     Find donor indices matching missing values based on specified matching method.
 
@@ -201,6 +204,8 @@ def matcherid(d, t, matcher = "NN", k = 10, radius = 3):
         Number of nearest neighbors to consider (only for "NN" matcher).
     radius : float, optional
         Radius threshold for fixedNN matcher (only for "fixedNN" matcher).
+    rng : np.random.Generator, optional
+        Random number generator for reproducibility. If None, a fresh generator is used.
 
     Returns
     -------
@@ -221,13 +226,15 @@ def matcherid(d, t, matcher = "NN", k = 10, radius = 3):
     >>> matcherid(d, t, matcher="fixedNN", radius=5)
     [0]
     """
+    if rng is None:
+        rng = np.random.default_rng()
     if matcher == "NN": #random from n closest Donors
         idx = []
         tree = KDTree(d.reshape(-1, 1), leaf_size = 40)
         #returns index k NN indices choose 1 on random
         dist, ind = tree.query(t.reshape(-1, 1), k = k)
         for list in ind:
-            idx.append(random.choice(list))
+            idx.append(rng.choice(list))
         #returns indices of one random nearest neighbor for each t
         return idx
     elif matcher == "fixedNN": #fixed radius nearest neighbour
@@ -236,7 +243,7 @@ def matcherid(d, t, matcher = "NN", k = 10, radius = 3):
         #returns index k NN indices choose 1 on random
         ind = tree.query_radius(t.reshape(-1, 1), radius)
         for list in ind:
-            idx.append(random.choice(list))
+            idx.append(rng.choice(list))
         #returns indices of one random nearest neighbor
         return idx
     else:

@@ -121,7 +121,11 @@ def check_initial_method(initial_method: str) -> None:
     if not InitialMethod.is_valid_method(initial_method):
         raise ValueError(f"Unsupported initial method: {initial_method}. Supported initial methods are: {SUPPORTED_INITIAL_METHODS}")
 
-def check_visit_sequence(visit_sequence: Union[str, List[str]], columns: List[str]) -> None:
+def check_visit_sequence(
+    visit_sequence: Union[str, List[str]], 
+    columns: List[str],
+    columns_with_missing: List[str] = None
+) -> tuple:
     """
     Check and process the visit sequence parameter for MICE imputation.
     
@@ -132,29 +136,64 @@ def check_visit_sequence(visit_sequence: Union[str, List[str]], columns: List[st
         - str: "monotone" or "random" for predefined sequences
         - List[str]: list of column names specifying the order to visit variables
     columns : List[str]
-        List of column names in the data
+        List of all column names in the data
+    columns_with_missing : List[str], optional
+        List of columns that have missing values. If provided, will validate
+        that all these columns are included in a custom visit sequence.
+        
+    Returns
+    -------
+    tuple
+        (validated_sequence, columns_without_missing) where:
+        - validated_sequence: the processed visit sequence (only for list input, None for string)
+        - columns_without_missing: list of columns in sequence that don't have missing values
         
     Raises
     ------
     ValueError
         If visit_sequence is invalid or references non-existent columns
+        
+    Notes
+    -----
+    For string visit sequences ("monotone", "random"), the actual sequence will be
+    generated in MICE._set_visit_sequence() based on the data.
+    
+    For list visit sequences, this function validates that:
+    1. All columns exist in the data
+    2. No duplicate columns
+    3. All columns with missing values are included (if columns_with_missing provided)
     """
 
     if isinstance(visit_sequence, str):
         if not VisitSequence.is_valid_sequence(visit_sequence):
             raise ValueError(f"Unsupported visit sequence: {visit_sequence}. Supported visit sequences are: {SUPPORTED_VISIT_SEQUENCES}")
-        return
+        return None, []
 
     if isinstance(visit_sequence, list):
         invalid_cols = [col for col in visit_sequence if col not in columns]
         if invalid_cols:
             raise ValueError(f"Visit sequence contains columns not in data: {invalid_cols}")
         
-        missing_cols = [col for col in columns if col not in visit_sequence]
-        if missing_cols:
-            raise ValueError(f"Missing columns in visit sequence: {missing_cols}. All data columns must be included.")
+        if len(visit_sequence) != len(set(visit_sequence)):
+            duplicates = [col for col in visit_sequence if visit_sequence.count(col) > 1]
+            raise ValueError(f"Visit sequence contains duplicate columns: {set(duplicates)}")
         
-        return
+        if columns_with_missing is not None:
+            missing_from_sequence = [col for col in columns_with_missing if col not in visit_sequence]
+            if missing_from_sequence:
+                raise ValueError(
+                    f"Visit sequence is missing columns with missing values: {missing_from_sequence}. "
+                    f"All columns with missing values must be included in the visit sequence. "
+                    f"Columns with missing values: {columns_with_missing}"
+                )
+            
+            cols_without_missing = [col for col in visit_sequence if col not in columns_with_missing]
+            
+            validated_sequence = [col for col in visit_sequence if col in columns_with_missing]
+            
+            return validated_sequence, cols_without_missing
+        
+        return visit_sequence, []
     
     raise ValueError("visit_sequence must be either a string or a list of strings")
 
