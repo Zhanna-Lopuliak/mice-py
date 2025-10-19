@@ -237,31 +237,6 @@ Before finalizing:
 ☐ Used proper pooling (Rubin's rules)
 ☐ Set random seed for reproducibility
 
-Documentation
--------------
-
-**In methods section, report**:
-   - Software and version
-   - Imputation method(s)
-   - Number of imputations (m)
-   - Number of iterations
-   - Convergence assessment
-   - Variables included
-
-**In results, report**:
-   - Pooled estimates with CI
-   - FMI for key parameters
-   - Sample sizes
-
-Example:
-
-.. code-block:: text
-
-   Missing data were handled using MICE (mice-py v0.1.0) with m=20 
-   imputations using predictive mean matching. The algorithm ran for 
-   20 iterations; convergence was confirmed by visual inspection of 
-   trace plots. Results were pooled using Rubin's rules.
-
 See Also
 --------
 

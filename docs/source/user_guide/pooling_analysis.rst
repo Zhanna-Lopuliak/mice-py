@@ -107,12 +107,7 @@ FMI indicates how much the uncertainty in your estimate is due to missing data:
 - **FMI = 0.5**: Half the uncertainty is from missingness
 - **FMI = 1**: Complete uncertainty from missingness (rare)
 
-**Interpretation**:
-   - Low FMI (<0.1): Missingness has little impact
-   - Moderate FMI (0.1-0.3): Some impact, multiple imputation important
-   - High FMI (>0.3): Substantial impact, consider implications
-
-**Rule of thumb**: Higher FMI suggests you need more imputations (m) for stable results.
+If FMI > 0.3, consider using more imputations.
 
 Formula Syntax
 --------------
@@ -341,45 +336,8 @@ Don't Ignore Imputation Uncertainty
 
 Standard errors from a single imputed dataset are too small. Always pool!
 
-Reporting Results
------------------
-
-When publishing, report:
-
-1. **Number of imputations** (m)
-2. **Number of iterations**
-3. **Imputation method(s)** used
-4. **Pooled estimates** with standard errors or confidence intervals
-5. **FMI** for key parameters
-6. **Convergence** assessment
-
-Example Text
-~~~~~~~~~~~~
-
-.. code-block:: text
-
-   Missing data were handled using multiple imputation by chained equations 
-   (MICE) with m=20 imputations. Variables were imputed using predictive mean 
-   matching. The algorithm ran for 20 iterations and convergence was confirmed 
-   by visual inspection of trace plots. Results were pooled using Rubin's rules. 
-   The fraction of missing information ranged from 0.08 to 0.25 across parameters.
-
-Example Results Table
-~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: text
-
-   Table 1: Pooled regression results (n=500, m=10 imputations)
-   
-   Variable       Estimate    SE      95% CI            p      FMI
-   ─────────────────────────────────────────────────────────────
-   Intercept      45.23      5.32   [34.45, 56.02]  <0.001  0.16
-   Age             0.82      0.14   [ 0.54,  1.11]  <0.001  0.20
-   Gender(F)      -1.23      0.39   [-2.01, -0.46]   0.002  0.09
-   Education       2.16      0.92   [ 0.30,  4.01]   0.024  0.13
-
-Diagnostic Statistics
-~~~~~~~~~~~~~~~~~~~~~
+Checking Results
+----------------
 
 After pooling, check:
 
@@ -400,7 +358,6 @@ Tips for Better Pooling
 3. **Complete convergence**: Ensure MICE converged before pooling
 4. **Include all relevant variables**: In both imputation and analysis models
 5. **Be cautious with transformations**: Pool on the analysis scale
-6. **Report thoroughly**: Include all relevant details in your methods
 
 Next Steps
 ----------

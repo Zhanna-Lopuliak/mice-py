@@ -74,34 +74,6 @@ Interpreting the Plots
 ✗ **Unstable oscillations**: Large swings even in later iterations
 ✗ **Separated chains**: Different imputations have very different patterns
 
-Example: Good Convergence
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: text
-
-   Mean Chain Plot:
-   ────────────────────
-   │ ∼∼∼∼∼∼∼∼∼∼∼∼∼∼∼  ← Stable, flat line
-   │
-   │
-   ├───────────────────
-   0   5   10  15  20  iterations
-
-Example: Poor Convergence
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: text
-
-   Mean Chain Plot:
-   ────────────────────
-   │         ╱
-   │       ╱
-   │     ╱              ← Still trending upward
-   │   ╱
-   │ ╱
-   ├───────────────────
-   0   5   10  15  20  iterations
-
 Numerical Assessment
 --------------------
 
@@ -322,26 +294,6 @@ Separated Chains
    - Check if true multimodality exists
    - Use method appropriate for data type
 
-Documenting Convergence
-------------------------
-
-When reporting results, document:
-
-1. **Number of iterations used**
-2. **Assessment method** (visual inspection of chain plots)
-3. **Conclusion** (e.g., "All variables converged by iteration 15")
-4. **Any issues** encountered and how addressed
-
-Example Documentation
-~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: text
-
-   We ran MICE for 20 iterations. Convergence was assessed by visual 
-   inspection of trace plots for mean and variance. All variables 
-   showed stable chains by iteration 12. Imputed values were within 
-   the range of observed values for all variables.
-
 Best Practices
 --------------
 
@@ -349,9 +301,8 @@ Best Practices
 2. **Visual inspection first**: Plots are more informative than statistics
 3. **Be conservative**: If unsure, run more iterations
 4. **Check all variables**: Don't just look at your outcome variable
-5. **Document your assessment**: Include in your methods section
-6. **Look at early iterations**: They can reveal problems with initialization
-7. **Compare multiple runs**: Rerun with different seeds to check stability
+5. **Look at early iterations**: They can reveal problems with initialization
+6. **Compare multiple runs**: Rerun with different seeds to check stability
 
 Quick Convergence Checklist
 ----------------------------
