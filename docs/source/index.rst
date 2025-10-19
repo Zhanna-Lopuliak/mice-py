@@ -15,8 +15,6 @@ mice-py: Multiple Imputation by Chained Equations in Python
 
 A comprehensive Python implementation of **Multiple Imputation by Chained Equations (MICE)** for handling missing data in statistical analysis and machine learning workflows.
 
-Developed as part of a master's thesis at Ludwig Maximilian University of Munich, Statistics Department.
-
 Key Features
 ------------
 
@@ -46,12 +44,6 @@ Key Features
    - Stripplots, box plots, and density plots
    - Missing data pattern visualization
    - XY plots for bivariate relationships
-
-**Production-Ready**
-   - Comprehensive input validation
-   - Configurable logging system
-   - Extensive test suite
-   - Well-documented API
 
 Quick Example
 -------------
