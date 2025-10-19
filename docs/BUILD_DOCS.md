@@ -2,6 +2,17 @@
 
 This guide explains how to build and preview the documentation on your local machine before publishing to ReadTheDocs.
 
+## Documentation Structure
+
+The documentation is organized into several sections:
+
+- **Getting Started**: Installation and quickstart guides
+- **User Guide**: Comprehensive usage documentation (7 guides)
+- **Theory & Background**: Theoretical foundations (4 pages)
+- **Examples**: Links to Jupyter notebook tutorials
+- **API Reference**: Complete API documentation (5 modules)
+- **Development**: Contributing guidelines, changelog, references
+
 ## Prerequisites
 
 Install documentation dependencies:
@@ -112,19 +123,52 @@ rm -rf build/
 sphinx-build -b html source build
 ```
 
+## Directory Structure
+
+The documentation source files are organized as:
+
+```
+docs/source/
+├── index.rst                  # Main landing page
+├── installation.rst           # Installation guide
+├── quickstart.rst            # Quick start tutorial
+├── user_guide/               # User guides (7 pages)
+│   ├── index.rst
+│   ├── understanding_missing_data.rst
+│   ├── mice_overview.rst
+│   ├── imputation_methods.rst
+│   ├── predictor_matrices.rst
+│   ├── convergence_diagnostics.rst
+│   ├── pooling_analysis.rst
+│   └── best_practices.rst
+├── theory/                   # Theoretical background (4 pages)
+│   ├── index.rst
+│   ├── missing_data_mechanisms.rst
+│   ├── multiple_imputation_theory.rst
+│   ├── method_details.rst
+│   └── rubins_rules.rst
+├── examples/                 # Examples section
+│   └── index.rst
+├── api/                      # API reference (5 modules)
+│   ├── index.rst
+│   ├── mice.rst
+│   ├── methods.rst
+│   ├── pooling.rst
+│   ├── plotting.rst
+│   └── utilities.rst
+├── contributing.rst          # Contribution guidelines
+├── changelog.rst            # Version history
+└── references.rst           # Bibliography
+```
+
 ## Automatic Documentation Generation
 
-If you want to auto-generate API documentation from docstrings:
+The API documentation is manually organized but uses autodoc for docstrings.
+If you need to regenerate:
 
 ```bash
-# Install sphinx-apidoc
-pip install sphinx
-
-# Generate RST files from code
-sphinx-apidoc -f -o docs/source/api imputation/
-sphinx-apidoc -f -o docs/source/api plotting/
-
-# Then build
+# The API docs use automodule directives
+# Just rebuild to pull latest docstrings
 sphinx-build -b html source build
 ```
 

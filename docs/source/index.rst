@@ -1,86 +1,119 @@
 mice-py: Multiple Imputation by Chained Equations in Python
 ============================================================
 
+.. image:: https://img.shields.io/badge/python-3.9+-blue.svg
+   :target: https://www.python.org/downloads/
+   :alt: Python 3.9+
+
+.. image:: https://img.shields.io/badge/License-MIT-yellow.svg
+   :target: https://opensource.org/licenses/MIT
+   :alt: License: MIT
+
+.. image:: https://readthedocs.org/projects/mice-py/badge/?version=latest
+   :target: https://mice-py.readthedocs.io/en/latest/?badge=latest
+   :alt: Documentation Status
+
 A comprehensive Python implementation of **Multiple Imputation by Chained Equations (MICE)** for handling missing data in statistical analysis and machine learning workflows.
 
 Developed as part of a master's thesis at Ludwig Maximilian University of Munich, Statistics Department.
 
-Overview
---------
-
-The framework provides:
-
-- **Five imputation methods**: PMM, CART, Random Forest, MIDAS, and Sample imputation
-- **Comprehensive diagnostics**: Visualization tools for analyzing imputation quality and missing data patterns
-- **Statistical pooling**: Rubin's rules for combining estimates with formula-based model fitting
-- **Professional logging**: Configurable logging system following Python best practices
-- **Production-ready**: Extensive validation, testing, and documentation
-
 Key Features
 ------------
 
-- **Multiple Imputation by Chained Equations (MICE)**: Full implementation with customizable parameters
-- **Automatic predictor matrix estimation**: Using quickpred algorithm or custom matrices
-- **Flexible visit sequences**: Monotone, random, or custom imputation order
-- **Mixed data types**: Support for numeric and categorical variables
-- **Diagnostic Tools**: Stripplots, density plots, convergence diagnostics, and missing data patterns
+**Multiple Imputation Methods**
+   Choose from five robust imputation strategies:
+   
+   - **PMM** (Predictive Mean Matching) - Maintains distributional properties
+   - **CART** (Classification and Regression Trees) - Handles non-linear relationships
+   - **Random Forest** - Captures complex interactions
+   - **MIDAS** (Multiple Imputation with Distant Average Substitution) - Efficient for small samples
+   - **Sample** - Simple random sampling from observed values
 
-Getting Started
----------------
+**Flexible Configuration**
+   - Automatic predictor matrix estimation
+   - Custom visit sequences for imputation order
+   - Method-specific parameter control
+   - Mixed data types (numeric and categorical)
 
-Installation
-~~~~~~~~~~~~
+**Statistical Pooling**
+   - Rubin's rules for combining estimates
+   - Fraction of missing information (FMI)
+   - Confidence intervals and standard errors
+   - Formula-based model fitting with statsmodels integration
 
-Install from GitHub:
+**Diagnostic Tools**
+   - Convergence diagnostics (chain statistics)
+   - Stripplots, box plots, and density plots
+   - Missing data pattern visualization
+   - XY plots for bivariate relationships
 
-.. code-block:: bash
+**Production-Ready**
+   - Comprehensive input validation
+   - Configurable logging system
+   - Extensive test suite
+   - Well-documented API
 
-   pip install git+https://github.com/Zhanna-Lopuliak/mice-py.git
-
-Or clone and install in development mode:
-
-.. code-block:: bash
-
-   git clone https://github.com/Zhanna-Lopuliak/mice-py.git
-   cd mice-py
-   pip install -e .
-
-Basic Usage
-~~~~~~~~~~~
+Quick Example
+-------------
 
 .. code-block:: python
 
-   from imputation import MICE
    import pandas as pd
+   from imputation import MICE
    
    # Load your data with missing values
-   data = pd.read_csv('your_data.csv')
+   df = pd.read_csv("your_data.csv")
    
-   # Configure logging (optional)
-   from imputation import configure_logging
-   configure_logging()
-   
-   # Create MICE object and perform imputation
-   mice = MICE(data)
+   # Initialize and run MICE
+   mice = MICE(df)
    mice.impute(n_imputations=5, maxit=10, method='pmm')
-   
-   # Access imputed datasets
-   imputed_datasets = mice.imputed_datasets
    
    # Fit a model and pool results
    mice.fit('outcome ~ predictor1 + predictor2')
    results = mice.pool(summ=True)
    print(results)
 
-Documentation
--------------
+Documentation Contents
+----------------------
 
 .. toctree::
    :maxdepth: 2
-   :caption: mice-py package
+   :caption: Getting Started
 
-   imputation/index
-   plotting/index
+   installation
+   quickstart
+
+.. toctree::
+   :maxdepth: 2
+   :caption: User Guide
+
+   user_guide/index
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Theory & Background
+
+   theory/index
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Examples
+
+   examples/index
+
+.. toctree::
+   :maxdepth: 2
+   :caption: API Reference
+
+   api/index
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Development
+
+   contributing
+   changelog
+   references
 
 Indices and Tables
 ==================
