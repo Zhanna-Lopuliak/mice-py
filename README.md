@@ -295,9 +295,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Authors
 
-- **Anna-Carolina Haensch** - Anna-Carolina.Haensch@stat.uni-muenchen.de
-- **The Anh Vu** - Theanh_v99@yahoo.de
 - **Zhanna Lopuliak** - zhanna.lopuliak@gmail.com
+- **The Anh Vu** - Theanh_v99@yahoo.de
+- **Anna-Carolina Haensch** - Anna-Carolina.Haensch@stat.uni-muenchen.de
 
 ## Citation
 
@@ -306,7 +306,7 @@ If you use this package in your research, please cite:
 ```bibtex
 @software{mice-py,
   title = {mice-py: Multiple Imputation by Chained Equations in Python},
-  author = {Haensch, Anna-Carolina and Vu, The Anh and Lopuliak, Zhanna},
+  author = {Lopuliak, Zhanna and Vu, The Anh and Haensch, Anna-Carolina},
   year = {2025},
   url = {https://github.com/Zhanna-Lopuliak/mice-py}
 }
