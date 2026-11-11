@@ -152,6 +152,11 @@ after that record was written.
   Python 3.9 to 3.13. Development uses uv, ruff, mypy and pre-commit; the
   `dev` extra became a `dev` dependency group, and a `notebooks` extra is
   new.
+- **Licence**: mice-py is now licensed under the GNU General Public License,
+  version 2 or later (`GPL-2.0-or-later`; see `LICENSE` and `COPYRIGHT`),
+  instead of the MIT License. mice-py is a port derived from the source of R
+  mice, which is licensed GPL (>= 2), so it takes the same licence. Versions
+  up to and including 0.1.0 remain available under the MIT License.
 
 ### Added
 

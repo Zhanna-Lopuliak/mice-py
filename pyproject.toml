@@ -13,7 +13,7 @@ authors = [
     { name = "The Anh Vu", email = "Theanh_v99@yahoo.de"},
     { name = "Zhanna Lopuliak", email = "zhanna.Lopuliak@gmail.com"}
 ]
-license = { text = "MIT" }
+license = { text = "GPL-2.0-or-later" }
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
@@ -21,7 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)",
     "Topic :: Scientific/Engineering :: Mathematics",
     "Typing :: Typed",
 ]
@@ -63,6 +63,7 @@ dev = [
 [tool.setuptools]
 packages = ["imputation", "plotting"]
 include-package-data = false
+license-files = ["LICENSE", "COPYRIGHT"]
 
 [tool.setuptools.package-data]
 imputation = ["py.typed"]

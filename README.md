@@ -5,7 +5,7 @@ package [mice](https://cran.r-project.org/package=mice) for pandas data
 frames, checked against R mice 3.19.0.
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: GPL v2+](https://img.shields.io/badge/License-GPL%20v2%2B-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html)
 [![Documentation Status](https://readthedocs.org/projects/mice-py/badge/?version=latest)](https://mice-py.readthedocs.io/en/latest/?badge=latest)
 
 ## What it does
@@ -118,7 +118,10 @@ them is not in this repository.
 
 ## License
 
-MIT; see [LICENSE](LICENSE).
+GNU General Public License, version 2 or later (GPL-2.0-or-later), the
+licence of R mice, from which mice-py is ported; see [LICENSE](LICENSE) and
+[COPYRIGHT](COPYRIGHT). Versions up to and including 0.1.0 were released
+under the MIT License.
 
 ## Authors
 

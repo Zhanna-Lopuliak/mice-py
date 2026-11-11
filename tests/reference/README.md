@@ -112,7 +112,8 @@ get wrong:
 
 ## Licence
 
-mice is GPL-2 / GPL-3; this repository is MIT. The scripts call mice
-functions (exported ones, internals through `mice:::`, or a `trace()` hook)
-and store their output. They must never copy mice source code into this
-repository.
+mice is licensed GPL (>= 2), and so is mice-py since 0.2.0 (see
+`COPYRIGHT`). The scripts call mice functions (exported ones, internals
+through `mice:::`, or a `trace()` hook) and store their output. As a matter
+of practice they do not copy mice source code, so that the fixtures record
+what the installed mice computes.

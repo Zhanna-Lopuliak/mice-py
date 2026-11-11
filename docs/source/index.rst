@@ -5,9 +5,9 @@ mice-py: Multiple Imputation by Chained Equations in Python
    :target: https://www.python.org/downloads/
    :alt: Python 3.9+
 
-.. image:: https://img.shields.io/badge/License-MIT-yellow.svg
-   :target: https://opensource.org/licenses/MIT
-   :alt: License: MIT
+.. image:: https://img.shields.io/badge/License-GPL%20v2%2B-blue.svg
+   :target: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+   :alt: License: GPL v2+
 
 .. image:: https://readthedocs.org/projects/mice-py/badge/?version=latest
    :target: https://mice-py.readthedocs.io/en/latest/?badge=latest

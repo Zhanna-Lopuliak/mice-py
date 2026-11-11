@@ -194,6 +194,17 @@ Logging and plots
 - In a notebook, a plot call on the last line of a cell shows the figure
   twice (once drawn, once as the returned value); end the line with ``;``.
 
+Licence
+-------
+
+mice-py 0.2 is licensed under the GNU General Public License, version 2 or
+later (``GPL-2.0-or-later``), the licence of R mice, from which it is ported;
+see the files ``LICENSE`` and ``COPYRIGHT`` of the repository. Versions up to
+and including 0.1.0 were released under the MIT License and remain available
+under it. This matters if you distribute mice-py, or software that includes
+it, under a licence that is not compatible with the GPL: from 0.2 the
+conditions of the GPL apply to that distribution.
+
 A 0.1 script in 0.2
 -------------------
 

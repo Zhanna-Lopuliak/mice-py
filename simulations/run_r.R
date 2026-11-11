@@ -16,8 +16,9 @@
 # `complete` analyses the data before deletion and must reproduce the Python
 # numbers exactly (same data, same OLS).
 #
-# This script calls mice; it does not copy mice source (mice is GPL, this
-# repository is MIT).
+# This script calls mice rather than copying mice source, so that its
+# results are those of the installed mice. mice-py, like mice, is licensed
+# GPL (>= 2).
 
 suppressPackageStartupMessages({
   library(mice)

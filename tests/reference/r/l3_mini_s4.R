@@ -18,7 +18,7 @@
 # on the number of cores. The previous RNG kind is restored at the end,
 # because generate_all.R runs every script in the same R session.
 #
-# Calls mice; does not copy mice source (mice is GPL, this repository is MIT).
+# Calls mice rather than copying mice source, as the other scripts do.
 
 source(file.path("tests", "reference", "r", "_common.R"))
 

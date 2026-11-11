@@ -4,8 +4,9 @@
 #   Rscript tests/reference/r/generate_all.R
 #
 # The scripts call functions of the R package mice (exported ones, or
-# internals through mice:::). They must not copy mice source code: mice is
-# GPL, this repository is MIT.
+# internals through mice:::) rather than copying mice source code, so that
+# the fixtures record what the installed mice computes. mice-py, like mice,
+# is licensed GPL (>= 2).
 
 suppressPackageStartupMessages({
   library(mice)

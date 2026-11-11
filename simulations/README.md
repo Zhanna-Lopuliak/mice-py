@@ -85,8 +85,8 @@ It reports every result file present in `work/results/`, so remove that folder
 before a fresh run if earlier runs used other settings.
 
 Requirements: R with `mice` 3.19.0, `ranger`, `rpart` and `jsonlite`. The R
-script calls mice functions and does not copy mice source (mice is GPL, this
-repository is MIT).
+script calls mice functions rather than copying mice source, so that its
+results are those of the installed mice.
 
 ### Expected runtime
 

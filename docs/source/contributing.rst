@@ -77,8 +77,9 @@ Style
 - The library does not print: use ``warnings.warn`` for what the user must
   see and ``logging.getLogger(__name__)`` for the rest.
 - When porting from R mice, read the source of the ``v3.19.0`` tag and say
-  in the docstring which R function is followed. mice is GPL; do not copy its
-  source into this MIT-licensed repository.
+  in the docstring which R function is followed. mice-py is derived from
+  mice and, like mice, is licensed under the GPL, version 2 or later; see
+  ``COPYRIGHT``.
 
 Adding an imputation method
 ---------------------------
@@ -114,4 +115,5 @@ run as written.
 License
 -------
 
-Contributions are licensed under the MIT License of the project.
+Contributions are licensed under the GNU General Public License, version 2
+or later, as the rest of the project; see ``LICENSE`` and ``COPYRIGHT``.
