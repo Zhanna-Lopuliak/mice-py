@@ -14,9 +14,8 @@ class ImputationMethod(Enum):
     PMM
         Predictive mean matching, R's ``pmm``.
     MIDAS
-        Multiple Imputation with Distant Average Substitution, R's
-        ``midastouch`` (predictive mean matching with distance-based donor
-        weights).
+        R's ``midastouch``: imputation by predictive mean matching with
+        distance aided donor selection.
     CART
         Classification and regression trees, R's ``cart``.
     SAMPLE

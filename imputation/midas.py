@@ -1,4 +1,8 @@
-"""Multiple imputation with distant average substitution (``midas``), as R mice's ``mice.impute.midastouch``."""
+"""
+Imputation by predictive mean matching with distance aided donor selection (``midas``).
+
+The port of R mice's ``mice.impute.midastouch``; the title is that of R's help page.
+"""
 
 from __future__ import annotations
 
@@ -80,11 +84,12 @@ def midas(
     rng: np.random.Generator | None = None,
 ) -> np.ndarray:
     """
-    MIDAS Imputation: Multiple Imputation with Distant Average Substitution.
+    Imputation by predictive mean matching with distance aided donor selection.
 
-    This function implements the MIDAS imputation algorithm for continuous variables,
-    as introduced by Gaffert et al. (2018). It is the port of R's
-    ``mice.impute.midastouch``.
+    The port of R mice's ``mice.impute.midastouch``, whose help page has this
+    title. As R's help page says, the imputation is based on Rubin (1987,
+    p. 168, formulas a and b) and Siddique and Belin (2008); the R function
+    is by Gaffert, Meinfelder and Bosch.
 
     It operates by weighting observed donors based on the similarity between predicted values,
     with optional leave-one-out model estimation for increased fidelity.
@@ -143,13 +148,33 @@ def midas(
 
     Notes
     -----
+    The donor probabilities for given bootstrap weights are computed by
+    :func:`_donor_probabilities`.
 
-    - Based on: Gaffert, P., Meinfelder, F., & van den Bosch, V. (2018).
-      "Towards an MI-proper Predictive Mean Matching."
-    - Related: Siddique, J. & Belin, T. R. (2008). "Multiple Imputation Using an
-      Iterative Hot-Deck with Distance-Based Donor Selection."
-    - The donor probabilities for given bootstrap weights are computed by
-      :func:`_donor_probabilities`.
+    References
+    ----------
+    The references of R's help page of ``mice.impute.midastouch``:
+
+    - Gaffert, P., Meinfelder, F., Bosch, V. (2018). Towards an MI-proper
+      Predictive Mean Matching. JSM 2018, discussion paper.
+    - Little, R. J. A. (1988). Missing data adjustments in large surveys
+      (with discussion). Journal of Business Economics and Statistics, 6,
+      287-301.
+    - Parzen, M., Lipsitz, S. R., Fitzmaurice, G. M. (2005). A note on
+      reducing the bias of the approximate Bayesian bootstrap imputation
+      variance estimator. Biometrika, 92(4), 971-974.
+    - Rubin, D. B. (1987). Multiple Imputation for Nonresponse in Surveys.
+      New York: Wiley.
+    - Siddique, J., Belin, T. R. (2008). Multiple imputation using an
+      iterative hot-deck with distance-based donor selection. Statistics in
+      Medicine, 27(1), 83-102.
+    - Van Buuren, S., Brand, J. P. L., Groothuis-Oudshoorn, C. G. M.,
+      Rubin, D. B. (2006). Fully conditional specification in multivariate
+      imputation. Journal of Statistical Computation and Simulation, 76(12),
+      1049-1064.
+    - Van Buuren, S., Groothuis-Oudshoorn, K. (2011). mice: Multivariate
+      Imputation by Chained Equations in R. Journal of Statistical Software,
+      45(3), 1-67.
 
     Examples
     --------
