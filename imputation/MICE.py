@@ -59,6 +59,18 @@ _LOG_COLUMNS = ("it", "im", "dep", "meth", "out")
 # A variable whose variance is below this is constant (R: 1000 * .Machine$double.eps)
 _CONSTANT_VARIANCE = 1000 * np.finfo(float).eps
 
+# Methods whose imputations are new floats, not observed values
+_FLOAT_METHODS = frozenset(
+    method.value
+    for method in (
+        ImputationMethod.NORM,
+        ImputationMethod.NORM_NOB,
+        ImputationMethod.NORM_BOOT,
+        ImputationMethod.NORM_PREDICT,
+        ImputationMethod.MEAN,
+    )
+)
+
 
 def _full_predictor_matrix(columns) -> pd.DataFrame:
     """All ones with a zero diagonal: R's default predictor matrix."""
@@ -110,6 +122,24 @@ def _target_values(series: pd.Series):
     ):
         return series.to_numpy(dtype=float, na_value=np.nan)
     return series.to_numpy()
+
+
+def _is_nullable_integer(dtype) -> bool:
+    """True for pandas' integer extension dtypes (``Int64``, ``UInt8``, ...), which hold missing values."""
+    return isinstance(dtype, pd.api.extensions.ExtensionDtype) and pd.api.types.is_integer_dtype(dtype)
+
+
+def _in_float_dtype(values, dtype):
+    """Float imputations in the float dtype of their column, so that writing them keeps it.
+
+    A ``float32`` column gets ``float32`` values (pandas would otherwise
+    upcast the column, with a warning); a ``Float64`` or ``Float32`` column
+    gets floats of its NumPy dtype. Any other dtype leaves the values as
+    they are.
+    """
+    if not pd.api.types.is_float_dtype(dtype):
+        return values
+    return np.asarray(values, dtype=getattr(dtype, "numpy_dtype", dtype))
 
 
 def _method_param_names() -> dict[str, list[str]]:
@@ -303,8 +333,20 @@ class MICE:
             R), or the observed value closest to the mean of a numeric column
             and the most frequent observed value of any other column.
         method : str or dict of str to str, optional
-            Imputation method: ``"pmm"``, ``"midas"``, ``"cart"``, ``"rf"``,
-            ``"sample"``, or ``""`` for a column that is not imputed.
+            Imputation method, by R's name:
+
+            - donor methods, which impute observed values: ``"pmm"``,
+              ``"midas"``, ``"cart"``, ``"rf"``, ``"sample"``;
+            - linear regression for numeric columns, which imputes new
+              values: ``"norm"`` (Bayesian), ``"norm.boot"`` (bootstrap),
+              ``"norm.nob"`` (without parameter uncertainty),
+              ``"norm.predict"`` (the predicted value), and ``"mean"`` (the
+              observed mean). A nullable integer column (``Int64`` ...)
+              imputed by one of them becomes ``Float64``, as R turns an
+              integer column into double; float columns keep their dtype;
+            - ``""`` for a column that is not imputed.
+
+            The argument is:
 
             - str: the same method for all columns;
             - dict: the method of each listed column; columns not in it get
@@ -337,10 +379,14 @@ class MICE:
             ``None`` draws fresh entropy from the operating system.
 
         **kwargs
-            Parameters of the imputation methods, with the method name and an
-            underscore as prefix: ``pmm_donors=3`` passes ``donors=3`` to
-            `imputation.PMM.pmm`. The parameter must exist in that imputer's
-            signature; any other keyword argument raises ``TypeError``.
+            Parameters of the imputation methods, as
+            ``<prefix>_<parameter>``, where the prefix is the method name
+            with every dot replaced by an underscore
+            (`imputation.utils.method_prefix`): ``pmm_donors=3`` passes
+            ``donors=3`` to `imputation.PMM.pmm`, ``norm_boot_ridge=1e-4``
+            passes ``ridge=1e-4`` to `imputation.norm.norm_boot`. The
+            parameter must exist in that imputer's signature; any other
+            keyword argument raises ``TypeError``.
 
             - `output_dir`: deprecated and ignored; passing it issues a
               ``DeprecationWarning``.
@@ -364,9 +410,10 @@ class MICE:
         ValueError
             For an invalid argument (number of imputations or iterations,
             method, initial method, visit sequence, predictor matrix), or when
-            a method cannot impute a column (for example ``"midas"`` on a
-            categorical column, or a column without observed value in the
-            rows usable for its model).
+            a method cannot impute a column (for example ``"midas"`` or
+            ``"norm"`` on a categorical column, ``"norm.nob"`` with too few
+            observed values for its predictors, or a column without observed
+            value in the rows usable for its model).
         TypeError
             For an unknown keyword argument.
 
@@ -971,6 +1018,11 @@ class MICE:
         """
         logger.debug(f"Starting imputation cycle for chain {chain_idx}")
         current_data = self.data.copy(deep=True)
+        # The norm methods and mean impute floats: a nullable integer column
+        # they impute becomes Float64, as R turns an integer column into double
+        for col in self.visit_sequence:
+            if self.method[col] in _FLOAT_METHODS and _is_nullable_integer(current_data[col].dtype):
+                current_data[col] = current_data[col].astype("Float64")
 
         logger.debug("Performing initial imputation")
         self._initial_imputation(current_data, rng)
@@ -1054,7 +1106,9 @@ class MICE:
             imputed_values = imputer_func(y=y, id_obs=id_obs, id_mis=id_mis, x=x_values, **method_params)
             logger.debug(f"Successfully imputed {len(imputed_values)} values for column '{col}'")
 
-            # Assign imputed values
+            # Assign imputed values; new floats take the float dtype of the column
+            if method_name in _FLOAT_METHODS:
+                imputed_values = _in_float_dtype(imputed_values, updated_data[col].dtype)
             updated_data.loc[self.id_mis[col].to_numpy() & complete, col] = imputed_values
 
             # Record chain statistics (only for numeric columns)

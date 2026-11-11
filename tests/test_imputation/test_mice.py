@@ -95,7 +95,7 @@ class TestMICEMethods:
         assert len(mice.imputed_datasets) == 2
         assert "x2" in mice.logged_events["out"].tolist()
 
-    @pytest.mark.parametrize("method", ["pmm", "midas"])
+    @pytest.mark.parametrize("method", ["pmm", "midas", "norm", "norm.nob", "norm.boot", "norm.predict", "mean"])
     def test_methods_numeric_only(self, sample_data_missing, method):
         """Test imputation methods that require numeric-only data."""
         # Use only numeric columns from sample_data_missing

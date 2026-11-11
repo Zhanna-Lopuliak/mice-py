@@ -94,8 +94,10 @@ Adding an imputation method
    the iteration, imputation, column and method filled in.
 2. Add the name to ``ImputationMethod`` in ``imputation/constants.py`` and
    the function to ``_IMPUTER_MAP`` in ``imputation/utils.py``. Its
-   parameters then become ``<name>_<parameter>`` arguments of
-   ``MICE.impute``.
+   parameters then become ``<prefix>_<parameter>`` arguments of
+   ``MICE.impute``, where the prefix is the name with every dot replaced by
+   an underscore (``norm_boot_ridge`` for parameter ``ridge`` of
+   ``norm.boot``).
 3. Add unit tests, and the method to the property tests in
    ``tests/test_properties``. If R mice has the method, add parity tests.
 4. Document it in :doc:`user_guide/imputation_methods` and

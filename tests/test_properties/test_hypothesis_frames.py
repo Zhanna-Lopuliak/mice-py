@@ -14,7 +14,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
 
-from ._helpers import assert_all_invariants, impute
+from ._helpers import DONOR_METHODS, assert_all_invariants, impute
 
 FLOATS = st.floats(min_value=-1e3, max_value=1e3, allow_nan=False, allow_infinity=False, allow_subnormal=False)
 
@@ -57,7 +57,7 @@ def numeric_frames(draw, min_observed=2, values="hypothesis"):
 def _check_frame(df, method):
     before = df.copy(deep=True)
     mice, out = impute(df, method, n_imputations=2, maxit=2, seed=1)
-    assert_all_invariants(df, before, mice, out, 2, 2)
+    assert_all_invariants(df, before, mice, out, 2, 2, donor=method in DONOR_METHODS)
 
 
 def _settings(n):
@@ -77,6 +77,7 @@ def _settings(n):
         pytest.param("sample", 40, id="sample"),
         pytest.param("cart", 15, id="cart"),
         pytest.param("rf", 6, id="rf"),
+        pytest.param("norm", 15, id="norm"),
     ],
 )
 def test_invariants_on_random_frames(method, n_examples):
@@ -88,7 +89,7 @@ def test_invariants_on_random_frames(method, n_examples):
     check()
 
 
-@pytest.mark.parametrize("method,n_examples", [("pmm", 40), ("sample", 20)])
+@pytest.mark.parametrize("method,n_examples", [("pmm", 40), ("sample", 20), ("norm", 10)])
 def test_invariants_on_well_conditioned_random_frames(method, n_examples):
     """Same invariants on frames where today's pmm does not hit B3/B4:
     correlated normal columns and at least eight observed values per column."""

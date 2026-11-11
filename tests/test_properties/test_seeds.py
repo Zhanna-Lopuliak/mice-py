@@ -4,12 +4,24 @@
 gives different output, ``seed=None`` draws fresh entropy. Chain k gets the
 same random stream whatever ``n_imputations`` is. Every imputer, midas
 included, draws only from the ``rng`` it is given.
+
+``mean`` is the one method whose output does not depend on the seed at all,
+so the tests that expect randomness skip it and its own test expects the
+opposite. ``norm.predict`` draws no random number either, but in a chain its
+predictors hold the random initial imputations of the other incomplete
+columns, so its datasets still depend on the seed (on these data, with three
+incomplete columns); with a single incomplete column they do not.
 """
 
 import numpy as np
 import pytest
 
-from ._helpers import METHODS, impute, numeric_frame
+from ..test_parity._helpers import ScriptedGenerator
+from ._helpers import DETERMINISTIC_METHODS, METHODS, impute, numeric_frame, regression_frame
+
+# Methods whose completed datasets do not depend on the seed
+SEED_INDEPENDENT = ("mean",)
+STOCHASTIC = [m for m in METHODS if m not in SEED_INDEPENDENT]
 
 
 def _same(a, b):
@@ -27,20 +39,54 @@ def test_same_seed_gives_identical_output(method):
     assert _same(_run(method, seed=7), _run(method, seed=7))
 
 
-@pytest.mark.parametrize("method", METHODS)
+@pytest.mark.parametrize("method", STOCHASTIC)
 def test_different_seeds_give_different_output(method):
     assert not _same(_run(method, seed=7), _run(method, seed=8))
 
 
-@pytest.mark.parametrize("method", METHODS)
+@pytest.mark.parametrize("method", STOCHASTIC)
 def test_seed_none_draws_fresh_entropy(method):
     assert not _same(_run(method, seed=None), _run(method, seed=None))
 
 
-@pytest.mark.parametrize("method", METHODS)
+@pytest.mark.parametrize("method", STOCHASTIC)
 def test_chains_are_not_copies_of_each_other(method):
     out = _run(method, seed=7)
     assert not out[0].equals(out[1])
+
+
+@pytest.mark.parametrize("method", SEED_INDEPENDENT)
+def test_seed_independent_method_ignores_the_seed(method):
+    """Different seeds, ``seed=None`` and different chains: all identical."""
+    out = _run(method, seed=7)
+    assert _same(out, _run(method, seed=8))
+    assert _same(out, _run(method, seed=None))
+    assert out[0].equals(out[1])
+
+
+def test_norm_predict_ignores_the_seed_with_one_incomplete_column():
+    """Its predictors are then complete, so nothing random enters."""
+    df = regression_frame()
+    _, first = impute(df, "norm.predict", seed=7)
+    _, second = impute(df, "norm.predict", seed=8)
+    assert _same(first, second)
+    assert first[0].equals(first[1])
+
+
+@pytest.mark.parametrize("method", DETERMINISTIC_METHODS)
+def test_deterministic_imputer_draws_no_random_number(method):
+    """A strict generator with nothing scripted refuses every draw."""
+    from imputation.utils import get_imputer_func
+
+    rng = np.random.default_rng(5)
+    x = rng.normal(size=(40, 2))
+    y = x.sum(axis=1) + rng.normal(size=40)
+    ry = np.ones(40, dtype=bool)
+    ry[::5] = False
+    scripted = ScriptedGenerator(strict=True)
+    out = get_imputer_func(method)(y, ry, x, rng=scripted)
+    assert out.shape == (8,)
+    assert scripted.calls == []
 
 
 @pytest.mark.parametrize("method", METHODS)

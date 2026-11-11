@@ -9,6 +9,10 @@ class ImputationMethod(Enum):
     """
     Enumeration of supported imputation methods for MICE.
 
+    The values are R's method names, dots included. The first five are
+    donor methods: they impute observed values. The others are for numeric
+    targets and impute new values (floats).
+
     Attributes
     ----------
     PMM
@@ -22,6 +26,16 @@ class ImputationMethod(Enum):
         Random draws from the observed values, R's ``sample``.
     RF
         Random forest, R's ``rf``.
+    NORM
+        Bayesian linear regression, R's ``norm``.
+    NORM_NOB
+        Linear regression without parameter uncertainty, R's ``norm.nob``.
+    NORM_BOOT
+        Linear regression on a bootstrap sample, R's ``norm.boot``.
+    NORM_PREDICT
+        The predicted value of a linear regression, R's ``norm.predict``.
+    MEAN
+        The mean of the observed values, R's ``mean``.
     """
 
     PMM = "pmm"
@@ -29,6 +43,11 @@ class ImputationMethod(Enum):
     CART = "cart"
     SAMPLE = "sample"
     RF = "rf"
+    NORM = "norm"
+    NORM_NOB = "norm.nob"
+    NORM_BOOT = "norm.boot"
+    NORM_PREDICT = "norm.predict"
+    MEAN = "mean"
 
     @classmethod
     def get_all_methods(cls) -> list[str]:

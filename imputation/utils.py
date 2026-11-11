@@ -17,7 +17,9 @@ import numpy as np
 
 from .cart import cart
 from .constants import ImputationMethod
+from .mean import mean
 from .midas import midas
+from .norm import norm, norm_boot, norm_nob, norm_predict
 
 # Import concrete imputation back-ends
 from .PMM import pmm
@@ -35,6 +37,11 @@ _IMPUTER_MAP: dict[str, Callable[..., np.ndarray]] = {
     ImputationMethod.CART.value: cart,
     ImputationMethod.SAMPLE.value: sample,
     ImputationMethod.RF.value: rf,
+    ImputationMethod.NORM.value: norm,
+    ImputationMethod.NORM_NOB.value: norm_nob,
+    ImputationMethod.NORM_BOOT.value: norm_boot,
+    ImputationMethod.NORM_PREDICT.value: norm_predict,
+    ImputationMethod.MEAN.value: mean,
 }
 
 # Arguments that MICE supplies to the imputers itself (`log_event` only to

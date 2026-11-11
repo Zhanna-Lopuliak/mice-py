@@ -13,20 +13,20 @@ import pytest
 
 from .._logged_events import impute_checking_log_warning
 
-# The methods by kind. The empty lists are filled by the phases of 0.3 that
-# add the methods: the norm family and mean (phase 2), logreg and
-# logreg.boot (phase 3), polyreg (phase 4) and polr (phase 5).
+# The methods by kind. The empty list is filled by the phases of 0.3 that
+# add the methods: logreg and logreg.boot (phase 3), polyreg (phase 4) and
+# polr (phase 5).
 # Donor methods impute observed values or labels.
 DONOR_METHODS = ("pmm", "cart", "rf", "midas", "sample")
-# Model-based methods for numeric targets only (phase 2: norm, norm.nob,
-# norm.boot, norm.predict, mean).
-NUMERIC_MODEL_METHODS = ()
+# Model-based methods for numeric targets only; they impute new floats.
+NUMERIC_MODEL_METHODS = ("norm", "norm.nob", "norm.boot", "norm.predict", "mean")
 # Model-based methods for categorical targets only (phases 3 to 5: logreg,
 # logreg.boot, polyreg, polr).
 CATEGORICAL_METHODS = ()
-# Methods whose imputations do not depend on the seed; a subset of the
-# others (phase 2: norm.predict, mean).
-DETERMINISTIC_METHODS = ()
+# Methods whose univariate imputer draws no random number; a subset of the
+# others. Inside a chain, norm.predict still depends on the seed through the
+# (random) imputations of the other incomplete columns; mean does not.
+DETERMINISTIC_METHODS = ("norm.predict", "mean")
 METHODS = DONOR_METHODS + NUMERIC_MODEL_METHODS + CATEGORICAL_METHODS
 
 # Small and quick: the whole folder has to run in about 20 seconds.
@@ -229,8 +229,51 @@ def assert_structure_preserved(original, completed):
     assert type(completed.index) is type(original.index)
 
 
-def assert_dtypes_preserved(original, completed):
-    assert completed.dtypes.to_dict() == original.dtypes.to_dict()
+def is_nullable_integer(dtype):
+    """pandas' integer extension dtypes (``Int64`` ...), which can hold missing values."""
+    return isinstance(dtype, pd.api.extensions.ExtensionDtype) and pd.api.types.is_integer_dtype(dtype)
+
+
+def expected_dtypes(original, mice=None):
+    """The dtypes of a completed dataset: those of ``original``, except that a
+    nullable integer column imputed by a numeric-model method (R's ``norm``
+    family and ``mean`` impute doubles) becomes ``Float64``."""
+    dtypes = original.dtypes.to_dict()
+    if mice is not None:
+        for col, dtype in dtypes.items():
+            if mice.method.get(col, "") in NUMERIC_MODEL_METHODS and is_nullable_integer(dtype):
+                dtypes[col] = pd.Float64Dtype()
+    return dtypes
+
+
+def assert_dtypes_preserved(original, completed, mice=None):
+    """Dtypes are kept; with ``mice``, see `expected_dtypes` for the one change."""
+    assert completed.dtypes.to_dict() == expected_dtypes(original, mice)
+
+
+def assert_model_imputations(original, completed, mice):
+    """Columns imputed by a numeric-model method hold finite floats in their
+    imputed cells; under ``mean`` they all equal the observed mean.
+
+    Cells left missing (a skipped column, or a row whose predictors are
+    incomplete) are not checked here. (``mean`` averages the observed rows
+    in the model, so with an incomplete predictor that is not imputed the
+    expected value would be the mean over fewer rows; no test here has one.)
+    """
+    for col in original.columns:
+        method = mice.method.get(col, "")
+        if method not in NUMERIC_MODEL_METHODS:
+            continue
+        dtype = completed[col].dtype
+        assert pd.api.types.is_float_dtype(dtype), (col, dtype)
+        mis = original[col].isna().to_numpy()
+        imputed = completed[col].to_numpy(dtype=float, na_value=np.nan)[mis]
+        imputed = imputed[~np.isnan(imputed)]
+        assert np.isfinite(imputed).all(), (col, imputed[~np.isfinite(imputed)])
+        if method == "mean":
+            observed = original[col].dropna().to_numpy(dtype=float)
+            eps = np.finfo(getattr(dtype, "numpy_dtype", dtype)).eps
+            np.testing.assert_allclose(imputed, observed.mean(), rtol=100 * eps, atol=0, err_msg=str(col))
 
 
 def assert_imputed_are_observed(original, completed, columns=None):
@@ -299,16 +342,18 @@ def assert_all_invariants(original, before, mice, out, n_imputations, maxit, don
     """Item 1 invariants. Columns in ``allow_unimputed`` and the columns R's setup
     step skips (constant or collinear, see ``setup_skipped_columns``) may keep
     their missing cells. With ``donor`` (pass ``method in DONOR_METHODS``),
-    filled cells must hold observed values."""
+    filled cells must hold observed values. Columns imputed by a
+    numeric-model method are checked by `assert_model_imputations`."""
     assert len(out) == n_imputations
     pd.testing.assert_frame_equal(original, before)
     constant = setup_skipped_columns(original) | set(allow_unimputed)
     regular = [c for c in original.columns if c not in constant]
     for completed in out:
         assert_structure_preserved(original, completed)
-        assert_dtypes_preserved(original, completed)
+        assert_dtypes_preserved(original, completed, mice)
         assert_observed_unchanged(original, completed)
         assert_no_missing(completed[regular])
+        assert_model_imputations(original, completed, mice)
         if donor:
             # NaN left in a skipped column is allowed; any filled value must be observed.
             # (An entirely missing column has nothing to compare with.)

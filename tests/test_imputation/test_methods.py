@@ -420,6 +420,68 @@ class TestMIDASImputation:
             assert val in y[id_obs]
 
 
+class TestNormImputation:
+    """Input handling of norm, norm.nob, norm.boot, norm.predict and mean."""
+
+    REGRESSIONS = ["norm", "norm.nob", "norm.boot", "norm.predict"]
+
+    @staticmethod
+    def _problem(n=12):
+        x = np.random.default_rng(0).normal(size=(n, 2))
+        y = 1.0 + x @ np.array([2.0, -1.0]) + 0.1 * np.cos(np.arange(n))
+        id_obs = np.arange(n) % 4 != 0
+        y[~id_obs] = np.nan
+        return y, id_obs, x
+
+    @pytest.mark.parametrize("method", REGRESSIONS)
+    def test_invalid_predictors(self, method):
+        imputer = get_imputer_func(method)
+        y, id_obs, x = self._problem()
+        with pytest.raises(ValueError, match=f"Predictors must be numeric for {method}"):
+            imputer(y, id_obs, np.full((12, 2), "a"))
+        x_nan = x.copy()
+        x_nan[3, 1] = np.nan
+        with pytest.raises(ValueError, match=f"Predictors must not contain missing values for {method}"):
+            imputer(y, id_obs, x_nan)
+        frame = pd.DataFrame(x_nan, columns=["u", "v"])
+        with pytest.raises(ValueError, match=r"Columns with missing values: \['v'\]"):
+            imputer(y, id_obs, frame)
+        with pytest.raises(ValueError, match="x has 11 rows, but y has 12 entries"):
+            imputer(y, id_obs, x[:11])
+
+    @pytest.mark.parametrize("method", [*REGRESSIONS, "mean"])
+    def test_nullable_and_complex_targets(self, method):
+        """A nullable numeric target works as its float version; complex values are refused."""
+        imputer = get_imputer_func(method)
+        y, id_obs, x = self._problem()
+        nullable = pd.array(np.where(id_obs, y, np.nan), dtype="Float64")
+        expected = imputer(y, id_obs, x, rng=np.random.default_rng(1))
+        np.testing.assert_array_equal(imputer(nullable, id_obs, x, rng=np.random.default_rng(1)), expected)
+        with pytest.raises(ValueError, match=f"numeric for {method}, got complex128 values"):
+            imputer(y.astype(complex), id_obs, x, rng=np.random.default_rng(1))
+
+    def test_norm_predict_is_the_least_squares_prediction(self):
+        y, id_obs, x = self._problem()
+        design = np.c_[np.ones(12), x]
+        coef = np.linalg.lstsq(design[id_obs], y[id_obs], rcond=None)[0]
+        predict = get_imputer_func("norm.predict")
+        np.testing.assert_allclose(predict(y, id_obs, x), design[~id_obs] @ coef)
+        # a 1-D x is one predictor
+        np.testing.assert_array_equal(predict(y, id_obs, x[:, 0]), predict(y, id_obs, x[:, :1]))
+
+    def test_aliased_predictor_gets_coefficient_zero(self):
+        """A duplicated column is aliased in the QR fit; R imputes NA, the port
+        sets its coefficient to 0, which leaves the prediction unchanged.
+        (norm.nob and norm.boot still count it in their residual df, as R.)"""
+        y, id_obs, x = self._problem()
+        with_copy = np.c_[x, x[:, 0]]
+        predict = get_imputer_func("norm.predict")
+        np.testing.assert_allclose(predict(y, id_obs, with_copy), predict(y, id_obs, x), rtol=1e-10)
+        for method in ("norm.nob", "norm.boot"):
+            out = get_imputer_func(method)(y, id_obs, with_copy, rng=np.random.default_rng(3))
+            assert np.isfinite(out).all()
+
+
 class TestMethodConsistency:
     """Test consistency across imputation methods."""
 
@@ -430,7 +492,7 @@ class TestMethodConsistency:
         id_obs = ~np.isnan(y)
         x = rs.randn(8, 2)
 
-        methods = ["sample", "pmm", "cart", "rf", "midas"]
+        methods = ["sample", "pmm", "cart", "rf", "midas", "norm", "norm.nob", "norm.boot", "norm.predict", "mean"]
 
         for method_name in methods:
             method_func = get_imputer_func(method_name)

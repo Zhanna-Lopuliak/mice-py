@@ -7,6 +7,7 @@ accepted for ``n_imputations`` and ``maxit``.
 """
 
 import logging
+import re
 import warnings
 
 import numpy as np
@@ -38,9 +39,13 @@ def test_imputer_rejects_unknown_keyword(method):
 
 @pytest.mark.parametrize("method", METHODS)
 def test_impute_rejects_misspelled_method_parameter(method):
+    from imputation.utils import method_prefix
+
     df = numeric_frame(n=30)
-    with pytest.raises((TypeError, ValueError)):
-        impute(df, method, n_imputations=1, maxit=1, **{f"{method}_not_a_parameter": 3})
+    key = f"{method_prefix(method)}_not_a_parameter"
+    # the message names the method, so the keyword was matched to it
+    with pytest.raises(TypeError, match=rf"argument '{key}'\. .*[Mm]ethod '{re.escape(method)}'"):
+        impute(df, method, n_imputations=1, maxit=1, **{key: 3})
 
 
 def test_impute_rejects_unknown_method_prefix():

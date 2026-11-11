@@ -103,7 +103,7 @@ def test_logged_events_check_df_and_rank_deficient_design():
     assert messages == ["Number of logged events: 6. See MICE.logged_events."]
 
 
-@pytest.mark.parametrize("method", ["pmm", "cart", "rf", "midas", "sample"])
+@pytest.mark.parametrize("method", ["pmm", "cart", "rf", "midas", "sample", "norm"])
 def test_no_events_no_warning(method):
     from ._helpers import numeric_frame
 
@@ -224,7 +224,7 @@ def _empty_method_predictor_frame():
     return df
 
 
-@pytest.mark.parametrize("method", ["pmm", "cart", "rf", "midas", "sample"])
+@pytest.mark.parametrize("method", ["pmm", "cart", "rf", "midas", "sample", "norm", "mean"])
 def test_predictor_with_empty_method_leaves_its_missing_rows_untouched(method, monkeypatch):
     """``z`` has method "" but predicts ``y``. As in R's sampler.univ, a row
     whose design has a missing value is left out of the model (also as a
@@ -262,7 +262,13 @@ def test_predictor_with_empty_method_leaves_its_missing_rows_untouched(method, m
         assert completed.loc[df["y"].isna() & ~both, "y"].notna().all()
         assert completed["z"].isna().sum() == df["z"].isna().sum()
         imputed = completed.loc[df["y"].isna() & ~both, "y"]
-        assert imputed.isin(df["y"].dropna()).all()
+        if method == "mean":
+            # the mean of the 50 rows in the model, not of all observed y
+            np.testing.assert_allclose(imputed, df.loc[df["y"].notna() & df["z"].notna(), "y"].mean(), rtol=1e-12)
+        elif method == "norm":
+            assert np.isfinite(imputed).all()
+        else:
+            assert imputed.isin(df["y"].dropna()).all()
         pd.testing.assert_frame_equal(completed[df.notna()], df[df.notna()])
 
 
@@ -367,7 +373,7 @@ def _direct_problem():
     return y, ry, x
 
 
-@pytest.mark.parametrize("method", ["pmm", "midas", "cart", "rf"])
+@pytest.mark.parametrize("method", ["pmm", "midas", "cart", "rf", "norm"])
 def test_direct_call_with_categorical_dataframe_equals_design_matrix(method):
     """A DataFrame with non-numeric predictors goes through obtain_design, so a
     direct call gives what a call with the design matrix gives."""
@@ -381,7 +387,10 @@ def test_direct_call_with_categorical_dataframe_equals_design_matrix(method):
     from_frame = imputer(y, ry, x, rng=np.random.default_rng(4))
     from_design = imputer(y, ry, design.to_numpy(), rng=np.random.default_rng(4))
     np.testing.assert_array_equal(from_frame, from_design)
-    assert np.isin(from_frame, y[ry]).all()
+    if method == "norm":
+        assert np.isfinite(from_frame).all()
+    else:
+        assert np.isin(from_frame, y[ry]).all()
 
 
 @pytest.mark.parametrize("method", ["cart", "rf"])

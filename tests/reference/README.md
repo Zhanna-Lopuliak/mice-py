@@ -85,6 +85,7 @@ Written by `write_fixture(name, payload)` in `r/_common.R` and read by
 | `l1_md_pattern` | `md.pattern(data, plot = FALSE)` | `plotting.utils.md_pattern_like` |
 | `l1_pooling` | `pool()`, `summary(pool(), type = "all", conf.int = TRUE)`, `pool.table()`, `mice:::barnard.rubin()` | `imputation.pooling.barnard_rubin` / `pool_estimates`; `MICE.fit` / `MICE.pool` on R's completed datasets |
 | `l1_midastouch` | `mice.impute.midastouch()` with a `trace()` exit hook capturing `probs`, `midas.kappa`, `omega` | `imputation.midas._donor_probabilities` |
+| `l1_norm` | `mice.impute.norm()`, `.norm.nob()`, `.norm.boot()`, `.norm.predict()`, `.mean()` with every draw captured by re-seeding (`rchisq`, `rnorm`, `sample` as 0-based indices) and the expected order of the draws | `imputation.norm.norm` / `norm_nob` / `norm_boot` / `norm_predict`, `imputation.mean.mean`, driven by a strict `ScriptedGenerator` |
 
 Behaviours of R mice 3.19.0 that the fixtures pin down and that are easy to
 get wrong:
@@ -106,6 +107,12 @@ get wrong:
   `several_dependencies` pin that result.
 - `estimice(ls.meth = "svd")` fails in R for a one-column `x`; that case is
   not in the fixture.
+- `norm.nob` and `norm.boot` divide the residual sum of squares by
+  `n1 - q - 1`, one less than the usual df, and return `Inf` when that is 0
+  (case `norm_nob_tiny`); `norm.boot` without predictors stops with
+  `'x' must be a matrix` after drawing its bootstrap sample (case
+  `norm_boot_no_predictor`, which stores the intercept-only result that
+  mice-py computes instead).
 - `vcov()` of a `glm` fitted with the default `epsilon = 1e-8` is about 1e-5
   (relative) away from the inverse information at the MLE. The logistic model
   in `l1_pooling` uses `glm.control(epsilon = 1e-14)`.

@@ -5,6 +5,9 @@ Unless a test says otherwise, ``impute`` runs with the full predictor matrix
 datasets must satisfy every invariant of item 1.
 """
 
+import re
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -15,6 +18,7 @@ from ._helpers import (
     MAXIT,
     METHODS,
     N_IMP,
+    NUMERIC_MODEL_METHODS,
     assert_all_invariants,
     full_predictor_matrix,
     impute,
@@ -204,12 +208,20 @@ def test_incomplete_duplicated_column(method):
 
 @pytest.mark.parametrize("method", METHODS)
 def test_more_predictors_than_observed_rows(method):
-    """Six complete predictors, five observed ``y`` values."""
+    """Six complete predictors, five observed ``y`` values.
+
+    norm.nob and norm.boot divide by ``n_obs - q - 1``, which is not positive
+    here even after remove_lindep (R imputes non-finite values): they raise.
+    """
     rng = np.random.default_rng(8)
     n = 30
     df = pd.DataFrame({f"p{i}": rng.normal(size=n) for i in range(6)})
     df.insert(0, "y", df.sum(axis=1) + rng.normal(size=n))
     df.loc[5:, "y"] = np.nan
+    if method in ("norm.nob", "norm.boot"):
+        with pytest.raises(ValueError, match=rf"{re.escape(method)} needs more than \d+ observed values"):
+            impute(df, method, check_log_warning=False)
+        return
     _check(df, method)
 
 
@@ -750,10 +762,11 @@ def test_tree_method_without_observed_target_raises_value_error(method, kind):
         get_imputer_func(method)(y, np.zeros(10, dtype=bool), x, rng=rng)
 
 
-@pytest.mark.parametrize("method", ["pmm", "midas"])
+@pytest.mark.parametrize("method", ["pmm", "midas", *NUMERIC_MODEL_METHODS])
 @pytest.mark.parametrize("kind", ["numeric", "categorical"])
 def test_pmm_midas_without_observed_target_raise_value_error(method, kind):
-    """Like cart and rf: a clear error, not a crash deep inside the method."""
+    """Like cart and rf: a clear error, not a crash deep inside the method
+    (R's mean imputes NaN here)."""
     from imputation.utils import get_imputer_func
 
     rng = np.random.default_rng(0)
@@ -763,7 +776,7 @@ def test_pmm_midas_without_observed_target_raise_value_error(method, kind):
         get_imputer_func(method)(y, np.zeros(10, dtype=bool), x, rng=rng)
 
 
-@pytest.mark.parametrize("method", ["pmm", "midas", "cart", "rf"])
+@pytest.mark.parametrize("method", ["pmm", "midas", "cart", "rf", *NUMERIC_MODEL_METHODS])
 def test_no_observed_target_and_nothing_to_impute_returns_empty(method):
     from imputation.utils import get_imputer_func
 
@@ -772,7 +785,7 @@ def test_no_observed_target_and_nothing_to_impute_returns_empty(method):
     assert len(out) == 0
 
 
-@pytest.mark.parametrize("method", ["pmm", "midas", *TREE_METHODS])
+@pytest.mark.parametrize("method", ["pmm", "midas", *TREE_METHODS, "norm"])
 def test_tree_method_without_usable_observed_row_through_impute(method):
     """``x`` has method "" and is missing wherever ``y`` is observed, so no row
     with an observed ``y`` has a complete design."""
@@ -857,3 +870,130 @@ def test_sample_with_one_observed_value_and_a_series_target():
     y = pd.Series([np.nan, 5.0, np.nan], index=[10, 11, 12])
     out = sample(y, np.array([False, True, False]), None, rng=np.random.default_rng(0))
     assert list(out) == [5.0, 5.0]
+
+
+# ---------------------------------------------------------------------------
+# The numeric-model methods: norm, norm.nob, norm.boot, norm.predict, mean
+# ---------------------------------------------------------------------------
+
+
+def test_norm_turns_nullable_integer_column_into_float64():
+    """R turns an integer column imputed by norm into double: Int64 becomes
+    Float64, without a pandas warning, and the observed integers are kept."""
+    rng = np.random.default_rng(13)
+    df = regression_frame()
+    df["count"] = pd.array(np.round(10 + 3 * df["x1"] + rng.normal(size=len(df))).astype(int), dtype="Int64")
+    df.loc[[0, 7, 19, 33], "count"] = pd.NA
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _, out = _check(df, "norm")
+    for completed in out:
+        assert completed["count"].dtype == pd.Float64Dtype()
+        imputed = completed.loc[[0, 7, 19, 33], "count"].to_numpy(dtype=float)
+        assert (imputed != np.round(imputed)).any()  # real floats were written
+
+
+def test_norm_keeps_float32_column():
+    df = regression_frame()
+    df["y"] = df["y"].astype(np.float32)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # pandas warns when it has to upcast float32
+        _, out = _check(df, "norm")
+    for completed in out:
+        assert completed["y"].dtype == np.float32
+
+
+@pytest.mark.parametrize("method", ["norm.nob", "norm.boot"])
+def test_norm_nob_and_boot_need_more_observed_values_than_coefficients_plus_one(method):
+    """They divide by ``n_obs - q - 1`` (R imputes infinite values where it is
+    not positive). Two predictors, so q = 3: 3 and 4 observed values raise, 5
+    are enough."""
+    from imputation.utils import get_imputer_func
+
+    imputer = get_imputer_func(method)
+    df = regression_frame()
+    y, x = df["y"].to_numpy(), df[["x1", "x2"]].to_numpy()
+    observed = np.flatnonzero(~np.isnan(y))
+    for n_obs in (3, 4, 5):
+        ry = np.zeros(len(y), dtype=bool)
+        ry[observed[:n_obs]] = True
+        if n_obs <= 4:
+            with pytest.raises(ValueError, match=rf"{re.escape(method)} needs more than 4 observed values"):
+                imputer(y, ry, x, rng=np.random.default_rng(0))
+        else:
+            assert np.isfinite(imputer(y, ry, x, rng=np.random.default_rng(0))).all()
+
+
+def _non_numeric_target(kind, n, rng):
+    """A categorical or boolean target as MICE passes it, missing every fourth cell."""
+    ry = np.arange(n) % 4 != 0
+    if kind == "categorical":
+        y = pd.Categorical(np.where(ry, rng.choice(["a", "b", "c"], size=n), None))
+    else:
+        y = np.where(ry, rng.random(n) > 0.5, None)
+    return y, ry
+
+
+@pytest.mark.parametrize("kind, label", [("categorical", "categorical or text"), ("boolean", "boolean")])
+@pytest.mark.parametrize("method", NUMERIC_MODEL_METHODS)
+def test_numeric_model_method_rejects_non_numeric_target(method, kind, label):
+    """R's versions impute NA there (with warnings); the port refuses."""
+    from imputation.utils import get_imputer_func
+
+    rng = np.random.default_rng(0)
+    y, ry = _non_numeric_target(kind, 20, rng)
+    with pytest.raises(ValueError, match=rf"numeric for {re.escape(method)}, got {label} values"):
+        get_imputer_func(method)(y, ry, rng.normal(size=(20, 2)), rng=np.random.default_rng(1))
+
+
+def test_norm_rejects_categorical_target_through_impute():
+    df = _categorical_target_frame()
+    with pytest.raises(ValueError, match="Target y must be numeric for norm"):
+        impute(df, {"g": "norm"}, n_imputations=1, maxit=1)
+
+
+@pytest.mark.parametrize("method", NUMERIC_MODEL_METHODS)
+def test_numeric_model_method_without_predictors(method):
+    """The intercept-only model, also for norm.boot (where R stops with an
+    error): norm.predict then imputes the observed mean, as mean does."""
+    from imputation.utils import get_imputer_func
+
+    imputer = get_imputer_func(method)
+    rng = np.random.default_rng(3)
+    y = rng.normal(loc=5.0, size=30)
+    ry = np.arange(30) % 3 != 0
+    for x in (np.empty((30, 0)), pd.DataFrame(index=range(30)), None):
+        out = imputer(y, ry, x, rng=np.random.default_rng(2))
+        assert out.shape == (10,) and np.isfinite(out).all()
+        if method in ("norm.predict", "mean"):
+            np.testing.assert_allclose(out, y[ry].mean(), rtol=1e-12)
+
+
+def test_norm_boot_ridge_and_norm_ridge_reach_their_own_method(monkeypatch):
+    """``norm_boot_ridge`` starts with the prefix of norm too; it must reach
+    norm.boot only, and ``norm_ridge`` and ``norm_ls_meth`` norm only."""
+    import imputation.norm
+    import imputation.sampler
+
+    seen = []
+
+    def recording(where, original):
+        def wrapper(x, y, ls_meth="qr", ridge=1e-5):
+            seen.append((where, ls_meth, ridge))
+            return original(x, y, ls_meth=ls_meth, ridge=ridge)
+
+        return wrapper
+
+    # norm fits through norm_draw (imputation.sampler), norm.boot directly
+    monkeypatch.setattr(imputation.sampler, "estimice", recording("norm", imputation.sampler.estimice))
+    monkeypatch.setattr(imputation.norm, "estimice", recording("norm.boot", imputation.norm.estimice))
+    df = numeric_frame(n=30)
+    impute(
+        df,
+        {"a": "norm", "b": "norm.boot", "c": "sample"},
+        norm_ls_meth="ridge",
+        norm_ridge=0.25,
+        norm_boot_ridge=0.5,
+    )
+    calls = N_IMP * MAXIT
+    assert sorted(seen) == [("norm", "ridge", 0.25)] * calls + [("norm.boot", "qr", 0.5)] * calls
