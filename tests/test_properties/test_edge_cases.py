@@ -726,7 +726,7 @@ def test_find_collinear_reports_one_of_a_duplicated_pair():
 
 
 # ---------------------------------------------------------------------------
-# B11: tree methods without any observed target value
+# B11: methods without any observed target value
 # ---------------------------------------------------------------------------
 
 TREE_METHODS = ("cart", "rf")
@@ -744,7 +744,29 @@ def test_tree_method_without_observed_target_raises_value_error(method, kind):
         get_imputer_func(method)(y, np.zeros(10, dtype=bool), x, rng=rng)
 
 
-@pytest.mark.parametrize("method", TREE_METHODS)
+@pytest.mark.parametrize("method", ["pmm", "midas"])
+@pytest.mark.parametrize("kind", ["numeric", "categorical"])
+def test_pmm_midas_without_observed_target_raise_value_error(method, kind):
+    """Like cart and rf: a clear error, not a crash deep inside the method."""
+    from imputation.utils import get_imputer_func
+
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=(10, 2))
+    y = np.full(10, np.nan) if kind == "numeric" else np.full(10, None, dtype=object)
+    with pytest.raises(ValueError, match=f"{method}: the target has no observed value"):
+        get_imputer_func(method)(y, np.zeros(10, dtype=bool), x, rng=rng)
+
+
+@pytest.mark.parametrize("method", ["pmm", "midas", "cart", "rf"])
+def test_no_observed_target_and_nothing_to_impute_returns_empty(method):
+    from imputation.utils import get_imputer_func
+
+    x = np.random.default_rng(0).normal(size=(10, 2))
+    out = get_imputer_func(method)(np.full(10, np.nan), np.zeros(10, dtype=bool), x, id_mis=np.zeros(10, dtype=bool))
+    assert len(out) == 0
+
+
+@pytest.mark.parametrize("method", ["pmm", "midas", *TREE_METHODS])
 def test_tree_method_without_usable_observed_row_through_impute(method):
     """``x`` has method "" and is missing wherever ``y`` is observed, so no row
     with an observed ``y`` has a complete design."""

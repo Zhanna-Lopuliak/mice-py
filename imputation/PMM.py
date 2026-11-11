@@ -63,6 +63,13 @@ def pmm(y, id_obs, x, id_mis=None, donors=5, matchtype=1, quantify=True, ridge=1
         Imputed values for the `id_mis` positions only (as in R):
         ``y[id_obs][idx]``, so observed values or category labels of `y`.
 
+    Raises
+    ------
+    ValueError
+        If `y` has no observed value and some value is to be imputed, if `x`
+        is not numeric or has missing values, or if `matchtype` is not 0, 1
+        or 2.
+
     Notes
     -----
     Based on:
@@ -100,6 +107,12 @@ def pmm(y, id_obs, x, id_mis=None, donors=5, matchtype=1, quantify=True, ridge=1
 
     id_obs = np.asarray(id_obs, dtype=bool)
     id_mis = ~id_obs if id_mis is None else np.asarray(id_mis, dtype=bool)
+    if not id_obs.any():
+        if not id_mis.any():
+            return np.asarray(y)[id_mis]
+        raise ValueError(
+            "pmm: the target has no observed value in the rows used for the model, so there is no donor to draw from."
+        )
 
     # Create default RNG if not provided
     if rng is None:

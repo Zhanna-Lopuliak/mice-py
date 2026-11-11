@@ -100,6 +100,12 @@ def midas(y, id_obs, x, id_mis=None, ridge=1e-5, kappa=None, outout=True, rng=No
         observed values of the drawn donors, ``y[id_obs][index]``, so they keep the
         type of `y` (integers stay integers, booleans stay booleans).
 
+    Raises
+    ------
+    ValueError
+        If `y` has no observed value and some value is to be imputed, if `y`
+        is not numeric or boolean, or if `x` is not numeric or has missing values.
+
     Notes
     -----
     - Based on: Gaffert, P., Meinfelder, F., & van den Bosch, V. (2018).
@@ -119,6 +125,12 @@ def midas(y, id_obs, x, id_mis=None, ridge=1e-5, kappa=None, outout=True, rng=No
     """
     id_obs = np.asarray(id_obs, dtype=bool)
     id_mis = ~id_obs if id_mis is None else np.asarray(id_mis, dtype=bool)
+    if not id_obs.any():
+        if not id_mis.any():
+            return np.asarray(y)[id_mis]
+        raise ValueError(
+            "midas: the target has no observed value in the rows used for the model, so there is no donor to draw from."
+        )
     if rng is None:
         rng = np.random.default_rng()
 
