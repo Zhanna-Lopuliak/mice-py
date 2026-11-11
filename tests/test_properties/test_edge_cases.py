@@ -27,7 +27,6 @@ NON_MIDAS = ("pmm", "cart", "rf", "sample")
 B2 = "B2: categorical predictors are rejected instead of dummy-coded"
 C4_EMPTY = "C4: validate_dataframe drops all-empty rows"
 C4_PRINT = "C4: validators print to stdout"
-C6 = "C6: no setup step (imputation.design does not exist)"
 NEW2 = "B7: rf crashes when the target has no predictors"
 NEW3 = "B8: cart/rf crash on an incomplete boolean column (sklearn 'Unknown label type')"
 NEW5 = "B9: pandas 'string' predictors crash cart/rf ('could not convert string to float')"
@@ -635,10 +634,9 @@ def test_midas_kappa_through_impute(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# C6: the planned setup step (imputation.design)
+# C6: the setup functions of imputation.design
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason=C6)
 def test_obtain_design_dummy_codes_object_columns():
     from imputation.design import obtain_design
 
@@ -654,7 +652,6 @@ def test_obtain_design_dummy_codes_object_columns():
     np.testing.assert_array_equal(x["gc"].to_numpy(), [0.0, 0.0, 1.0, 0.0, 0.0])
 
 
-@pytest.mark.xfail(strict=True, reason=C6)
 def test_remove_lindep_drops_duplicate_and_constant_columns():
     from imputation.design import remove_lindep
 
@@ -672,7 +669,6 @@ def test_remove_lindep_drops_duplicate_and_constant_columns():
     assert keep[3]
 
 
-@pytest.mark.xfail(strict=True, reason=C6)
 def test_find_collinear_reports_one_of_a_duplicated_pair():
     from imputation.design import find_collinear
 

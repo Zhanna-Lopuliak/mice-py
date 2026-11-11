@@ -134,16 +134,11 @@ def test_visit_sequence_matches_r(case, code):
 # imputation.design: obtain_design, remove_lindep, find_collinear
 # ---------------------------------------------------------------------------
 
-DESIGN_KNOWN = {
-    "nhanes2_factors": "C6: imputation.design.obtain_design not implemented",
-    "boys_unordered_factor": "C6: imputation.design.obtain_design not implemented",
-    # model.matrix() uses polynomial contrasts (contr.poly) for ordered factors,
-    # not drop-first dummies; the contract has to say which one the port follows.
-    "boys_ordered_factor": "C6: obtain_design not implemented; R: contr.poly for ordered factors",
-}
-
-
-@pytest.mark.parametrize("case", list(_params(DESIGN["obtain_design"], DESIGN_KNOWN)))
+# model.matrix() codes ordered factors with polynomial contrasts (contr.poly)
+# and unordered ones with treatment dummies; boys_ordered_factor pins the first.
+@pytest.mark.parametrize(
+    "case", DESIGN["obtain_design"], ids=[c["name"] for c in DESIGN["obtain_design"]]
+)
 def test_obtain_design_matches_r(case):
     from imputation.design import obtain_design
 
@@ -155,7 +150,6 @@ def test_obtain_design_matches_r(case):
     )
 
 
-B4 = "B4: imputation.design.remove_lindep not implemented"
 LINDEP_SINGLE = [c for c in DESIGN["remove_lindep"] if not c["several_dependencies"]]
 LINDEP_SEVERAL = [c for c in DESIGN["remove_lindep"] if c["several_dependencies"]]
 
@@ -173,13 +167,11 @@ def _remove_lindep(case):
     return np.asarray(keep, dtype=bool)
 
 
-@pytest.mark.xfail(strict=True, reason=B4)
 @pytest.mark.parametrize("case", LINDEP_SINGLE, ids=[c["name"] for c in LINDEP_SINGLE])
 def test_remove_lindep_matches_r(case):
     np.testing.assert_array_equal(_remove_lindep(case), as_bool(case["keep"]))
 
 
-@pytest.mark.xfail(strict=True, reason=B4)
 @pytest.mark.parametrize("case", LINDEP_SEVERAL, ids=[c["name"] for c in LINDEP_SEVERAL])
 def test_remove_lindep_several_dependencies_matches_r(case):
     """R's result when more than one column must go is order dependent and
@@ -189,10 +181,6 @@ def test_remove_lindep_several_dependencies_matches_r(case):
     np.testing.assert_array_equal(_remove_lindep(case), as_bool(case["keep"]))
 
 
-C6 = "C6: imputation.design.find_collinear not implemented"
-
-
-@pytest.mark.xfail(strict=True, reason=C6)
 @pytest.mark.parametrize(
     "case", DESIGN["find_collinear"], ids=[c["name"] for c in DESIGN["find_collinear"]]
 )
