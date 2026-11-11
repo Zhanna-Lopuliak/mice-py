@@ -49,11 +49,12 @@ def _reimport_plotting():
 
 
 def test_import_does_not_touch_numpy_global_rng():
-    np.random.seed(987)
-    before = np.random.get_state()
+    # the legacy global generator is what the test watches
+    np.random.seed(987)  # noqa: NPY002
+    before = np.random.get_state()  # noqa: NPY002
     restore = _reimport_plotting()
     try:
-        after = np.random.get_state()
+        after = np.random.get_state()  # noqa: NPY002
     finally:
         restore()
     np.testing.assert_array_equal(after[1], before[1])

@@ -2,15 +2,14 @@
 Tests for diagnostic plotting functions.
 """
 
-import pytest
-import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import pytest
 from matplotlib.colors import to_rgb
 from matplotlib.figure import Figure
-from pathlib import Path
 
-from plotting.diagnostics import stripplot, bwplot, densityplot, densityplot_split, xyplot, plot_chain_stats
+from plotting.diagnostics import bwplot, densityplot, densityplot_split, plot_chain_stats, stripplot, xyplot
 
 N_IMPUTATIONS = 3
 N_ROWS = 50
@@ -333,8 +332,9 @@ class TestPlotChainStats:
         """Test basic chain statistics plotting."""
         # Create mock chain statistics
         n_iter, n_chains = 10, 3
-        chain_mean = {"bmi": np.random.randn(n_iter, n_chains), "cholesterol": np.random.randn(n_iter, n_chains)}
-        chain_var = {"bmi": np.random.rand(n_iter, n_chains), "cholesterol": np.random.rand(n_iter, n_chains)}
+        rng = np.random.default_rng(1)
+        chain_mean = {name: rng.normal(size=(n_iter, n_chains)) for name in ("bmi", "cholesterol")}
+        chain_var = {name: rng.uniform(size=(n_iter, n_chains)) for name in ("bmi", "cholesterol")}
 
         fig = plot_chain_stats(chain_mean=chain_mean, chain_var=chain_var, columns=["bmi"])
         assert isinstance(fig, Figure)
@@ -352,8 +352,9 @@ class TestPlotChainStats:
     def test_plot_chain_stats_save(self, temp_dir):
         """Test chain statistics plotting with save."""
         n_iter, n_chains = 10, 3
-        chain_mean = {"bmi": np.random.randn(n_iter, n_chains)}
-        chain_var = {"bmi": np.random.rand(n_iter, n_chains)}
+        rng = np.random.default_rng(2)
+        chain_mean = {"bmi": rng.normal(size=(n_iter, n_chains))}
+        chain_var = {"bmi": rng.uniform(size=(n_iter, n_chains))}
 
         save_path = temp_dir / "chain_stats_test.png"
 
@@ -375,7 +376,7 @@ class TestPlotChainStats:
 
     def test_plot_chain_stats_missing_column(self):
         """Test chain statistics plotting with missing column data."""
-        chain_mean = {"bmi": np.random.randn(10, 3)}
+        chain_mean = {"bmi": np.random.default_rng(3).normal(size=(10, 3))}
         chain_var = {}
         plt.close("all")
 
@@ -384,6 +385,9 @@ class TestPlotChainStats:
         assert plt.get_fignums() == []
         plt.close("all")
 
+    # 30 rows of panels in 20 inches leave matplotlib's tight_layout no room;
+    # it says so and the test is only about the figure height
+    @pytest.mark.filterwarnings("ignore:Tight layout not applied:UserWarning")
     def test_plot_chain_stats_height_is_bounded(self):
         """Thirty variables: the figure stays at most 20 inches high."""
         rng = np.random.default_rng(0)

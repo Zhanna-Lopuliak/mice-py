@@ -20,6 +20,7 @@ import pytest
 
 from imputation import MICE
 
+from .._logged_events import impute_checking_log_warning
 from ._helpers import as_array, as_bool, decode_frame, load_fixture, str_list
 
 pytestmark = pytest.mark.parity
@@ -32,7 +33,7 @@ VISITS = ["roman", "arabic", "monotone", "revmonotone"]
 def _impute(case, **kwargs):
     df = decode_frame(case["data"])
     mice = MICE(df)
-    mice.impute(n_imputations=1, maxit=1, **kwargs)
+    impute_checking_log_warning(mice, n_imputations=1, maxit=1, **kwargs)
     return df, mice
 
 

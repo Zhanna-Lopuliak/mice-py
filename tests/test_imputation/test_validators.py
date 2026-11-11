@@ -2,21 +2,22 @@
 Tests for validation functions in the imputation module.
 """
 
-import pytest
-import pandas as pd
-import numpy as np
 import warnings
 
+import numpy as np
+import pandas as pd
+import pytest
+
 from imputation.validators import (
-    validate_dataframe,
-    validate_columns,
-    check_n_imputations,
+    check_initial_method,
     check_maxit,
     check_method,
-    check_initial_method,
-    validate_predictor_matrix,
+    check_n_imputations,
     check_visit_sequence,
+    validate_columns,
+    validate_dataframe,
     validate_formula,
+    validate_predictor_matrix,
 )
 
 
@@ -117,8 +118,11 @@ class TestCheckParameters:
 
     def test_check_n_imputations_valid(self):
         """Test valid n_imputations values."""
-        check_n_imputations(5)  # Should not raise
-        check_n_imputations(1)  # Should not raise
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert check_n_imputations(5) is None
+            assert check_n_imputations(1) is None
+            assert check_n_imputations(100) is None
 
     def test_check_n_imputations_invalid(self):
         """Test invalid n_imputations values."""
@@ -132,10 +136,10 @@ class TestCheckParameters:
             check_n_imputations(True)
 
     def test_numpy_integers_are_accepted(self):
-        check_n_imputations(np.int64(5))
-        check_n_imputations(np.int32(1))
-        check_maxit(np.int64(3))
-        check_maxit(np.uint8(2))
+        assert check_n_imputations(np.int64(5)) is None
+        assert check_n_imputations(np.int32(1)) is None
+        assert check_maxit(np.int64(3)) is None
+        assert check_maxit(np.uint8(2)) is None
 
     def test_many_imputations_warn_instead_of_print(self, capsys):
         with pytest.warns(UserWarning, match="101 imputations"):
@@ -144,8 +148,11 @@ class TestCheckParameters:
 
     def test_check_maxit_valid(self):
         """Test valid maxit values."""
-        check_maxit(10)  # Should not raise
-        check_maxit(1)  # Should not raise
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert check_maxit(10) is None
+            assert check_maxit(1) is None
+            assert check_maxit(50) is None
 
     def test_check_maxit_invalid(self):
         """Test invalid maxit values."""
@@ -156,11 +163,9 @@ class TestCheckParameters:
 
     def test_check_maxit_warning(self):
         """Test warning for large maxit values."""
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
+        with pytest.warns(UserWarning, match="maxit is greater than 50") as record:
             check_maxit(100)
-            assert len(w) == 1
-            assert "maxit is greater than 50" in str(w[0].message)
+        assert len(record) == 1
 
 
 class TestCheckMethod:
@@ -206,8 +211,8 @@ class TestCheckInitialMethod:
 
     def test_check_initial_method_valid(self):
         """Test valid initial methods."""
-        check_initial_method("sample")
-        check_initial_method("meanobs")
+        assert check_initial_method("sample") is None
+        assert check_initial_method("meanobs") is None
 
     def test_check_initial_method_invalid(self):
         """Test invalid initial methods."""
@@ -266,12 +271,17 @@ class TestCheckVisitSequence:
     def test_check_visit_sequence_string(self):
         """Test visit sequence validation with string."""
         columns = ["A", "B", "C"]
-        check_visit_sequence("monotone", columns)
+        for keyword in ("roman", "arabic", "monotone", "revmonotone", "random"):
+            assert check_visit_sequence(keyword, columns) == (None, [])
+        with pytest.raises(ValueError, match="Unsupported visit sequence"):
+            check_visit_sequence("alphabetical", columns)
 
     def test_check_visit_sequence_list(self):
         """Test visit sequence validation with list."""
         columns = ["A", "B", "C"]
-        check_visit_sequence(["A", "B", "C"], columns)
+        assert check_visit_sequence(["C", "A"], columns) == (["C", "A"], [])
+        # with the incomplete columns given, the others are dropped and reported
+        assert check_visit_sequence(["C", "B", "A"], columns, ["A", "C"]) == (["C", "A"], ["B"])
 
     def test_check_visit_sequence_invalid_column(self):
         """Test visit sequence validation with invalid column."""
@@ -286,8 +296,8 @@ class TestValidateFormula:
     def test_valid_formula(self):
         """Test validation of valid formula."""
         columns = ["age", "bmi", "cholesterol"]
-        formula = "age ~ bmi + cholesterol"
-        validate_formula(formula, columns)
+        assert validate_formula("age ~ bmi + cholesterol", columns) is None
+        assert validate_formula("np.log(age) ~ C(bmi) + I(cholesterol ** 2)", columns) is None
 
     def test_formula_missing_variables(self):
         """Test error with missing variables in formula."""

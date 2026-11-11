@@ -7,6 +7,8 @@ import pytest
 
 from imputation import MICE
 
+from .._logged_events import impute_checking_log_warning
+
 
 class TestMICEInitialization:
     """Test MICE object initialization."""
@@ -88,9 +90,10 @@ class TestMICEMethods:
         """Test imputation methods that can handle categorical data."""
         mice = MICE(small_data_missing)
 
-        mice.impute(n_imputations=2, maxit=2, method=method)
-        assert mice is not None
+        # five rows: x2 is ten times x1, so it is not imputed (a logged event)
+        impute_checking_log_warning(mice, n_imputations=2, maxit=2, method=method)
         assert len(mice.imputed_datasets) == 2
+        assert "x2" in mice.logged_events["out"].tolist()
 
     @pytest.mark.parametrize("method", ["pmm", "midas"])
     def test_methods_numeric_only(self, sample_data_missing, method):

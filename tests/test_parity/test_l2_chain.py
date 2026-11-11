@@ -8,11 +8,9 @@ mean, variance and kurtosis across the 200 chains of the last-iteration
 values are compared with the z-scores of T2. ``chainVar`` in R and
 ``chain_var`` in the port both hold variances.
 
-With finding A1 present this test passes narrowly: the variance across
-chains of the last chain mean of y2 is about twice R's (|z| = 5.4 against a
-threshold of 5.5); with the Cholesky factor corrected it is about 1. A change
-of random stream (for example the planned ``seed`` handling) can therefore
-make it fail until A1 is fixed.
+Before finding A1 was fixed this test passed only narrowly: the variance
+across chains of the last chain mean of y2 was about twice R's (|z| = 5.4
+against a threshold of 5.5); with the corrected Cholesky factor it is about 1.
 """
 
 import functools
@@ -29,7 +27,7 @@ pytestmark = pytest.mark.parity
 SEED = 20261
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def chain_run():
     from imputation import MICE
 
@@ -39,16 +37,15 @@ def chain_run():
     full = pd.DataFrame(1, index=cols, columns=cols)
     np.fill_diagonal(full.values, 0)
     mice = MICE(data)
-    # `seed` is the planned argument; today it is ignored and the chains use
-    # the hard-coded seeds 42 + chain (finding C1), which is also deterministic
-    mice.impute(
-        n_imputations=fx["m"],
-        maxit=fx["maxit"],
-        method="pmm",
-        predictor_matrix=full,
-        visit_sequence=cols,
-        seed=SEED,
-    )
+    with pytest.warns(UserWarning, match="200 imputations is a large number"):
+        mice.impute(
+            n_imputations=fx["m"],
+            maxit=fx["maxit"],
+            method="pmm",
+            predictor_matrix=full,
+            visit_sequence=cols,
+            seed=SEED,
+        )
     return fx, mice
 
 

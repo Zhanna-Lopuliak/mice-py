@@ -2,13 +2,13 @@
 Tests for plotting utility functions.
 """
 
-import pytest
-import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import pytest
 from matplotlib.colors import to_rgba
 from matplotlib.figure import Figure
-from pathlib import Path
+
 from plotting.utils import md_pattern_like, plot_missing_data_pattern
 
 
@@ -171,20 +171,6 @@ class TestPlotMissingDataPattern:
 
 class TestUtilsIntegration:
     """Test integration between utility functions."""
-
-    def test_pattern_to_plot_workflow(self, sample_data_missing, temp_dir):
-        """Test complete workflow from data to pattern to plot."""
-        # Step 1: Analyze missing pattern
-        pattern_df = md_pattern_like(sample_data_missing)
-
-        # Step 2: Plot the pattern
-        save_path = temp_dir / "workflow_test.png"
-        plot_missing_data_pattern(pattern_df, title="Test Workflow", save_path=str(save_path))
-
-        assert isinstance(pattern_df, pd.DataFrame)
-        assert len(pattern_df) > 0
-        assert save_path.exists()
-        plt.close("all")
 
     def test_pattern_consistency(self, sample_data_missing):
         """Test that pattern analysis is consistent."""

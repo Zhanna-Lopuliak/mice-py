@@ -103,8 +103,9 @@ def _ratio_or_inf(num, den):
     den = np.asarray(den, dtype=float)
     with np.errstate(divide="ignore", invalid="ignore"):
         out = num / den
+        signed_inf = np.sign(num) * np.inf  # NaN where num is 0; not selected below
     out = np.where((den == 0) & (num == 0), 0.0, out)
-    out = np.where((den == 0) & (num != 0), np.sign(num) * np.inf, out)
+    out = np.where((den == 0) & (num != 0), signed_inf, out)
     return out
 
 

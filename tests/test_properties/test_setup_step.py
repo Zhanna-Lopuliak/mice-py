@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ._helpers import N_IMP, MAXIT, assert_all_invariants, full_predictor_matrix, impute
+from ._helpers import MAXIT, N_IMP, assert_all_invariants, full_predictor_matrix, impute
 
 LOG_COLUMNS = ["it", "im", "dep", "meth", "out"]
 
@@ -27,7 +27,7 @@ def _run(df, method="pmm", **kwargs):
     """``impute`` with two chains and two iterations; returns (mice, out, warnings)."""
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        mice, out = impute(df, method, n_imputations=2, maxit=2, seed=1, **kwargs)
+        mice, out = impute(df, method, n_imputations=2, maxit=2, seed=1, check_log_warning=False, **kwargs)
     messages = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
     return mice, out, messages
 

@@ -20,10 +20,10 @@ from imputation.design import (
 )
 
 N = 12
-I = np.arange(1, N + 1)
-X1 = np.sin(I)
-X2 = np.cos(0.7 * I)
-Y = X1 + 0.5 * X2 + 0.3 * np.sin(3 * I)
+IDX = np.arange(1, N + 1)
+X1 = np.sin(IDX)
+X2 = np.cos(0.7 * IDX)
+Y = X1 + 0.5 * X2 + 0.3 * np.sin(3 * IDX)
 RY = np.ones(N, dtype=bool)
 RY[[1, 6]] = False
 K = np.tile([1, 2, 3], 4)

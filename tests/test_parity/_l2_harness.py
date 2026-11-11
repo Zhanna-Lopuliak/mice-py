@@ -65,7 +65,7 @@ def load_input(payload):
     )
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def r_results(method):
     """The ``results`` entry of fixture ``l2_<method>`` (dict keyed by input)."""
     return load_fixture(f"l2_{method}")["results"]
@@ -298,13 +298,13 @@ def weak_factor(r_sum, py_sum):
     return float(np.max(np.abs(cr / cr.sum() - cp / cp.sum())))
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def cached_run(method, input_name):
     """``run_python`` for the unpatched library with default arguments (cached)."""
     return run_python(method, input_name)
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def cached_comparison(method, input_name):
     """T1/T2/T3 for the unpatched library with default arguments (cached)."""
     inp, r_sum, py_sum = cached_run(method, input_name)

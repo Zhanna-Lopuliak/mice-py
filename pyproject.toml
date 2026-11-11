@@ -116,7 +116,6 @@ addopts = [
     "-v",
     "--tb=short",
     "--strict-markers",
-    "--disable-warnings",
     "--color=yes",
 ]
 
@@ -131,9 +130,13 @@ markers = [
 timeout = 300
 
 filterwarnings = [
-    "ignore::UserWarning",
-    "ignore::DeprecationWarning",
-    "ignore::PendingDeprecationWarning",
+    # Warnings are not suppressed globally. Tests that expect one of the
+    # package's warnings check it with pytest.warns; third-party warnings
+    # that the tests cannot avoid are listed here, each with its reason.
+    #
+    # seaborn 0.13 passes `vert` to matplotlib's boxplot, which matplotlib
+    # 3.10 is phasing out (bwplot)
+    "ignore:vert. bool will be deprecated in a future version:PendingDeprecationWarning:seaborn",
 ]
 
 [tool.coverage.run]

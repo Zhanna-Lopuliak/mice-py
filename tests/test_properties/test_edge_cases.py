@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from .._logged_events import impute_checking_log_warning
 from ._helpers import (
     MAXIT,
     METHODS,
@@ -354,7 +355,8 @@ def test_all_empty_row_is_kept_and_imputed(method):
     df = numeric_frame(n=30)
     df["k"] = df["k"].astype(float)  # the int column is about to hold a NaN
     df.iloc[4, :] = np.nan
-    _check(df, method)
+    with pytest.warns(UserWarning, match=r"1 row\(s\) have no observed value"):
+        _check(df, method)
 
 
 def test_validation_does_not_print(capsys):
@@ -363,7 +365,8 @@ def test_validation_does_not_print(capsys):
     df = numeric_frame(n=30)
     df["k"] = df["k"].astype(float)
     df.iloc[4, :] = np.nan
-    MICE(df)
+    with pytest.warns(UserWarning, match=r"1 row\(s\) have no observed value"):
+        MICE(df)
     assert capsys.readouterr().out == ""
 
 
@@ -827,7 +830,7 @@ def test_meanobs_initial_imputation_of_non_numeric_columns():
 
     df = _meanobs_frame()
     mice = MICE(df)
-    mice.impute(n_imputations=1, maxit=1, initial="meanobs", method="sample", seed=1)
+    impute_checking_log_warning(mice, n_imputations=1, maxit=1, initial="meanobs", method="sample", seed=1)
     data = df.copy()
     mice._initial_imputation(data, np.random.default_rng(0))
     assert data.loc[[3, 5], "num"].tolist() == [4.0, 4.0]

@@ -43,7 +43,7 @@ CASES = [
 ]
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _run(dataset, method):
     df = DATASETS[dataset]()
     before = df.copy(deep=True)

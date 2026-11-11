@@ -90,9 +90,10 @@ def test_midas_does_not_touch_numpy_global_rng():
     y = x.sum(axis=1) + rng.normal(size=n)
     ry = np.ones(n, dtype=bool)
     ry[::5] = False
-    np.random.seed(2024)
-    before = np.random.get_state()
+    # the legacy global generator is what the test watches
+    np.random.seed(2024)  # noqa: NPY002
+    before = np.random.get_state()  # noqa: NPY002
     midas(y, ry, x, rng=np.random.default_rng(1))
-    after = np.random.get_state()
+    after = np.random.get_state()  # noqa: NPY002
     np.testing.assert_array_equal(after[1], before[1])
     assert after[2:] == before[2:]

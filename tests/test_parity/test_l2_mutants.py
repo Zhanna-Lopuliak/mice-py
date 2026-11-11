@@ -22,7 +22,7 @@ from ._l2_harness import compare, donor_set_mismatches, run_python
 pytestmark = pytest.mark.parity
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def transposed_cholesky_comparison():
     """pmm on F1 with np.linalg.cholesky returning the transposed factor."""
     calls = []

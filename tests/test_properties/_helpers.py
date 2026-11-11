@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from .._logged_events import impute_checking_log_warning
+
 METHODS = ("pmm", "cart", "rf", "midas", "sample")
 
 # Small and quick: the whole folder has to run in about 20 seconds.
@@ -56,14 +58,22 @@ def method_spec(method, df):
     return {c: ("midas" if is_numeric_column(df[c]) else "sample") for c in df.columns}
 
 
-def impute(df, method, n_imputations=N_IMP, maxit=MAXIT, seed=SEED, predictor_matrix="full", **kwargs):
-    """Run ``MICE(df).impute`` with the full predictor matrix; return (mice, datasets)."""
+def impute(
+    df, method, n_imputations=N_IMP, maxit=MAXIT, seed=SEED, predictor_matrix="full", check_log_warning=True, **kwargs
+):
+    """Run ``MICE(df).impute`` with the full predictor matrix; return (mice, datasets).
+
+    With `check_log_warning`, the "Number of logged events" warning is
+    checked against ``mice.logged_events`` instead of being passed on.
+    """
     from imputation import MICE
 
     if isinstance(predictor_matrix, str) and predictor_matrix == "full":
         predictor_matrix = full_predictor_matrix(df)
     mice = MICE(df)
-    out = mice.impute(
+    run = impute_checking_log_warning if check_log_warning else (lambda mice, **kw: mice.impute(**kw))
+    out = run(
+        mice,
         n_imputations=n_imputations,
         maxit=maxit,
         method=method_spec(method, df),
