@@ -162,6 +162,7 @@ def test_formerly_implicit_parameters_reach_the_backend(monkeypatch):
         ("cart", "tree_params", "min_samples_split"),
         ("rf", "forest_params", "random_state"),
         ("rf", "forest_params", "n_estimators"),
+        ("rf", "forest_params", "min_samples_split"),
     ],
 )
 def test_estimator_params_cannot_override_explicit_arguments(method, argument, key):

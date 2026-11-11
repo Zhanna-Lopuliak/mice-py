@@ -12,6 +12,9 @@ tested:
   and T3 of test_l2_univariate apply as well.
 * RF: the draw rule (pool the donors of all trees, then draw one) on the
   helper ``imputation.rf._draw_pooled_donors``.
+* RF, numeric target: the forests differ (scikit-learn is not ranger), but
+  with ranger-like settings the draws agree in distribution, so T1, T2 and
+  T3 apply, next to the weaker checks below.
 * CART and RF with a factor target, and RF with a numeric target: imputations
   are observed values or levels; numeric: per-cell mean within 0.25 R
   standard deviations (of that cell) of R's mean and pooled variance ratio
@@ -35,10 +38,6 @@ pytestmark = pytest.mark.parity
 # R's settings for mice.impute.cart; also the defaults of cart
 CART_R_SETTINGS = {"bootstrap": False, "cp": 1e-4, "min_samples_leaf": 5}
 
-A6_RF = pytest.mark.xfail(
-    strict=True,
-    reason="A6: rf draws one donor per tree and uses scikit-learn defaults, not ranger's",
-)
 
 
 @pytest.mark.parametrize("input_name", ["F1", "F2", "F4"])
@@ -68,10 +67,7 @@ def test_cart_factor_target_level_proportions_close_to_r():
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize(
-    "input_name",
-    [pytest.param("F1", marks=A6_RF), "F2", pytest.param("F4", marks=A6_RF)],
-)
+@pytest.mark.parametrize("input_name", ["F1", "F2", "F4"])
 def test_rf_numeric_target_close_to_r(input_name):
     inp, r_sum, py_sum = cached_run("rf", input_name)
     assert py_sum["n_not_donor"] == 0, "imputations must be observed values"
@@ -83,6 +79,19 @@ def test_rf_numeric_target_close_to_r(input_name):
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("input_name", ["F1", "F2", "F4"])
+@pytest.mark.parametrize("statistic", ["T1", "T2", "T3"])
+def test_rf_numeric_target_strict(input_name, statistic):
+    """rf with its defaults (10 trees, ranger-like node sizes and mtry,
+    donors pooled over all trees) against ranger: T1, T2 and T3 with the
+    thresholds of pmm, on 300 Python calls."""
+    comp = cached_comparison("rf", input_name)
+    passed = {"T1": comp.t1_ok, "T2": comp.t2_ok, "T3": comp.t3_ok}[statistic]()
+    message = {"T1": comp.t1_message, "T2": comp.t2_message, "T3": comp.t3_message}[statistic]
+    assert passed, message()
+
+
+@pytest.mark.slow
 def test_rf_factor_target_level_proportions_close_to_r():
     inp, r_sum, py_sum = cached_run("rf", "F3")
     assert py_sum["n_not_donor"] == 0, "imputations must be observed levels"
@@ -90,12 +99,6 @@ def test_rf_factor_target_level_proportions_close_to_r():
     assert diff <= 0.10, f"largest level-proportion difference {diff:.3f} (pass: <= 0.10)"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ImportError,
-    reason="A6: rf has no _draw_pooled_donors yet; today it draws one donor per tree "
-    "and then one of those, so a donor alone in its leaf gets probability 1/2",
-)
 def test_rf_draw_rule_pools_donors_of_all_trees():
     from imputation.rf import _draw_pooled_donors
 

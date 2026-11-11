@@ -256,6 +256,80 @@ class TestRFImputation:
         again = rf(y, id_obs, x, n_estimators=3, rng=np.random.default_rng(42))
         np.testing.assert_array_equal(result, again)
 
+    @staticmethod
+    def _recording(monkeypatch, name):
+        """Replace a forest class of imputation.rf by one that records itself."""
+        import imputation.rf
+
+        seen = {}
+        base = getattr(imputation.rf, name)
+
+        class Recording(base):
+            def fit(self, *args, **kwargs):
+                fitted = super().fit(*args, **kwargs)
+                seen.update(params=self.get_params(), forest=self)
+                return fitted
+
+        monkeypatch.setattr(imputation.rf, name, Recording)
+        return seen
+
+    @staticmethod
+    def _problem(n=60, p=5, seed=0):
+        rng = np.random.default_rng(seed)
+        x = rng.normal(size=(n, p))
+        y = x[:, 0] + rng.normal(scale=0.5, size=n)
+        id_obs = np.ones(n, dtype=bool)
+        id_obs[::5] = False
+        y[~id_obs] = np.nan
+        return y, id_obs, x
+
+    def test_rf_regression_follows_ranger_defaults(self, monkeypatch):
+        """10 trees on bootstrap samples, mtry floor(sqrt(p)), no process pool."""
+        seen = self._recording(monkeypatch, "RandomForestRegressor")
+        y, id_obs, x = self._problem()
+        rf(y, id_obs, x, rng=np.random.default_rng(1))
+        params = seen["params"]
+        assert params["n_estimators"] == 10 and params["bootstrap"] is True
+        assert (params["min_samples_split"], params["min_samples_leaf"]) == (5, 1)
+        assert params["max_depth"] is None and params["max_features"] == "sqrt"
+        assert params["n_jobs"] is None
+        assert all(tree.max_features_ == 2 for tree in seen["forest"].estimators_)  # floor(sqrt(5))
+
+    def test_rf_classification_follows_ranger_defaults(self, monkeypatch):
+        seen = self._recording(monkeypatch, "RandomForestClassifier")
+        y, id_obs, x = self._problem()
+        labels = np.where(np.isnan(y), None, np.where(y > 0, "hi", "lo")).astype(object)
+        out = rf(labels, id_obs, x, rng=np.random.default_rng(1))
+        params = seen["params"]
+        assert (params["min_samples_split"], params["min_samples_leaf"]) == (2, 1)
+        assert params["max_features"] == "sqrt" and params["n_jobs"] is None
+        assert set(out) <= {"hi", "lo"}
+
+    def test_rf_forest_params_reach_the_forest(self, monkeypatch):
+        seen = self._recording(monkeypatch, "RandomForestRegressor")
+        y, id_obs, x = self._problem()
+        rf(
+            y, id_obs, x, n_estimators=4, min_samples_split=7,
+            forest_params={"max_features": 1.0, "n_jobs": 2}, rng=np.random.default_rng(1),
+        )
+        params = seen["params"]
+        assert (params["n_estimators"], params["min_samples_split"]) == (4, 7)
+        assert (params["max_features"], params["n_jobs"]) == (1.0, 2)
+
+    def test_rf_donors_are_pooled_over_all_trees(self, monkeypatch):
+        """Every imputation is an observed value that shares the missing row's
+        leaf in at least one tree."""
+        seen = self._recording(monkeypatch, "RandomForestRegressor")
+        y, id_obs, x = self._problem()
+        rng = np.random.default_rng(4)
+        for _ in range(10):
+            out = rf(y, id_obs, x, rng=rng)
+            forest = seen["forest"]
+            leaves_obs, leaves_mis = forest.apply(x[id_obs]), forest.apply(x[~id_obs])
+            for value, leaves in zip(out, leaves_mis):
+                pool = y[id_obs][(leaves_obs == leaves).any(axis=1)]
+                assert value in pool
+
 
 class TestMIDASImputation:
     """Test MIDAS imputation method."""

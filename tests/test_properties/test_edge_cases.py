@@ -717,7 +717,7 @@ def test_find_collinear_reports_one_of_a_duplicated_pair():
 # B11: tree methods without any observed target value
 # ---------------------------------------------------------------------------
 
-TREE_METHODS = ("cart",)
+TREE_METHODS = ("cart", "rf")
 
 
 @pytest.mark.parametrize("method", TREE_METHODS)
