@@ -5,6 +5,9 @@ gives different output, ``seed=None`` draws fresh entropy. Chain k gets the
 same random stream whatever ``n_imputations`` is. Every imputer, midas
 included, draws only from the ``rng`` it is given.
 
+The categorical methods run on a frame with two-category columns (where the
+other columns get pmm), the others on numeric data.
+
 ``mean`` is the one method whose output does not depend on the seed at all,
 so the tests that expect randomness skip it and its own test expects the
 opposite. ``norm.predict`` draws no random number either, but in a chain its
@@ -17,7 +20,15 @@ import numpy as np
 import pytest
 
 from ..test_parity._helpers import ScriptedGenerator
-from ._helpers import DETERMINISTIC_METHODS, METHODS, impute, numeric_frame, regression_frame
+from ._helpers import (
+    CATEGORICAL_METHODS,
+    DETERMINISTIC_METHODS,
+    METHODS,
+    impute,
+    numeric_frame,
+    regression_frame,
+    typed_frame,
+)
 
 # Methods whose completed datasets do not depend on the seed
 SEED_INDEPENDENT = ("mean",)
@@ -29,7 +40,7 @@ def _same(a, b):
 
 
 def _run(method, seed, n_imputations=2, **kwargs):
-    df = numeric_frame(n=40, seed=11)
+    df = typed_frame(n=40, seed=11) if method in CATEGORICAL_METHODS else numeric_frame(n=40, seed=11)
     _, out = impute(df, method, n_imputations=n_imputations, maxit=2, seed=seed, **kwargs)
     return out
 
@@ -121,6 +132,8 @@ def test_univariate_imputer_is_reproducible_with_rng(method):
     ry = np.ones(n, dtype=bool)
     ry[::5] = False
     y[~ry] = np.nan
+    if method in CATEGORICAL_METHODS:  # a two-category target
+        y = np.where(ry, y > 0, None)
     f = get_imputer_func(method)
     first = f(y, ry, x, rng=np.random.default_rng(99))
     second = f(y, ry, x, rng=np.random.default_rng(99))

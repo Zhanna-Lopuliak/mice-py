@@ -344,6 +344,10 @@ class MICE:
               observed mean). A nullable integer column (``Int64`` ...)
               imputed by one of them becomes ``Float64``, as R turns an
               integer column into double; float columns keep their dtype;
+            - logistic regression for columns with two categories (boolean,
+              categorical, text, or numeric with two distinct values), which
+              imputes their labels: ``"logreg"`` (Bayesian, on data
+              augmented as in R) and ``"logreg.boot"`` (bootstrap);
             - ``""`` for a column that is not imputed.
 
             The argument is:
@@ -411,9 +415,10 @@ class MICE:
             For an invalid argument (number of imputations or iterations,
             method, initial method, visit sequence, predictor matrix), or when
             a method cannot impute a column (for example ``"midas"`` or
-            ``"norm"`` on a categorical column, ``"norm.nob"`` with too few
-            observed values for its predictors, or a column without observed
-            value in the rows usable for its model).
+            ``"norm"`` on a categorical column, ``"logreg"`` on a column with
+            more than two categories, ``"norm.nob"`` with too few observed
+            values for its predictors, or a column without observed value in
+            the rows usable for its model).
         TypeError
             For an unknown keyword argument.
 

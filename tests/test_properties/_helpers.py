@@ -13,16 +13,15 @@ import pytest
 
 from .._logged_events import impute_checking_log_warning
 
-# The methods by kind. The empty list is filled by the phases of 0.3 that
-# add the methods: logreg and logreg.boot (phase 3), polyreg (phase 4) and
-# polr (phase 5).
+# The methods by kind. CATEGORICAL_METHODS grows in the phases of 0.3 that
+# add the methods: polyreg (phase 4) and polr (phase 5).
 # Donor methods impute observed values or labels.
 DONOR_METHODS = ("pmm", "cart", "rf", "midas", "sample")
 # Model-based methods for numeric targets only; they impute new floats.
 NUMERIC_MODEL_METHODS = ("norm", "norm.nob", "norm.boot", "norm.predict", "mean")
-# Model-based methods for categorical targets only (phases 3 to 5: logreg,
-# logreg.boot, polyreg, polr).
-CATEGORICAL_METHODS = ()
+# Model-based methods for categorical targets only; they impute labels of
+# the column. logreg and logreg.boot impute columns with two categories.
+CATEGORICAL_METHODS = ("logreg", "logreg.boot")
 # Methods whose univariate imputer draws no random number; a subset of the
 # others. Inside a chain, norm.predict still depends on the seed through the
 # (random) imputations of the other incomplete columns; mean does not.
@@ -60,20 +59,36 @@ def is_numeric_column(series):
     return pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series)
 
 
+def has_two_categories(series):
+    """True for a non-numeric column (boolean, categorical, text) with at most two observed values."""
+    return not is_numeric_column(series) and series.dropna().nunique() <= 2
+
+
 def method_spec(method, df):
     """Method argument for ``impute``.
 
     A method restricted to numeric targets (midas, as R's midastouch, and
     the ``NUMERIC_MODEL_METHODS``) imputes the numeric columns and
     ``sample`` the others; a method restricted to categorical targets
-    (``CATEGORICAL_METHODS``) imputes the non-numeric columns and ``pmm`` the
-    numeric ones. Every other method is used for all columns.
+    (``CATEGORICAL_METHODS``) imputes the columns it can impute (logreg and
+    logreg.boot: the boolean, categorical and text columns with two
+    categories) and ``pmm`` the others. Every other method is used for all
+    columns.
     """
     if method == "midas" or method in NUMERIC_MODEL_METHODS:
         return {c: (method if is_numeric_column(df[c]) else "sample") for c in df.columns}
     if method in CATEGORICAL_METHODS:
-        return {c: ("pmm" if is_numeric_column(df[c]) else method) for c in df.columns}
+        return {c: (method if has_two_categories(df[c]) else "pmm") for c in df.columns}
     return method
+
+
+def imputes_observed_values(method):
+    """True if every cell imputed with ``method_spec(method, df)`` holds a value observed in its column.
+
+    So for the donor methods, and for the categorical methods, which impute
+    labels of the column and leave the other columns to pmm.
+    """
+    return method in DONOR_METHODS or method in CATEGORICAL_METHODS
 
 
 def register_imputer(monkeypatch, name, imputer):
@@ -149,6 +164,33 @@ def mixed_frame(n=60, seed=1, index="noncontiguous"):
     d = rng.normal(size=n)
     df = pd.DataFrame({"a": a, "b": b, "g": pd.Series(g, dtype=object), "h": h, "d": d})
     df = _knock_out(df, rng, {"a": 0.15, "b": 0.2, "g": 0.15, "h": 0.1})
+    df.index = make_index(n, index, rng)
+    return df
+
+
+def typed_frame(n=60, seed=5, index="noncontiguous"):
+    """One incomplete column of each type the methods tell apart, and a complete predictor.
+
+    ``num`` (float), ``flag`` (booleans with missing values, object dtype),
+    ``two`` (Categorical with two levels, declared as yes, no), ``three``
+    (text with three values, object dtype) and ``grade`` (ordered
+    Categorical with four levels), all incomplete and related to the
+    complete float ``x``.
+    """
+    rng = np.random.default_rng(seed)
+    x = rng.normal(size=n)
+    latent = x + rng.normal(scale=0.8, size=n)
+    num = 0.6 * latent + rng.normal(scale=0.7, size=n)
+    flag = pd.Series(latent + rng.normal(size=n) > 0, dtype=object)
+    two = pd.Categorical(np.where(latent + rng.normal(size=n) > 0.2, "yes", "no"), categories=["yes", "no"])
+    three = np.where(latent < -0.5, "lo", np.where(latent < 0.5, "mid", "hi"))
+    levels = ["low", "mid", "high", "top"]
+    grades = np.array(levels)[np.digitize(latent + rng.normal(scale=0.5, size=n), [-0.8, 0.0, 0.8])]
+    grade = pd.Categorical(grades, categories=levels, ordered=True)
+    df = pd.DataFrame(
+        {"num": num, "flag": flag, "two": two, "three": pd.Series(three, dtype=object), "grade": grade, "x": x}
+    )
+    df = _knock_out(df, rng, {"num": 0.15, "flag": 0.15, "two": 0.15, "three": 0.15, "grade": 0.15})
     df.index = make_index(n, index, rng)
     return df
 

@@ -482,6 +482,145 @@ class TestNormImputation:
             assert np.isfinite(out).all()
 
 
+class TestLogregImputation:
+    """Input handling and building blocks of logreg and logreg.boot."""
+
+    METHODS = ["logreg", "logreg.boot"]
+
+    @staticmethod
+    def _problem(n=16):
+        x = np.random.default_rng(0).normal(size=(n, 2))
+        y = np.where(x[:, 0] + np.cos(np.arange(n)) > 0, "b", "a").astype(object)
+        id_obs = np.arange(n) % 4 != 0
+        y[~id_obs] = None
+        return y, id_obs, x
+
+    def test_uniform_equal_to_the_probability_gives_the_second_category(self):
+        """R's ``runif(n) <= p``: equality draws the second category."""
+        from imputation.logreg import _draw_codes
+
+        p = 0.3
+        u = np.array([p, p, p, 0.0, 1.0])
+        prob = np.array([p, np.nextafter(p, 0), np.nextafter(p, 1), 0.0, 1.0])
+        np.testing.assert_array_equal(_draw_codes(u, prob), [1, 0, 1, 1, 1])
+
+    @pytest.mark.parametrize(
+        "y, levels, codes",
+        [
+            (np.array([True, None, False, True], dtype=object), [False, True], [1, -1, 0, 1]),
+            (np.array([2.0, np.nan, 0.5, 2.0]), [0.5, 2.0], [1, -1, 0, 1]),
+            (np.array(["yes", None, "no", "yes"], dtype=object), ["no", "yes"], [1, -1, 0, 1]),
+            (pd.array([True, None, False, True], dtype="boolean"), [False, True], [1, -1, 0, 1]),
+            (pd.array(["yes", None, "no", "yes"], dtype="string"), ["no", "yes"], [1, -1, 0, 1]),
+            # unordered: sorted labels present, the unused "c" dropped
+            (pd.Categorical(["b", None, "a", "b"], categories=["c", "b", "a"]), ["a", "b"], [1, -1, 0, 1]),
+            # ordered: declared order of the levels present
+            (
+                pd.Categorical(["b", None, "a", "b"], categories=["c", "b", "a"], ordered=True),
+                ["b", "a"],
+                [0, -1, 1, 0],
+            ),
+        ],
+    )
+    def test_target_categories(self, y, levels, codes):
+        from imputation.logreg import target_categories
+
+        categories = target_categories(y)
+        assert categories.levels == levels
+        np.testing.assert_array_equal(categories.codes, codes)
+        assert categories.labels.dtype == np.asarray(y).dtype
+        assert categories.labels.tolist() == levels
+
+    def test_target_categories_keeps_unused_ordered_levels_on_request(self):
+        from imputation.logreg import target_categories
+
+        y = pd.Categorical(["b", "a"], categories=["c", "b", "a"], ordered=True)
+        categories = target_categories(y, keep_unused=True)
+        assert categories.levels == ["c", "b", "a"]
+        np.testing.assert_array_equal(categories.codes, [1, 2])
+        unordered = pd.Categorical(["b", "a"], categories=["c", "b", "a"])
+        assert target_categories(unordered, keep_unused=True).levels == ["a", "b"]
+
+    def test_values_of_mixed_types_raise(self):
+        from imputation.logreg import target_categories
+
+        with pytest.raises(TypeError, match="mixed types"):
+            target_categories(np.array(["a", 1, None], dtype=object))
+
+    @pytest.mark.parametrize("method", METHODS)
+    def test_invalid_inputs(self, method):
+        imputer = get_imputer_func(method)
+        y, id_obs, x = self._problem()
+        with pytest.raises(ValueError, match=f"Predictors must be numeric for {method}"):
+            imputer(y, id_obs, np.full((16, 2), "a"))
+        x_nan = x.copy()
+        x_nan[3, 1] = np.nan
+        with pytest.raises(ValueError, match=f"Predictors must not contain missing values for {method}"):
+            imputer(y, id_obs, x_nan)
+        with pytest.raises(ValueError, match=f"{method}: y is missing in entries that id_obs marks as observed"):
+            imputer(y, np.ones(16, dtype=bool), x)
+        with pytest.raises(ValueError, match=r"two categories, but y has 16 \(0\.0, 1\.0, 2\.0, 3\.0, 4\.0, \.\.\.\)"):
+            imputer(np.arange(16.0), id_obs, x)
+
+    @pytest.mark.parametrize("method", METHODS)
+    def test_x_as_data_frame_with_a_categorical_column(self, method):
+        """A DataFrame predictor is dummy-coded as MICE does."""
+        y, id_obs, x = self._problem()
+        frame = pd.DataFrame({"u": x[:, 0], "g": np.where(x[:, 1] > 0, "p", "q")})
+        coded = np.c_[x[:, 0], (x[:, 1] <= 0).astype(float)]
+        first = get_imputer_func(method)(y, id_obs, frame, rng=np.random.default_rng(4))
+        second = get_imputer_func(method)(y, id_obs, coded, rng=np.random.default_rng(4))
+        np.testing.assert_array_equal(first, second)
+
+    def test_logit_fit_rejects_invalid_input(self):
+        from imputation.fitting import logit_fit
+
+        x = np.c_[np.ones(4), [0.0, 1.0, 2.0, 3.0]]
+        with pytest.raises(ValueError, match=r"y values must be 0 <= y <= 1"):
+            logit_fit(x, [0, 1, 2, 1])
+        with pytest.raises(ValueError, match="non-negative"):
+            logit_fit(x, [0, 1, 0, 1], weights=[1, -1, 1, 1])
+        with pytest.raises(ValueError, match="x has 4 rows, y 3"):
+            logit_fit(x, [0, 1, 0])
+        with pytest.raises(ValueError, match="maxit must be at least 1"):
+            logit_fit(x, [0, 1, 0, 1], maxit=0)
+
+    def test_logit_fit_leaves_out_rows_with_weight_zero(self):
+        from imputation.fitting import logit_fit
+
+        x = np.c_[np.ones(7), [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]]
+        y = np.array([0, 0, 1, 0, 1, 1, 1.0])
+        weighted = logit_fit(x, y, weights=[1, 1, 1, 1, 1, 1, 0])
+        plain = logit_fit(x[:6], y[:6])
+        np.testing.assert_allclose(weighted.coef, plain.coef, rtol=1e-12)
+        np.testing.assert_allclose(weighted.cov_unscaled, plain.cov_unscaled, rtol=1e-12)
+
+    def test_one_dimensional_x_and_default_generator(self):
+        """A 1-D x is one column; without `rng` a fresh generator is used."""
+        from imputation.fitting import logit_fit
+        from imputation.logreg import augment
+
+        fit = logit_fit(np.ones(4), [0, 1, 1, 0])  # intercept only: logit(1/2) = 0
+        assert fit.coef.shape == (1,) and abs(fit.coef[0]) < 1e-12
+        y, id_obs, x = self._problem()
+        codes = np.where(y == "b", 1, np.where(y == "a", 0, -1))
+        np.testing.assert_array_equal(
+            augment(codes, id_obs, x[:, 0], ~id_obs).x, augment(codes, id_obs, x[:, :1], ~id_obs).x
+        )
+        for method in self.METHODS:
+            assert set(get_imputer_func(method)(y, id_obs, x)) <= {"a", "b"}
+
+    def test_logit_fit_of_separated_data_stops_at_maxit(self):
+        """As R's glm.fit: no error, ``converged`` False, large coefficients."""
+        from imputation.fitting import logit_fit
+
+        x = np.c_[np.ones(6), [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]]
+        fit = logit_fit(x, [0, 0, 0, 1, 1, 1], maxit=10)
+        assert (fit.iterations, fit.converged) == (10, False)
+        assert fit.coef[1] > 5
+        assert not fit.aliased.any()
+
+
 class TestMethodConsistency:
     """Test consistency across imputation methods."""
 
@@ -501,3 +640,12 @@ class TestMethodConsistency:
             assert isinstance(result, np.ndarray)
             assert len(result) == (~id_obs).sum()
             assert not np.isnan(result).any()
+
+        # the categorical methods impute a target with two categories
+        y01 = np.array([0.0, 1.0, np.nan, 1.0, 0.0, 1.0, 0.0, 1.0])
+        for method_name in ["logreg", "logreg.boot"]:
+            result = get_imputer_func(method_name)(y01, id_obs, x, rng=np.random.default_rng(6))
+
+            assert isinstance(result, np.ndarray)
+            assert len(result) == (~id_obs).sum()
+            assert set(result) <= {0.0, 1.0}

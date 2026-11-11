@@ -17,6 +17,7 @@ import numpy as np
 
 from .cart import cart
 from .constants import ImputationMethod
+from .logreg import logreg, logreg_boot
 from .mean import mean
 from .midas import midas
 from .norm import norm, norm_boot, norm_nob, norm_predict
@@ -42,6 +43,8 @@ _IMPUTER_MAP: dict[str, Callable[..., np.ndarray]] = {
     ImputationMethod.NORM_BOOT.value: norm_boot,
     ImputationMethod.NORM_PREDICT.value: norm_predict,
     ImputationMethod.MEAN.value: mean,
+    ImputationMethod.LOGREG.value: logreg,
+    ImputationMethod.LOGREG_BOOT.value: logreg_boot,
 }
 
 # Arguments that MICE supplies to the imputers itself (`log_event` only to

@@ -89,6 +89,8 @@ Written by `write_fixture(name, payload)` in `r/_common.R` and read by
 | `l1_pooling` | `pool()`, `summary(pool(), type = "all", conf.int = TRUE)`, `pool.table()`, `mice:::barnard.rubin()` | `imputation.pooling.barnard_rubin` / `pool_estimates`; `MICE.fit` / `MICE.pool` on R's completed datasets |
 | `l1_midastouch` | `mice.impute.midastouch()` with a `trace()` exit hook capturing `probs`, `midas.kappa`, `omega` | `imputation.midas._donor_probabilities` |
 | `l1_norm` | `mice.impute.norm()`, `.norm.nob()`, `.norm.boot()`, `.norm.predict()`, `.mean()` with every draw captured by re-seeding (`rchisq`, `rnorm`, `sample` as 0-based indices) and the expected order of the draws | `imputation.norm.norm` / `norm_nob` / `norm_boot` / `norm_predict`, `imputation.mean.mean`, driven by a strict `ScriptedGenerator` |
+| `l1_augment` | `mice:::augment(y, ry, x, wy)`: the added rows, their targets and weights, `ry`, `wy`, the level order afterwards | `imputation.logreg.augment` on the codes R sees, `imputation.logreg.target_categories` |
+| `l1_logreg` | `mice.impute.logreg()`, `.logreg.boot()` with every draw captured by re-seeding (`rnorm`, `sample` as 0-based indices, `runif`), rebuilt from `augment()`, `glm.fit()` and `summary.glm()`: coefficients, `cov.unscaled`, iterations, convergence, `beta.star`, probabilities, labels; R's errors where the port goes on | `imputation.logreg._logreg` / `_logreg_boot` (the steps of `logreg` / `logreg_boot`), driven by a strict `ScriptedGenerator` |
 
 Behaviours of R mice 3.19.0 that the fixtures pin down and that are easy to
 get wrong:

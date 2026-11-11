@@ -10,8 +10,10 @@ class ImputationMethod(Enum):
     Enumeration of supported imputation methods for MICE.
 
     The values are R's method names, dots included. The first five are
-    donor methods: they impute observed values. The others are for numeric
-    targets and impute new values (floats).
+    donor methods: they impute observed values. The next five are for
+    numeric targets and impute new values (floats). ``logreg`` and
+    ``logreg.boot`` are for targets with two categories and impute their
+    labels.
 
     Attributes
     ----------
@@ -36,6 +38,10 @@ class ImputationMethod(Enum):
         The predicted value of a linear regression, R's ``norm.predict``.
     MEAN
         The mean of the observed values, R's ``mean``.
+    LOGREG
+        Bayesian logistic regression on augmented data, R's ``logreg``.
+    LOGREG_BOOT
+        Logistic regression on a bootstrap sample, R's ``logreg.boot``.
     """
 
     PMM = "pmm"
@@ -48,6 +54,8 @@ class ImputationMethod(Enum):
     NORM_BOOT = "norm.boot"
     NORM_PREDICT = "norm.predict"
     MEAN = "mean"
+    LOGREG = "logreg"
+    LOGREG_BOOT = "logreg.boot"
 
     @classmethod
     def get_all_methods(cls) -> list[str]:

@@ -14,7 +14,7 @@ import pytest
 
 from .._logged_events import impute_checking_log_warning
 from ._helpers import (
-    DONOR_METHODS,
+    CATEGORICAL_METHODS,
     MAXIT,
     METHODS,
     N_IMP,
@@ -22,10 +22,12 @@ from ._helpers import (
     assert_all_invariants,
     full_predictor_matrix,
     impute,
+    imputes_observed_values,
     method_params,
     numeric_frame,
     pmm_reference_frame,
     regression_frame,
+    typed_frame,
 )
 
 NON_MIDAS = ("pmm", "cart", "rf", "sample")
@@ -34,7 +36,7 @@ NON_MIDAS = ("pmm", "cart", "rf", "sample")
 def _check(df, method, n_imputations=N_IMP, maxit=MAXIT, **kwargs):
     before = df.copy(deep=True)
     mice, out = impute(df, method, n_imputations=n_imputations, maxit=maxit, **kwargs)
-    assert_all_invariants(df, before, mice, out, n_imputations, maxit, donor=method in DONOR_METHODS)
+    assert_all_invariants(df, before, mice, out, n_imputations, maxit, donor=imputes_observed_values(method))
     return mice, out
 
 
@@ -202,7 +204,7 @@ def test_incomplete_duplicated_column(method):
     before = df.copy(deep=True)
     mice, out = impute(df, method)
     assert_all_invariants(
-        df, before, mice, out, N_IMP, MAXIT, donor=method in DONOR_METHODS, allow_unimputed={"x1_copy"}
+        df, before, mice, out, N_IMP, MAXIT, donor=imputes_observed_values(method), allow_unimputed={"x1_copy"}
     )
 
 
@@ -423,7 +425,7 @@ def _boolean_target_frame(n=40, seed=7):
     return df
 
 
-@pytest.mark.parametrize("method", method_params(methods=NON_MIDAS))
+@pytest.mark.parametrize("method", method_params(methods=NON_MIDAS + CATEGORICAL_METHODS))
 def test_boolean_target(method):
     _check(_boolean_target_frame(), method)
 
@@ -547,7 +549,7 @@ def _works_or_names_dtype(df, method, dtype_name, column="zcol"):
         clear = isinstance(exc, (ValueError, TypeError)) and dtype_name in message and column in message
         assert clear, repr(exc)
         return
-    assert_all_invariants(df, before, mice, out, N_IMP, MAXIT, donor=method in DONOR_METHODS)
+    assert_all_invariants(df, before, mice, out, N_IMP, MAXIT, donor=imputes_observed_values(method))
 
 
 def _nullable_column(dtype, n, rng):
@@ -762,7 +764,7 @@ def test_tree_method_without_observed_target_raises_value_error(method, kind):
         get_imputer_func(method)(y, np.zeros(10, dtype=bool), x, rng=rng)
 
 
-@pytest.mark.parametrize("method", ["pmm", "midas", *NUMERIC_MODEL_METHODS])
+@pytest.mark.parametrize("method", ["pmm", "midas", *NUMERIC_MODEL_METHODS, *CATEGORICAL_METHODS])
 @pytest.mark.parametrize("kind", ["numeric", "categorical"])
 def test_pmm_midas_without_observed_target_raise_value_error(method, kind):
     """Like cart and rf: a clear error, not a crash deep inside the method
@@ -776,7 +778,7 @@ def test_pmm_midas_without_observed_target_raise_value_error(method, kind):
         get_imputer_func(method)(y, np.zeros(10, dtype=bool), x, rng=rng)
 
 
-@pytest.mark.parametrize("method", ["pmm", "midas", "cart", "rf", *NUMERIC_MODEL_METHODS])
+@pytest.mark.parametrize("method", ["pmm", "midas", "cart", "rf", *NUMERIC_MODEL_METHODS, *CATEGORICAL_METHODS])
 def test_no_observed_target_and_nothing_to_impute_returns_empty(method):
     from imputation.utils import get_imputer_func
 
@@ -785,7 +787,7 @@ def test_no_observed_target_and_nothing_to_impute_returns_empty(method):
     assert len(out) == 0
 
 
-@pytest.mark.parametrize("method", ["pmm", "midas", *TREE_METHODS, "norm"])
+@pytest.mark.parametrize("method", ["pmm", "midas", *TREE_METHODS, "norm", "logreg"])
 def test_tree_method_without_usable_observed_row_through_impute(method):
     """``x`` has method "" and is missing wherever ``y`` is observed, so no row
     with an observed ``y`` has a complete design."""
@@ -857,7 +859,7 @@ def test_meanobs_initial_imputation_of_non_numeric_columns():
     assert data.dtypes.to_dict() == df.dtypes.to_dict()
 
 
-@pytest.mark.parametrize("method", NON_MIDAS)
+@pytest.mark.parametrize("method", NON_MIDAS + CATEGORICAL_METHODS)
 def test_meanobs_initial_through_impute(method):
     df = _meanobs_frame()
     _check(df, method, initial="meanobs")
@@ -997,3 +999,95 @@ def test_norm_boot_ridge_and_norm_ridge_reach_their_own_method(monkeypatch):
     )
     calls = N_IMP * MAXIT
     assert sorted(seen) == [("norm", "ridge", 0.25)] * calls + [("norm.boot", "qr", 0.5)] * calls
+
+
+# ---------------------------------------------------------------------------
+# The categorical methods: logreg and logreg.boot
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("method", CATEGORICAL_METHODS)
+def test_logreg_on_three_categories_raises_naming_polyreg(method):
+    """R stops with "invalid 'labels'"; the port refuses clearly."""
+    df = typed_frame()
+    with pytest.raises(ValueError, match=rf"{re.escape(method)} imputes a target with two categories, .*polyreg"):
+        impute(df, {"three": method}, check_log_warning=False)
+
+
+@pytest.mark.parametrize("method", CATEGORICAL_METHODS)
+def test_one_observed_category_is_imputed_without_random_numbers(method):
+    """R imputes invented labels (logreg) or fits anyway (logreg.boot); the
+    port imputes the one category and draws nothing. (Through impute such a
+    column is constant and not imputed, as in R.)"""
+    from imputation.utils import get_imputer_func
+
+    from ..test_parity._helpers import ScriptedGenerator
+
+    rng = np.random.default_rng(3)
+    x = rng.normal(size=(12, 2))
+    y = pd.Categorical(["no"] * 9 + [None] * 3, categories=["no", "yes"])
+    scripted = ScriptedGenerator(strict=True)
+    out = get_imputer_func(method)(y, y.notna(), x, rng=scripted)
+    assert out.tolist() == ["no"] * 3
+    assert scripted.calls == []
+
+
+def _two_category_column(kind, n, rng):
+    """A two-category column of the given dtype, related to nothing."""
+    flags = rng.random(n) > 0.4
+    if kind == "object_bool":
+        return pd.Series(flags, dtype=object)
+    if kind == "boolean":
+        return pd.Series(flags, dtype="boolean")
+    labels = np.where(flags, "yes", "no")
+    if kind == "string":
+        return pd.Series(labels, dtype="string")
+    return pd.Series(pd.Categorical(labels, categories=["yes", "no"]))
+
+
+@pytest.mark.parametrize("kind", ["object_bool", "boolean", "string", "category"])
+@pytest.mark.parametrize("method", CATEGORICAL_METHODS)
+def test_two_category_column_types_keep_their_dtype(method, kind):
+    rng = np.random.default_rng(17)
+    df = regression_frame()
+    df["zcol"] = _two_category_column(kind, len(df), rng)
+    df.loc[[2, 6, 11, 30], "zcol"] = None
+    mice, _ = _check(df, method)
+    assert mice.method["zcol"] == method
+
+
+@pytest.mark.parametrize("method", CATEGORICAL_METHODS)
+def test_numeric_zero_one_column(method):
+    """R's logreg takes a numeric 0/1 target and imputes 0 and 1."""
+    df = regression_frame()
+    df["z01"] = (df["x1"] + np.random.default_rng(2).normal(size=len(df)) > 0).astype(float)
+    df.loc[[3, 8, 14, 27, 33], "z01"] = np.nan
+    mice, out = _check(df, {"z01": method})
+    assert mice.method["z01"] == method
+    for completed in out:
+        assert completed["z01"].dtype == np.float64
+        assert set(completed.loc[[3, 8, 14, 27, 33], "z01"]) <= {0.0, 1.0}
+
+
+@pytest.mark.parametrize("method", CATEGORICAL_METHODS)
+def test_unused_declared_category_is_never_imputed(method):
+    """A two-level Categorical with a third declared category that does not
+    occur: two categories to impute, the declared categories kept."""
+    rng = np.random.default_rng(23)
+    df = regression_frame()
+    labels = np.where(df["x1"] + rng.normal(size=len(df)) > 0, "yes", "no")
+    df["zcol"] = pd.Categorical(labels, categories=["maybe", "no", "yes"])
+    mis = [1, 4, 9, 16, 25, 36]
+    df.loc[mis, "zcol"] = np.nan
+    mice, out = _check(df, method, n_imputations=4)
+    assert mice.method["zcol"] == method
+    for completed in out:
+        assert list(completed["zcol"].cat.categories) == ["maybe", "no", "yes"]
+        assert set(completed.loc[mis, "zcol"]) <= {"no", "yes"}
+
+
+@pytest.mark.parametrize("key, method", [("logreg_donors", "logreg"), ("logreg_boot_ridge", "logreg.boot")])
+def test_logreg_keywords_raise_takes_no_parameters(key, method):
+    df = typed_frame()
+    with pytest.raises(TypeError, match=rf"'{key}'\. Method '{re.escape(method)}' takes no parameters\."):
+        impute(df, method, **{key: 1})

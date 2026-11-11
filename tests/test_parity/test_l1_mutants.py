@@ -18,14 +18,37 @@ reached. The checks are those of test_l1_norm, run on one of its cases:
   Where R's indices all lie inside that range, the imputations still match
   and the logged bounds show the defect; where one is ``n_obs - 1``, the
   scripted generator refuses it.
+
+The mutants of ``logreg``, ``logreg.boot`` and ``augment`` run the checks of
+test_l1_augment and test_l1_logreg:
+
+* (f) no augmentation. The added rows are missing, and the fit of the
+  separated observed rows diverges.
+* (g) the added rows with weight 1 instead of ``(p + 1) / (2 p k)``.
+* (h) the added rows not clamped to the range of their predictor. Only the
+  rare dummy, where the clamp binds, shows it.
+* (i) augmentation although exactly one value is missing (R skips it).
+* (j) the covariance of the coefficient draw multiplied by the quasibinomial
+  dispersion (R's ``cov.scaled`` instead of ``cov.unscaled``).
+* (k) the covariance recomputed at the final coefficients instead of taken
+  from the last least-squares step.
+* (l) ``logreg`` without the draw of the coefficients: the normals are left
+  over.
+* (m) ``logreg.boot`` without the bootstrap: the indices are left over.
+* (n) the reference category taken in the declared order of an unordered
+  factor instead of the sorted order: on a factor declared as (yes, no) the
+  fit models the other category.
 """
 
 import numpy as np
+import pandas as pd
 import pytest
 
+import imputation.logreg
 import imputation.norm
 import imputation.sampler
 
+from . import test_l1_augment, test_l1_logreg
 from .test_l1_norm import CASES, check_draws, check_imputations, replay
 
 pytestmark = pytest.mark.parity
@@ -136,3 +159,181 @@ def test_norm_boot_with_short_index_range_is_caught_by_the_generator(monkeypatch
     with pytest.raises(AssertionError, match=r"outside the requested range \[0, 18\)"):
         replay(case)
     assert calls, "mutant not applied: norm_boot does not call imputation.norm._bootstrap_sample"
+
+
+# ---------------------------------------------------------------------------
+# logreg, logreg.boot and augment
+# ---------------------------------------------------------------------------
+
+AUGMENT = test_l1_augment.CASES
+LOGREG = test_l1_logreg.CASES
+
+
+def _augment_mismatch(name):
+    """Replay augment case `name`; return the AssertionError of `check_augmented`."""
+    case = AUGMENT[name]
+    y, aug = test_l1_augment.replay(case)
+    with pytest.raises(AssertionError) as info:
+        test_l1_augment.check_augmented(case, y, aug)
+    return str(info.value)
+
+
+def test_logreg_without_augmentation_is_caught(monkeypatch):
+    calls = []
+
+    def unchanged(y, id_obs, x, id_mis, max_categories=50):
+        y, x = np.asarray(y), np.asarray(x, dtype=float).reshape(len(y), -1)
+        return imputation.logreg.Augmented(y, np.asarray(id_obs), x, np.asarray(id_mis), np.ones(len(y)))
+
+    monkeypatch.setattr(imputation.logreg, "augment", _counted(calls, unchanged))
+    assert "shapes (12,), (20,) mismatch" in _augment_mismatch("levels2")
+    case = LOGREG["logreg_separated"]
+    steps, rng = test_l1_logreg.replay(case)
+    assert calls, "mutant not applied: logreg does not call imputation.logreg.augment"
+    assert np.abs(steps.fit.coef).max() > 10  # the separated fit diverges
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_logreg.check_fit(case, steps)
+    test_l1_logreg.check_draws(case, rng)  # the draws themselves are right
+
+
+def test_augmentation_with_weight_one_is_caught(monkeypatch):
+    calls = []
+    original = imputation.logreg.augment
+
+    def weight_one(*args, **kwargs):
+        aug = original(*args, **kwargs)
+        return aug._replace(weights=np.ones_like(aug.weights))
+
+    monkeypatch.setattr(imputation.logreg, "augment", _counted(calls, weight_one))
+    assert "Not equal to tolerance" in _augment_mismatch("levels2")
+    case = LOGREG["logreg_seed1"]
+    steps, _ = test_l1_logreg.replay(case)
+    assert calls, "mutant not applied: logreg does not call imputation.logreg.augment"
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_logreg.check_fit(case, steps)
+
+
+def test_augmentation_without_clamping_is_caught(monkeypatch):
+    """Visible where the clamp binds (the rare dummy), and only there."""
+    calls = []
+    monkeypatch.setattr(imputation.logreg, "_clamp", _counted(calls, lambda values, low, high: values))
+    test_l1_augment.check_case(AUGMENT["levels2"])  # x1 and x2 stay inside their ranges
+    y, aug = test_l1_augment.replay(AUGMENT["rare_dummy"])
+    assert calls, "mutant not applied: augment does not call imputation.logreg._clamp"
+    assert aug.x[:, 1].min() < 0  # below the dummy's minimum
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_augment.check_augmented(AUGMENT["rare_dummy"], y, aug)
+
+
+def test_augmentation_with_one_missing_value_is_caught(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        imputation.logreg, "_augmentation_skipped", _counted(calls, lambda n_predictors, n_not_observed: False)
+    )
+    assert "shapes (20,), (12,) mismatch" in _augment_mismatch("one_missing")
+    case = LOGREG["logreg_one_missing"]
+    steps, _ = test_l1_logreg.replay(case)
+    assert calls, "mutant not applied: augment does not call imputation.logreg._augmentation_skipped"
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_logreg.check_fit(case, steps)
+
+
+def _logit_fit_mutant(monkeypatch, calls, change):
+    """Make logreg's `logit_fit` return ``change(fit, x, y, weights)``."""
+    original = imputation.logreg.logit_fit
+
+    def mutant(x, y, weights=None, **kwargs):
+        fit = original(x, y, weights=weights, **kwargs)
+        w = np.ones(len(y)) if weights is None else np.asarray(weights)
+        return change(fit, np.asarray(x), np.asarray(y, dtype=float), w)
+
+    monkeypatch.setattr(imputation.logreg, "logit_fit", _counted(calls, mutant))
+
+
+def _fitted_means(fit, x):
+    return 1 / (1 + np.exp(-(x @ np.nan_to_num(fit.coef))))
+
+
+def test_covariance_scaled_by_the_dispersion_is_caught(monkeypatch):
+    calls, dispersions = [], []
+
+    def scaled(fit, x, y, w):
+        mu = _fitted_means(fit, x)
+        dispersion = np.sum(w * (y - mu) ** 2 / (mu * (1 - mu))) / (len(y) - np.sum(~fit.aliased))
+        dispersions.append(dispersion)
+        return fit._replace(cov_unscaled=fit.cov_unscaled * dispersion)
+
+    _logit_fit_mutant(monkeypatch, calls, scaled)
+    case = LOGREG["logreg_seed1"]
+    steps, rng = test_l1_logreg.replay(case)
+    assert calls, "mutant not applied: logreg does not call imputation.logreg.logit_fit"
+    assert abs(dispersions[0] - 1) > 0.05
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_logreg.check_fit(case, steps)
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_logreg.check_prediction(case, steps)
+    test_l1_logreg.check_draws(case, rng)
+
+
+def test_covariance_at_the_final_coefficients_is_caught(monkeypatch):
+    calls = []
+
+    def at_final(fit, x, y, w):
+        kept = x[:, ~fit.aliased]
+        mu = _fitted_means(fit, x)
+        return fit._replace(cov_unscaled=np.linalg.inv(kept.T @ (kept * (w * mu * (1 - mu))[:, None])))
+
+    _logit_fit_mutant(monkeypatch, calls, at_final)
+    case = LOGREG["logreg_seed1"]
+    steps, _ = test_l1_logreg.replay(case)
+    assert calls, "mutant not applied: logreg does not call imputation.logreg.logit_fit"
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_logreg.check_fit(case, steps)
+
+
+def test_logreg_without_coefficient_draw_is_caught(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        imputation.logreg, "_coefficient_draw", _counted(calls, lambda fit, rng: np.nan_to_num(fit.coef))
+    )
+    case = LOGREG["logreg_seed1"]
+    steps, rng = test_l1_logreg.replay(case)
+    assert calls, "mutant not applied: logreg does not call imputation.logreg._coefficient_draw"
+    test_l1_logreg.check_fit(case, steps)  # the fit itself is right
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_logreg.check_prediction(case, steps)
+    with pytest.raises(AssertionError, match=r"scripted values left over: 3 normal"):
+        test_l1_logreg.check_draws(case, rng)
+
+
+def test_logreg_boot_without_bootstrap_is_caught(monkeypatch):
+    calls = []
+    monkeypatch.setattr(imputation.logreg, "_bootstrap_sample", _counted(calls, lambda n, rng: np.arange(n)))
+    case = LOGREG["logreg_boot_seed1"]
+    steps, rng = test_l1_logreg.replay(case)
+    assert calls, "mutant not applied: logreg_boot does not call imputation.logreg._bootstrap_sample"
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_logreg.check_fit(case, steps)
+    with pytest.raises(AssertionError, match=r"scripted values left over: 23 integer"):
+        test_l1_logreg.check_draws(case, rng)
+
+
+def test_reference_category_in_declared_order_is_caught(monkeypatch):
+    """With the factor declared as (yes, no), "yes" becomes the first category:
+    the fit models "no", its coefficients change sign and the labels swap."""
+    calls = []
+    original = imputation.logreg.target_categories
+
+    def declared_order(y, keep_unused=False):
+        if isinstance(getattr(y, "dtype", None), pd.CategoricalDtype) and not y.dtype.ordered:
+            y = pd.Categorical(y, ordered=True)  # declared order, as for an ordered factor
+        return original(y, keep_unused)
+
+    monkeypatch.setattr(imputation.logreg, "target_categories", _counted(calls, declared_order))
+    test_l1_logreg.check_case(LOGREG["logreg_seed1"])  # declared (no, yes): sorted already
+    case = LOGREG["logreg_declared_yes_no"]
+    steps, _ = test_l1_logreg.replay(case)
+    assert calls, "mutant not applied: logreg does not call imputation.logreg.target_categories"
+    np.testing.assert_allclose(steps.fit.coef, -np.asarray(case["coef"]), rtol=1e-8)
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_logreg.check_fit(case, steps)
