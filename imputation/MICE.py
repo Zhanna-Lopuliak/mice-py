@@ -59,7 +59,7 @@ from .utils import get_imputer_func, get_imputer_params
 # External helpers
 from .mice_result import MICEresult
 from .pooling import pool_descriptive_statistics, pool_estimates, _residual_df
-from .design import obtain_design, find_collinear, quickpred, _as_numeric, _remove_lindep
+from .design import obtain_design, find_collinear, quickpred, _as_numeric, _column_kind, _remove_lindep
 
 # Deprecated keyword arguments of `MICE.impute`, and the matching arguments
 # of `imputation.quickpred`
@@ -1049,6 +1049,11 @@ class MICE:
     def _initial_imputation(self, data, rng=None):
         """
         Initialize missing values based on the initial method.
+
+        "sample" draws from the observed values of each column, as R does.
+        "meanobs" (not in R) fills a numeric column with the observed value
+        closest to its mean and any other column with its most frequent
+        observed value.
         """
         if rng is None:
             rng = np.random.default_rng()  # fresh random generator
@@ -1066,10 +1071,15 @@ class MICE:
         elif self.initial == InitialMethod.MEANOBS.value:
             for col in data.columns:
                 if self.method[col] != "" and data[col].isna().any():
-                    col_mean = data[col].mean()
                     observed_values = data.loc[self.id_obs[col], col]
-                    closest_idx = (observed_values - col_mean).abs().idxmin()
-                    closest_value = data.loc[closest_idx, col]
+                    if _column_kind(observed_values) == "numeric":
+                        # the observed value closest to the mean (the first if tied)
+                        values = observed_values.to_numpy(dtype=float)
+                        closest_value = observed_values.iloc[int(np.argmin(np.abs(values - values.mean())))]
+                    else:
+                        # categorical, object, string or boolean: the most
+                        # frequent observed value (ties: the first level)
+                        closest_value = observed_values.mode().iloc[0]
                     data.loc[self.id_mis[col], col] = closest_value
 
     def _set_visit_sequence(self, visit_sequence, rng=None):

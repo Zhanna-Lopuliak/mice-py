@@ -61,7 +61,8 @@ class InitialMethod(Enum):
     
     Attributes:
         SAMPLE: Random sampling from observed values
-        MEANOBS: Use the observed value closest to the mean of the column
+        MEANOBS: Use the observed value closest to the mean of a numeric
+            column, and the most frequent observed value of any other column
     """
     SAMPLE = "sample"
     MEANOBS = "meanobs"

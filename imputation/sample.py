@@ -75,8 +75,9 @@ def sample(
             imputed_values = rng.normal(0, 1, n_mis)
     elif len(y_obs) == 1:
         # If only one observed value, duplicate it to allow sampling
+        # (positional: y may be a Series with any index)
         n_mis = np.sum(id_mis)
-        imputed_values = np.full(n_mis, y_obs[0])
+        imputed_values = np.full(n_mis, np.asarray(y_obs)[0])
     else:
         # Normal case: sample from observed values using rng
         n_mis = np.sum(id_mis)

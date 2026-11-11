@@ -763,3 +763,56 @@ def test_tree_method_with_one_observed_target_value_imputes_it(method, kind):
     ry[3] = True
     out = get_imputer_func(method)(y, ry, x, rng=rng)
     assert list(out) == [y[3]] * 9
+
+
+# ---------------------------------------------------------------------------
+# B10: initial="meanobs" with non-numeric columns
+# ---------------------------------------------------------------------------
+
+def _meanobs_frame():
+    """Incomplete numeric, object, category, string and boolean columns."""
+    df = pd.DataFrame(
+        {
+            "num": [1.0, 2.0, 10.0, np.nan, 4.0, np.nan, 3.5, 2.5],
+            "obj": pd.Series(["b", "a", "b", None, "c", "b", None, "a"], dtype=object),
+            "cat": pd.Categorical(["y", None, "x", "x", "y", "z", None, "z"], categories=["z", "y", "x"]),
+            "str": pd.Series(["p", "q", None, "q", "p", "q", None, "p"], dtype="string"),
+            "bool": pd.Series([True, False, None, False, False, True, None, False], dtype=object),
+            "d": np.linspace(0.0, 1.0, 8),
+        }
+    )
+    return df
+
+
+def test_meanobs_initial_imputation_of_non_numeric_columns():
+    """Numeric: the observed value closest to the mean (mean 3.83, so 4.0).
+    Other columns: the most frequent observed value; a tie (cat: y, x, z
+    twice each) goes to the first level in category order."""
+    from imputation import MICE
+
+    df = _meanobs_frame()
+    mice = MICE(df)
+    mice.impute(n_imputations=1, maxit=1, initial="meanobs", method="sample", seed=1)
+    data = df.copy()
+    mice._initial_imputation(data, np.random.default_rng(0))
+    assert data.loc[[3, 5], "num"].tolist() == [4.0, 4.0]
+    assert data.loc[[3, 6], "obj"].tolist() == ["b", "b"]
+    assert data.loc[[1, 6], "cat"].tolist() == ["z", "z"]
+    assert data.loc[[2, 6], "str"].tolist() == ["p", "p"]  # p and q three times each: sorted first
+    assert data.loc[[2, 6], "bool"].tolist() == [False, False]
+    assert data.dtypes.to_dict() == df.dtypes.to_dict()
+
+
+@pytest.mark.parametrize("method", NON_MIDAS)
+def test_meanobs_initial_through_impute(method):
+    df = _meanobs_frame()
+    _check(df, method, initial="meanobs")
+
+
+def test_sample_with_one_observed_value_and_a_series_target():
+    """The single observed value is taken by position, whatever the index."""
+    from imputation.sample import sample
+
+    y = pd.Series([np.nan, 5.0, np.nan], index=[10, 11, 12])
+    out = sample(y, np.array([False, True, False]), None, rng=np.random.default_rng(0))
+    assert list(out) == [5.0, 5.0]
