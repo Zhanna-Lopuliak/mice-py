@@ -2,11 +2,10 @@
 
 Each mutant is written so that it is valid once the library is fixed:
 
-* A1: ``np.linalg.cholesky`` patched to return the transpose. After the fix
-  (``beta = coef + L @ z * sigma``) this reproduces the old draw, and T1, T2
-  and T3 on F1 must each flag it. Today the logic is inverted: the patch
-  undoes the bug, so the parity statistics pass and the mutant tests xfail.
-* A9: the planned ``imputation.PMM.matchindex`` replaced by a matcher with
+* A1: ``np.linalg.cholesky`` patched to return the transpose. With the
+  draw ``beta = coef + L @ z * sigma`` this reproduces the old draw, and T1,
+  T2 and T3 on F1 must each flag it.
+* A9: ``imputation.PMM.matchindex`` replaced by a matcher with
   deterministic tie-breaking (lowest index first, as the KD-tree did); T1 on
   F2 must flag it.
 * A6: ``cart(..., bootstrap=True)``, the old bootstrapped tree; the donor-set
@@ -39,11 +38,6 @@ def transposed_cholesky_comparison():
     return compare(r_sum, py_sum, inp), len(calls)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="A1: the library still multiplies by the transposed factor, so the "
-    "patch undoes the bug instead of re-introducing it",
-)
 @pytest.mark.parametrize("statistic", ["T1", "T2", "T3"])
 def test_transposed_cholesky_is_flagged(statistic):
     comp, n_calls = transposed_cholesky_comparison()
@@ -63,11 +57,6 @@ def deterministic_matchindex(d, t, k=5, rng=None):
     return nearest[np.arange(len(t)), rng.integers(k, size=len(t))]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AttributeError,
-    reason="A9: imputation.PMM.matchindex does not exist yet (KD-tree matcherid)",
-)
 def test_deterministic_ties_are_flagged_by_t1(monkeypatch):
     import imputation.PMM as pmm_module
 

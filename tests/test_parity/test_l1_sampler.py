@@ -23,20 +23,7 @@ def _ids(cases):
     return [case["name"] for case in cases]
 
 
-# The svd branch multiplies by Vh (= V') where R multiplies by V. With two
-# columns NumPy happens to return a symmetric Vh, so "single_svd" passes.
-NEW1 = "A11: estimice(ls_meth='svd') uses Vh where R uses V"
-ESTIMICE_KNOWN = {"well_svd": NEW1, "near_collinear_svd": NEW1}
-
-
-def _estimice_params():
-    for case in ESTIMICE["cases"]:
-        reason = ESTIMICE_KNOWN.get(case["name"])
-        marks = [pytest.mark.xfail(strict=True, reason=reason)] if reason else []
-        yield pytest.param(case, id=case["name"], marks=marks)
-
-
-@pytest.mark.parametrize("case", list(_estimice_params()))
+@pytest.mark.parametrize("case", ESTIMICE["cases"], ids=_ids(ESTIMICE["cases"]))
 def test_estimice_matches_r(case):
     x = as_array(case["x"])
     if x.ndim == 1:
@@ -85,7 +72,6 @@ def test_norm_draw_sigma_matches_r(case):
     np.testing.assert_allclose(np.ravel(parm["sigma"]), [case["sigma"]], rtol=RTOL)
 
 
-@pytest.mark.xfail(strict=True, reason="A1: beta uses the transposed Cholesky factor")
 @pytest.mark.parametrize("case", NORM_DRAW["cases"], ids=DRAW_IDS)
 def test_norm_draw_beta_matches_r(case):
     parm = _draw(case)

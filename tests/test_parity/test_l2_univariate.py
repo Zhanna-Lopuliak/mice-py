@@ -25,15 +25,6 @@ def _xfail(reason, raises=None):
     return pytest.mark.xfail(strict=True, reason=reason, raises=raises)
 
 
-A1 = _xfail("A1: transposed Cholesky factor in norm_draw shrinks/misplaces coefficient draws")
-A9_A1 = _xfail(
-    "A9, A1: KD-tree matching breaks donor ties deterministically "
-    "(and the coefficient draw is wrong)"
-)
-B1 = _xfail(
-    "B1: pmm crashes on a factor target (parity also needs A3, R's quantify)",
-    raises=AttributeError,
-)
 NEW1 = _xfail(
     "B6: midas crashes when several donors are at distance 0 (tied predictors): "
     "minmax caps the column sums, so p no longer sums to 1 for rng.choice; "
@@ -42,9 +33,9 @@ NEW1 = _xfail(
 )
 
 T1_CASES = [
-    pytest.param("pmm", "F1", marks=A1),
-    pytest.param("pmm", "F2", marks=A9_A1),
-    pytest.param("pmm", "F3", marks=B1),
+    pytest.param("pmm", "F1"),
+    pytest.param("pmm", "F2"),
+    pytest.param("pmm", "F3"),
     pytest.param("pmm", "F4"),
     pytest.param("midastouch", "F1"),
     pytest.param("midastouch", "F2", marks=NEW1),
@@ -54,14 +45,14 @@ T1_CASES = [
 ]
 
 T2_CASES = [
-    pytest.param("pmm", "F1", marks=A1),
+    pytest.param("pmm", "F1"),
     pytest.param("pmm", "F4"),
     pytest.param("midastouch", "F1"),
     pytest.param("midastouch", "F4"),
     pytest.param("sample", "F1"),
 ]
 
-T3_CASES = T2_CASES[:1] + [pytest.param("pmm", "F2", marks=A9_A1)] + T2_CASES[1:]
+T3_CASES = T2_CASES[:1] + [pytest.param("pmm", "F2")] + T2_CASES[1:]
 
 
 @pytest.mark.parametrize("method, input_name", T1_CASES)

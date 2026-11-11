@@ -31,10 +31,6 @@ def _labels(values):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="A3: quantify() not implemented; quantify_cca uses predictor-side scores",
-)
 @pytest.mark.parametrize("case", QUANTIFY["cases"], ids=[c["name"] for c in QUANTIFY["cases"]])
 def test_quantify_matches_r_up_to_sign(case):
     from imputation.PMM import quantify
@@ -55,22 +51,7 @@ def test_quantify_matches_r_up_to_sign(case):
 # PMM with one donor and R's random numbers
 # ---------------------------------------------------------------------------
 
-PMM_KNOWN = {
-    "numeric_matchtype1": "A1: beta uses the transposed Cholesky factor",
-    "numeric_matchtype2": "A1: beta uses the transposed Cholesky factor",
-    "numeric_matchtype1_seed2": "A1: beta uses the transposed Cholesky factor",
-    "factor_matchtype0": "B1: pmm crashes on a categorical target (parity also needs A3)",
-}
-
-
-def _pmm_params():
-    for case in PMM_ONE["cases"]:
-        reason = PMM_KNOWN.get(case["name"])
-        marks = [pytest.mark.xfail(strict=True, reason=reason)] if reason else []
-        yield pytest.param(case, id=case["name"], marks=marks)
-
-
-@pytest.mark.parametrize("case", list(_pmm_params()))
+@pytest.mark.parametrize("case", PMM_ONE["cases"], ids=[c["name"] for c in PMM_ONE["cases"]])
 def test_pmm_one_donor_matches_r(case):
     is_factor = case["levels"] is not None
     y = _labels(case["y"]) if is_factor else as_array(case["y"])
@@ -110,22 +91,7 @@ def _reached(draw):
     return reached
 
 
-def _match_params(today):
-    for case in MATCH["cases"]:
-        n_donors = len(MATCH["d"])
-        if case["k"] > n_donors:
-            reason = "B3: k larger than the number of donors is not clamped"
-        elif today:
-            reason = None
-        else:
-            reason = (
-                "A9: matchindex() not implemented; KD-tree matcherid breaks ties deterministically"
-            )
-        marks = [pytest.mark.xfail(strict=True, reason=reason)] if reason else []
-        yield pytest.param(case, id=case["name"], marks=marks)
-
-
-@pytest.mark.parametrize("case", list(_match_params(today=False)))
+@pytest.mark.parametrize("case", MATCH["cases"], ids=[c["name"] for c in MATCH["cases"]])
 def test_matchindex_reaches_r_donor_set(case):
     from imputation.PMM import matchindex
 
@@ -133,16 +99,4 @@ def test_matchindex_reaches_r_donor_set(case):
     t = as_array(MATCH["t"])
     rng = np.random.default_rng(20261116)
     reached = _reached(lambda: matchindex(d, t, k=case["k"], rng=rng))
-    assert reached == _expected_reached(case)
-
-
-@pytest.mark.parametrize("case", list(_match_params(today=True)))
-def test_matcherid_today_reaches_r_donor_set(case):
-    """Today's KD-tree matcher, without ties. Remove together with matcherid."""
-    from imputation.PMM import matcherid
-
-    d = as_array(MATCH["d"])
-    t = as_array(MATCH["t"])
-    rng = np.random.default_rng(20261116)
-    reached = _reached(lambda: matcherid(d, t, matcher="NN", k=case["k"], rng=rng))
     assert reached == _expected_reached(case)

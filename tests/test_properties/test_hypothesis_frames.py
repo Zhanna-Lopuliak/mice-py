@@ -75,15 +75,7 @@ def _settings(n):
 @pytest.mark.parametrize(
     "method,n_examples",
     [
-        pytest.param(
-            "pmm",
-            40,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="B4: constant/collinear/rank-deficient predictors crash pmm (B3: donors > observed)",
-            ),
-            id="pmm",
-        ),
+        pytest.param("pmm", 40, id="pmm"),
         pytest.param("sample", 40, id="sample"),
         pytest.param("cart", 15, id="cart"),
         pytest.param("rf", 6, id="rf"),

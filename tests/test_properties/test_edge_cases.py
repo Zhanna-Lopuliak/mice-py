@@ -24,10 +24,7 @@ from ._helpers import (
 
 NON_MIDAS = ("pmm", "cart", "rf", "sample")
 
-B1 = "B1: pmm crashes on a categorical target (AttributeError in quantify_cca)"
 B2 = "B2: categorical predictors are rejected instead of dummy-coded"
-B3 = "B3: pmm crashes when donors > number of observed values"
-B4 = "B4: collinear, constant or rank-deficient predictors crash pmm (estimice)"
 B5 = "B5: midas crashes when R^2 is 1 or undefined (kappa stays None)"
 C4_EMPTY = "C4: validate_dataframe drops all-empty rows"
 C4_PRINT = "C4: validators print to stdout"
@@ -61,7 +58,6 @@ def _categorical_target_frame(n=48, seed=21):
     return df
 
 
-@pytest.mark.xfail(strict=True, reason=B1)
 def test_pmm_categorical_target_direct():
     from imputation.PMM import pmm
 
@@ -73,7 +69,7 @@ def test_pmm_categorical_target_direct():
     assert set(out) <= set(y[ry])
 
 
-@pytest.mark.parametrize("method", method_params({"pmm": B1}, methods=NON_MIDAS))
+@pytest.mark.parametrize("method", NON_MIDAS)
 def test_categorical_target(method):
     _check(_categorical_target_frame(), method)
 
@@ -110,7 +106,6 @@ def test_categorical_predictor(method):
 # B3: more donors than observed values
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason=B3)
 def test_pmm_more_donors_than_observed_direct():
     from imputation.PMM import pmm
 
@@ -122,14 +117,12 @@ def test_pmm_more_donors_than_observed_direct():
     assert np.isin(out, y[ry]).all()
 
 
-@pytest.mark.xfail(strict=True, reason=B3)
 def test_pmm_more_donors_than_observed_through_impute():
     df = regression_frame(n=30)
     df.loc[10:, "y"] = np.nan  # 9 observed values
     _check(df, "pmm", pmm_donors=50)
 
 
-@pytest.mark.xfail(strict=True, reason=B3 + " (planned matchindex clamps k)")
 @pytest.mark.parametrize("k", [0, 1, 3, 10])
 def test_matchindex_clamps_k(k):
     from imputation.PMM import matchindex
@@ -144,7 +137,6 @@ def test_matchindex_clamps_k(k):
         np.testing.assert_array_equal(idx, [0, 2, 2])
 
 
-@pytest.mark.xfail(strict=True, reason="A9: donor ties resolved deterministically (planned matchindex)")
 def test_matchindex_breaks_ties_at_random():
     from imputation.PMM import matchindex
 
@@ -168,20 +160,19 @@ REDUNDANT = {
 
 
 @pytest.mark.parametrize("kind", list(REDUNDANT))
-@pytest.mark.parametrize("method", method_params({"pmm": B4}))
+@pytest.mark.parametrize("method", METHODS)
 def test_redundant_predictor(method, kind):
     """A duplicated, exactly collinear or constant complete predictor.
 
-    Whether today's pmm crashes on these depends on rounding (on other data a
-    constant of 3.0 or an exactly collinear column can slip through with
-    meaningless coefficients); on this data all four crash.
+    Before the fix of B4, whether pmm crashed on these depended on rounding
+    (on other data a constant of 3.0 or an exactly collinear column could slip
+    through with meaningless coefficients); on this data all four crashed.
     """
     df, _ = pmm_reference_frame()
     df["extra"] = REDUNDANT[kind](df)
     _check(df, method)
 
 
-@pytest.mark.xfail(strict=True, reason=B4)
 @pytest.mark.parametrize("kind", list(REDUNDANT))
 def test_redundant_predictor_leaves_pmm_fit_unchanged(kind):
     """A redundant column does not change the column space, so with one donor
@@ -194,7 +185,6 @@ def test_redundant_predictor_leaves_pmm_fit_unchanged(kind):
     np.testing.assert_array_equal(out[0].loc[mis, "y"].to_numpy(), base[0].loc[mis, "y"].to_numpy())
 
 
-@pytest.mark.xfail(strict=True, reason=B4)
 def test_pmm_direct_with_duplicated_columns():
     from imputation.PMM import pmm
 
@@ -218,7 +208,7 @@ def test_incomplete_duplicated_column(method):
     assert_all_invariants(df, before, mice, out, N_IMP, MAXIT, allow_unimputed={"x1_copy"})
 
 
-@pytest.mark.parametrize("method", method_params({"pmm": B4, "midas": NEW1}))
+@pytest.mark.parametrize("method", method_params({"midas": NEW1}))
 def test_more_predictors_than_observed_rows(method):
     """Six complete predictors, five observed ``y`` values."""
     rng = np.random.default_rng(8)
@@ -283,7 +273,7 @@ def test_column_with_one_missing_value(method):
 
 @pytest.mark.parametrize(
     "method",
-    method_params({"pmm": "B4: rank-deficient fit on one row (B3: donors > observed)", "midas": B5}),
+    method_params({"midas": B5}),
 )
 def test_column_with_one_observed_value(method):
     """A column with a single observed value is constant: R leaves it unimputed,
@@ -297,7 +287,6 @@ def test_column_with_one_observed_value(method):
     "method",
     method_params(
         {
-            "pmm": "B4: rank-deficient fit on two rows (B3: donors > observed)",
             "midas": "B5: zero-diagonal check / R^2 undefined (B6 for other draws)",
         }
     ),
@@ -385,7 +374,7 @@ def _boolean_target_frame(n=40, seed=7):
     return df
 
 
-@pytest.mark.parametrize("method", method_params({"pmm": B1, "cart": NEW3, "rf": NEW3}, methods=NON_MIDAS))
+@pytest.mark.parametrize("method", method_params({"cart": NEW3, "rf": NEW3}, methods=NON_MIDAS))
 def test_boolean_target(method):
     _check(_boolean_target_frame(), method)
 
@@ -422,7 +411,7 @@ def _category_target_frame():
     return df
 
 
-@pytest.mark.parametrize("method", method_params({"pmm": B1}, methods=NON_MIDAS))
+@pytest.mark.parametrize("method", NON_MIDAS)
 def test_category_dtype_target(method):
     _check(_category_target_frame(), method)
 
@@ -475,7 +464,7 @@ def test_nullable_numeric_predictor(method, dtype):
     _works_or_names_dtype(df, method, dtype)
 
 
-@pytest.mark.parametrize("method", method_params({"pmm": B1}, methods=NON_MIDAS))
+@pytest.mark.parametrize("method", NON_MIDAS)
 def test_string_dtype_target(method):
     rng = np.random.default_rng(13)
     df = regression_frame().drop(columns="y")
