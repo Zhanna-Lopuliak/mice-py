@@ -1,327 +1,73 @@
 Convergence Diagnostics
 =======================
 
-After running MICE, it's crucial to check whether the algorithm has converged. This 
-guide explains what convergence means and how to assess it.
+MICE is an iterative algorithm: each chain starts from random draws and
+updates the imputations ``maxit`` times. The chains have converged when the
+imputations no longer drift from one iteration to the next and the chains
+mix with each other. The examples use ``df`` from the
+:ref:`example data <example-data>`.
 
-What is Convergence?
---------------------
-
-**Convergence** means the MICE algorithm has stabilized—the imputed values are no 
-longer systematically changing from one iteration to the next.
-
-Why It Matters
-~~~~~~~~~~~~~~
-
-If MICE hasn't converged:
-   - Imputed values may be unreliable
-   - Statistical inferences may be biased
-   - More iterations are needed
-
-How MICE Converges
-~~~~~~~~~~~~~~~~~~
-
-During each iteration, MICE updates the imputed values for each variable. Initially, 
-these updates cause substantial changes, but as the algorithm proceeds, changes should 
-become smaller and stabilize.
-
-Chain Statistics
+Chain statistics
 ----------------
 
-MICE tracks two key statistics across iterations for each variable:
-
-**Chain Mean**
-   The mean of the imputed values at each iteration
-
-**Chain Variance**
-   The variance of the imputed values at each iteration
-
-These "chains" should:
-   1. Start from initial values
-   2. Potentially drift in early iterations
-   3. Stabilize after some iterations (convergence!)
-
-Visualizing Convergence
------------------------
-
-The primary tool for checking convergence is plotting the chain statistics:
+After ``impute``, ``chain_mean`` and ``chain_var`` hold, for each imputed
+numeric column, the mean and the variance of its imputed values in every
+iteration and chain, as arrays of shape ``(maxit, n_imputations)``. They are
+R's ``chainMean`` and ``chainVar``. Categorical columns have no chain
+statistics.
 
 .. code-block:: python
 
-   from plotting.diagnostics import plot_chain_stats
-   
-   # After running MICE
+   from imputation import MICE
+
    mice = MICE(df)
-   mice.impute(n_imputations=5, maxit=20)
-   
-   # Plot convergence
-   plot_chain_stats(
-       chain_mean=mice.chain_mean,
-       chain_var=mice.chain_var,
-       save_path='convergence.png'
-   )
+   mice.impute(n_imputations=5, maxit=20, seed=1)
 
-Interpreting the Plots
-~~~~~~~~~~~~~~~~~~~~~~~
+   print(mice.chain_mean["chl"].shape)      # (20, 5)
+   print(mice.chain_mean["chl"][-3:].round(1))
 
-**What to look for**:
-
-✓ **Stable horizontal lines**: Means and variances have stabilized
-✓ **No systematic trends**: Values aren't consistently increasing or decreasing
-✓ **Mixing of chains**: If multiple imputations are shown, they should overlap
-
-✗ **Trending lines**: Values still changing systematically
-✗ **Unstable oscillations**: Large swings even in later iterations
-✗ **Separated chains**: Different imputations have very different patterns
-
-Numerical Assessment
---------------------
-
-While visual inspection is primary, you can also check numerically:
-
-.. code-block:: python
-
-   import numpy as np
-   
-   # Get chain means for a specific variable
-   var_name = 'income'
-   chain = mice.chain_mean[var_name]
-   
-   # Check if last few iterations are stable
-   last_5 = chain[-5:]
-   variation = np.std(last_5) / np.mean(last_5)  # Coefficient of variation
-   
-   if variation < 0.01:  # Less than 1% variation
-       print(f"{var_name}: Converged")
-   else:
-       print(f"{var_name}: May need more iterations")
-
-What to Do If Not Converged
-----------------------------
-
-Increase Iterations
-~~~~~~~~~~~~~~~~~~~
-
-The simplest solution:
-
-.. code-block:: python
-
-   # Try more iterations
-   mice.impute(n_imputations=5, maxit=50)  # Increased from 10 to 50
-   
-   # Check again
-   plot_chain_stats(mice.chain_mean, mice.chain_var)
-
-Most convergence issues are resolved by running more iterations.
-
-Adjust Initial Values
-~~~~~~~~~~~~~~~~~~~~~
-
-Try different initial imputation:
-
-.. code-block:: python
-
-   # Use mean instead of sample for initialization
-   mice.impute(n_imputations=5, maxit=20, initial='mean')
-
-Simplify Predictor Matrix
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Too many predictors or multicollinearity can slow convergence:
-
-.. code-block:: python
-
-   from imputation.utils import quickpred
-   
-   # Use automatic selection with higher threshold
-   predictor_matrix = quickpred(df, mincor=0.3)
-   mice.impute(predictor_matrix=predictor_matrix, maxit=20)
-
-Change Method
-~~~~~~~~~~~~~
-
-Some methods converge faster than others:
-
-.. code-block:: python
-
-   # Try a different method
-   mice.impute(method='cart', maxit=20)  # Instead of PMM
-
-How Many Iterations?
---------------------
-
-**Default**: 10 iterations
-   Sufficient for many datasets
-
-**Recommendation**: 15-20 iterations
-   Safer choice, check convergence diagnostics
-
-**Complex data**: 30-50+ iterations
-   - High missingness (>30%)
-   - Many variables
-   - Complex relationships
-
-**Rule of thumb**: Run until chains are flat for at least 5 iterations
-
-Convergence by Variable
-------------------------
-
-Different variables may converge at different rates:
-
-.. code-block:: python
-
-   # Check each variable separately
-   for var in mice.chain_mean.keys():
-       chain = mice.chain_mean[var]
-       plt.figure()
-       plt.plot(chain)
-       plt.title(f'Convergence: {var}')
-       plt.xlabel('Iteration')
-       plt.ylabel('Mean')
-       plt.savefig(f'convergence_{var}.png')
-       plt.close()
-
-Variables with more missingness or weaker predictive relationships typically need 
-more iterations.
-
-Other Diagnostic Checks
------------------------
-
-Compare Observed vs Imputed
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Even if chains converge, check that imputed values are reasonable:
-
-.. code-block:: python
-
-   from plotting.diagnostics import stripplot, densityplot
-   
-   missing_pattern = df.notna().astype(int)
-   
-   # Stripplot: visual check
-   stripplot(mice.imputed_datasets, missing_pattern)
-   
-   # Density plot: distributional check
-   densityplot(mice.imputed_datasets, missing_pattern)
-
-Look for:
-   - Imputed values (red) within range of observed values (blue)
-   - Similar distributions between observed and imputed
-   - No impossible values
-
-Check Variability Between Imputations
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Multiple imputations should differ from each other:
-
-.. code-block:: python
-
-   # For a specific variable
-   var = 'income'
-   imputed_values = [dataset[var] for dataset in mice.imputed_datasets]
-   
-   # Check standard deviation across imputations
-   sd_across = np.std(imputed_values, axis=0)
-   
-   print(f"Mean SD across imputations: {sd_across.mean()}")
-
-If imputations are nearly identical, you may need more iterations or a less 
-deterministic method.
-
-Common Convergence Issues
---------------------------
-
-Slow Convergence
-~~~~~~~~~~~~~~~~
-
-**Symptoms**: Chains still changing after many iterations
-
-**Causes**:
-   - High dimensionality
-   - Weak predictor relationships
-   - High missingness
-   - Multicollinearity
-
-**Solutions**:
-   - Use quickpred to select predictors
-   - Increase ridge parameter in PMM
-   - Try different method (CART/RF)
-   - More iterations
-
-Non-Convergence
-~~~~~~~~~~~~~~~
-
-**Symptoms**: Chains never stabilize, even after 50+ iterations
-
-**Causes**:
-   - Perfect multicollinearity
-   - Circular dependencies
-   - Insufficient data
-   - Model misspecification
-
-**Solutions**:
-   - Check for perfectly correlated variables
-   - Remove redundant predictors
-   - Simplify predictor matrix
-   - Consider different imputation strategy
-
-Oscillating Chains
-~~~~~~~~~~~~~~~~~~
-
-**Symptoms**: Chains oscillate rather than stabilize
-
-**Causes**:
-   - Conflicting information from different predictors
-   - Overfitting with complex methods
-
-**Solutions**:
-   - Use simpler method (PMM instead of RF)
-   - Regularize more strongly
-   - Reduce predictor complexity
-
-Separated Chains
-~~~~~~~~~~~~~~~~
-
-**Symptoms**: Different imputation chains don't mix
-
-**Causes**:
-   - Insufficient iterations
-   - Bimodal or complex distributions
-   - Categorical variables with many levels
-
-**Solutions**:
-   - More iterations
-   - Check if true multimodality exists
-   - Use method appropriate for data type
-
-Best Practices
---------------
-
-1. **Always check convergence**: Never skip this step
-2. **Visual inspection first**: Plots are more informative than statistics
-3. **Be conservative**: If unsure, run more iterations
-4. **Check all variables**: Don't just look at your outcome variable
-5. **Look at early iterations**: They can reveal problems with initialization
-6. **Compare multiple runs**: Rerun with different seeds to check stability
-
-Quick Convergence Checklist
-----------------------------
-
-Before finalizing your imputation:
-
-☐ Chain plots show stable horizontal lines for all variables
-☐ No systematic trends in the last 5-10 iterations
-☐ Imputed values are in reasonable range
-☐ Distributions of observed and imputed values are similar
-☐ Multiple imputations show appropriate variability
-☐ Convergence achieved with acceptable number of iterations (<50)
-
-If all checked, your imputation is ready for analysis!
-
-Next Steps
+Trace plot
 ----------
 
-- Learn about :doc:`pooling_analysis` to analyze your imputed data
-- Review :doc:`best_practices` for overall guidance
-- See examples of complete workflows in :doc:`../examples/index`
+``plot_chain_stats`` draws, per column, the chain means and the standard
+deviations of the imputed values (the square root of ``chain_var``) against
+the iteration, one line per chain, as R's ``plot(imp)``.
 
+.. code-block:: python
+
+   from plotting import plot_chain_stats
+
+   plot_chain_stats(mice.chain_mean, mice.chain_var, columns=["bmi", "chl"], save_path="trace.png")
+
+What to look for:
+
+- **No trend**: after the first few iterations the lines move around a
+  stable level.
+- **Mixing**: the lines of the different chains overlap; no chain stays
+  apart from the others.
+
+A trend or chains that stay apart mean more iterations are needed, or that
+the imputation model has a problem, for example an incomplete variable that
+is (nearly) a function of another one.
+
+How many iterations
+-------------------
+
+The default is ``maxit=5``, as in R. Van Buuren (2018) notes that a small
+number of iterations, often 5 to 20, is usually enough, and that more are
+needed when the incomplete variables are strongly correlated or much is
+missing. Run
+more iterations, for example ``maxit=20`` or ``50``, and check the trace plot
+whenever you are unsure; each ``impute`` call starts the chains anew.
+
+What else can help
+------------------
+
+- Remove variables that duplicate others, or derived variables such as sums
+  and ratios of incomplete variables; they slow convergence.
+- Reduce the predictors of each target, for example with
+  ``imputation.quickpred`` (see :doc:`predictor_matrices`).
+- Check ``mice.logged_events`` for predictors the setup step removed.
+
+The trace plot checks the algorithm, not the imputation model. Compare the
+imputed with the observed values as well; see :doc:`diagnostic_plots`.

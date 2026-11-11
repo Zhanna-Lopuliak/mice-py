@@ -8,3 +8,23 @@ __pycache__/
 .uv/
 build/
 docs/build/
+.hypothesis/
+simulations/work/
+
+# Build output
+dist/
+
+# Logs written by imputation.configure_logging(file_logging=True)
+logs/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Tool caches
+.ruff_cache/
+.mypy_cache/
+
+# Coverage output
+.coverage.*
+htmlcov/
+coverage.xml

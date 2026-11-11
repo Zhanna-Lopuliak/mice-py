@@ -5,68 +5,43 @@ mice-py: Multiple Imputation by Chained Equations in Python
    :target: https://www.python.org/downloads/
    :alt: Python 3.9+
 
-.. image:: https://img.shields.io/badge/License-MIT-yellow.svg
-   :target: https://opensource.org/licenses/MIT
-   :alt: License: MIT
+.. image:: https://img.shields.io/badge/License-GPL%20v2%2B-blue.svg
+   :target: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+   :alt: License: GPL v2+
 
 .. image:: https://readthedocs.org/projects/mice-py/badge/?version=latest
    :target: https://mice-py.readthedocs.io/en/latest/?badge=latest
    :alt: Documentation Status
 
-A comprehensive Python implementation of **Multiple Imputation by Chained Equations (MICE)** for handling missing data in statistical analysis and machine learning workflows.
+mice-py is a Python port of the R package `mice
+<https://cran.r-project.org/package=mice>`_ (van Buuren and
+Groothuis-Oudshoorn 2011) for multiple imputation of missing data by chained
+equations. It works on pandas data frames and fits analysis models with
+statsmodels.
 
-Key Features
-------------
+What it has:
 
-**Multiple Imputation Methods**
-   Choose from five robust imputation strategies:
-   
-   - **PMM** (Predictive Mean Matching) - Maintains distributional properties
-   - **CART** (Classification and Regression Trees) - Handles non-linear relationships
-   - **Random Forest** - Captures complex interactions
-   - **MIDAS** (Multiple Imputation with Distant Average Substitution) - Efficient for small samples
-   - **Sample** - Simple random sampling from observed values
+- **Imputation** with five of R mice's methods: predictive mean matching
+  (``pmm``, the default), ``midas`` (R's ``midastouch``), classification and
+  regression trees (``cart``), random forests (``rf``) and random draws
+  (``sample``); numeric, boolean and categorical columns.
+- **R's model set-up**: full predictor matrix by default, ``quickpred``,
+  removal of constant and collinear variables with logged events, R's dummy
+  coding of categorical predictors.
+- **Pooling** with Rubin's rules and Barnard-Rubin degrees of freedom, for
+  any statsmodels formula model, or for estimates you computed yourself.
+- **Diagnostic plots** after R mice: missing-data pattern, strip, box,
+  density and scatter plots of observed and imputed values, trace plots.
 
-**Flexible Configuration**
-   - Automatic predictor matrix estimation
-   - Custom visit sequences for imputation order
-   - Method-specific parameter control
-   - Mixed data types (numeric and categorical)
+**Validated against R mice 3.19.0**: exact comparisons of the deterministic
+parts, the distribution of imputed values per method, and a simulation study
+in which both engines impute the same datasets. Every comparison agrees with
+R (the random ones within Monte Carlo error) except random forests with
+categorical predictors; see
+:doc:`r_mice/validation`. Version 0.2 changes results for users of 0.1; see
+:doc:`upgrading`.
 
-**Statistical Pooling**
-   - Rubin's rules for combining estimates
-   - Fraction of missing information (FMI)
-   - Confidence intervals and standard errors
-   - Formula-based model fitting with statsmodels integration
-
-**Diagnostic Tools**
-   - Convergence diagnostics (chain statistics)
-   - Stripplots, box plots, and density plots
-   - Missing data pattern visualization
-   - XY plots for bivariate relationships
-
-Quick Example
--------------
-
-.. code-block:: python
-
-   import pandas as pd
-   from imputation import MICE
-   
-   # Load your data with missing values
-   df = pd.read_csv("your_data.csv")
-   
-   # Initialize and run MICE
-   mice = MICE(df)
-   mice.impute(n_imputations=5, maxit=10, method='pmm')
-   
-   # Fit a model and pool results
-   mice.fit('outcome ~ predictor1 + predictor2')
-   results = mice.pool(summ=True)
-   print(results)
-
-Documentation Contents
-----------------------
+A first example is on :doc:`quickstart`.
 
 .. toctree::
    :maxdepth: 2
@@ -74,12 +49,20 @@ Documentation Contents
 
    installation
    quickstart
+   upgrading
 
 .. toctree::
    :maxdepth: 2
    :caption: User Guide
 
    user_guide/index
+
+.. toctree::
+   :maxdepth: 1
+   :caption: R mice
+
+   r_mice/validation
+   r_mice/differences
 
 .. toctree::
    :maxdepth: 2
@@ -107,8 +90,8 @@ Documentation Contents
    changelog
    references
 
-Indices and Tables
-==================
+Indices
+=======
 
 * :ref:`genindex`
 * :ref:`modindex`

@@ -1,368 +1,231 @@
 Pooling Analysis
 ================
 
-After creating multiple imputed datasets, you need to analyze them and combine the 
-results. This guide explains how to pool results using Rubin's rules.
+After imputation, the analysis model is fitted to every completed dataset and
+the results are combined with Rubin's rules (Rubin 1987), using the
+small-sample degrees of freedom of Barnard and Rubin (1999), as R's
+``pool()`` does. The formulas are on :doc:`../theory/rubins_rules`. The
+examples use ``df`` from the :ref:`example data <example-data>`.
 
-Why Pool Results?
------------------
-
-You have multiple complete datasets (e.g., 5 or 10), each with different imputed 
-values. To get final estimates, you must:
-
-1. **Fit your model** on each imputed dataset
-2. **Pool the results** to get single estimates
-3. **Account for uncertainty** from both within and between imputations
-
-Simply averaging or using one dataset would underestimate uncertainty and produce 
-invalid inferences.
-
-Rubin's Rules
--------------
-
-Rubin's rules provide a principled way to combine estimates from multiple imputed 
-datasets, properly accounting for the uncertainty introduced by imputation.
-
-Basic Concept
-~~~~~~~~~~~~~
-
-For each parameter (e.g., regression coefficient):
-
-1. Fit the model on each imputed dataset → get *m* estimates and standard errors
-2. Calculate **within-imputation variance** (average of squared SEs)
-3. Calculate **between-imputation variance** (variance of estimates across imputations)
-4. **Total variance** = within + between + correction term
-5. Use these to construct confidence intervals and perform inference
-
-Using mice-py for Pooling
---------------------------
-
-Simple Workflow
-~~~~~~~~~~~~~~~
+Fit and pool
+------------
 
 .. code-block:: python
 
    from imputation import MICE
-   
-   # 1. Perform imputation
+
    mice = MICE(df)
-   mice.impute(n_imputations=5, maxit=10)
-   
-   # 2. Fit a model using formula syntax
-   mice.fit('outcome ~ predictor1 + predictor2 + predictor3')
-   
-   # 3. Pool results
-   pooled = mice.pool(summ=True)
-   print(pooled)
+   mice.impute(n_imputations=10, seed=1)
 
-The ``fit()`` method uses formula syntax (like R or statsmodels) and fits the model 
-on all imputed datasets.
+   fits = mice.fit("chl ~ age + bmi + sex")   # one statsmodels result per dataset
+   result = mice.pool()
 
-The ``pool()`` method combines results using Rubin's rules.
+``fit`` is R's ``with(imp, lm(...))``: it fits the formula to each completed
+dataset with ``statsmodels.formula.api.ols`` and keeps the fits in
+``mice.model_results``. ``pool`` combines the latest fits.
 
-Understanding the Output
--------------------------
+The pooled table
+~~~~~~~~~~~~~~~~
 
-The pooled results include:
+``result["table"]`` is R's ``summary(pool(fit), type = "all", conf.int =
+TRUE)``: one row per term with these columns.
 
-**Estimate**
-   The pooled coefficient (average across imputed datasets)
+.. list-table::
+   :header-rows: 1
+   :widths: 20 80
 
-**Std.Error**
-   The pooled standard error (accounting for both within and between variance)
-
-**t-statistic**
-   The test statistic for the coefficient
-
-**df**
-   Degrees of freedom (adjusted for imputation)
-
-**p-value**
-   Statistical significance
-
-**95% CI Lower/Upper**
-   Confidence interval bounds
-
-**FMI**
-   Fraction of Missing Information (see below)
-
-Example Output
-~~~~~~~~~~~~~~
-
-.. code-block:: text
-
-                    Estimate  Std.Error  t-statistic     df   P>|t|  [0.025  0.975]    FMI
-   Intercept         45.234      5.321        8.502  42.15  <0.001  34.449  56.019  0.156
-   predictor1         0.823      0.142        5.796  38.27  <0.001   0.535   1.111  0.198
-   predictor2        -1.234      0.387       -3.189  51.83   0.002  -2.012  -0.456  0.089
-   predictor3         2.156      0.921        2.341  45.67   0.024   0.301   4.011  0.132
-
-Fraction of Missing Information (FMI)
---------------------------------------
-
-FMI indicates how much the uncertainty in your estimate is due to missing data:
-
-- **FMI = 0**: No missing information, equivalent to complete data analysis
-- **FMI = 0.1**: 10% of uncertainty is due to missingness
-- **FMI = 0.5**: Half the uncertainty is from missingness
-- **FMI = 1**: Complete uncertainty from missingness (rare)
-
-If FMI > 0.3, consider using more imputations.
-
-Formula Syntax
---------------
-
-The ``fit()`` method uses Patsy formula syntax:
-
-Basic Formulas
-~~~~~~~~~~~~~~
+   * - Column
+     - Meaning
+   * - ``m``
+     - number of imputations
+   * - ``estimate``
+     - pooled estimate: the mean of the m estimates
+   * - ``ubar``
+     - within-imputation variance: the mean of the squared standard errors
+   * - ``b``
+     - between-imputation variance of the m estimates
+   * - ``t``
+     - total variance ``ubar + (1 + 1/m) b``
+   * - ``dfcom``
+     - degrees of freedom of the complete-data analysis (residual df of the
+       first fit)
+   * - ``df``
+     - Barnard-Rubin degrees of freedom
+   * - ``riv``
+     - relative increase in variance due to missingness, ``(1 + 1/m) b / ubar``
+   * - ``lambda``
+     - proportion of the total variance due to missingness,
+       ``(1 + 1/m) b / t``
+   * - ``fmi``
+     - fraction of missing information, ``(riv + 2/(df + 3)) / (riv + 1)``
+   * - ``std_error``, ``statistic``, ``p_value``
+     - ``sqrt(t)``, ``estimate / std_error``, two-sided p-value from the t
+       distribution with ``df`` degrees of freedom
+   * - ``conf_low``, ``conf_high``
+     - 95% interval from the same t distribution
 
 .. code-block:: python
 
-   # Simple linear regression
-   mice.fit('y ~ x')
-   
-   # Multiple predictors
-   mice.fit('y ~ x1 + x2 + x3')
-   
-   # With interaction
-   mice.fit('y ~ x1 + x2 + x1:x2')
-   
-   # Or equivalently
-   mice.fit('y ~ x1 * x2')  # Includes x1, x2, and x1:x2
-   
-   # Polynomial terms
-   mice.fit('y ~ x + I(x**2)')
-   
-   # No intercept
-   mice.fit('y ~ x - 1')
+   table = result["table"]
+   print(table[["estimate", "std_error", "df", "p_value", "conf_low", "conf_high", "fmi"]].round(3))
 
-Categorical Variables
-~~~~~~~~~~~~~~~~~~~~~
+The rest of the dictionary
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. code-block:: python
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
 
-   # Categorical predictor (automatically creates dummies)
-   mice.fit('income ~ age + C(education)')
-   
-   # Change reference category
-   mice.fit('income ~ age + C(education, Treatment("High School"))')
+   * - Key
+     - Content
+   * - ``"pooled_result"``
+     - a ``MICEresult``, a statsmodels results object (see below)
+   * - ``"pooled_params"``
+     - the pooled estimates as an array
+   * - ``"pooled_covariance"``, ``"within_covariance"``,
+       ``"between_covariance"``
+     - the total, within and between covariance matrices
+   * - ``"fraction_missing_info"``
+     - ``fmi`` per term, as in the table
+   * - ``"pooled_scale"``
+     - mean residual scale of the fits (NaN for models without one)
+   * - ``"n_imputations"``, ``"parameter_names"``, ``"formula"``
+     - as the names say
 
-Transformations
-~~~~~~~~~~~~~~~
+``mice.pool(summ=True)`` returns a printable statsmodels summary instead,
+with the pooled estimates, t-based p-values and intervals, and a ``df`` and
+an ``FMI`` column:
 
 .. code-block:: python
 
-   # Log transformation
-   mice.fit('log_y ~ x1 + x2')
-   
-   # Use numpy functions
-   mice.fit('y ~ np.log(x1) + np.sqrt(x2)')
+   print(mice.pool(summ=True))
 
-Advanced Pooling
-----------------
+The pooled result
+~~~~~~~~~~~~~~~~~
 
-Pool Without Summary
-~~~~~~~~~~~~~~~~~~~~
-
-Get detailed results for each imputation:
+``result["pooled_result"]`` (also ``mice.pooled_result``) behaves like a
+statsmodels result: ``params``, ``bse``, ``tvalues``, ``pvalues`` and
+``conf_int()`` use each term's own degrees of freedom (attribute ``df``);
+``frac_miss_info`` holds ``fmi``. Tests of several coefficients at once
+(``t_test``, ``f_test``, ``wald_test``) raise ``NotImplementedError``: they
+need their own pooling rule (R's ``D1``), which is not implemented.
 
 .. code-block:: python
 
-   # Get individual results and pooled results
-   pooled_detailed = mice.pool(summ=False)
-   
-   # Access individual imputation results
-   individual_results = pooled_detailed['individual']
-   
-   # Access pooled results
-   pooled_results = pooled_detailed['pooled']
+   pooled = result["pooled_result"]
+   print(pooled.params)
+   print(pooled.conf_int(alpha=0.10))   # 90% intervals
 
-Custom Analysis
-~~~~~~~~~~~~~~~
+With ``n_imputations=1`` nothing can be pooled: ``pool`` warns, reports the
+single analysis with ``dfcom`` degrees of freedom, and ``b``, ``fmi`` and
+related columns are NaN.
 
-For models not supported by ``fit()``, manually fit and pool:
+Other models
+------------
+
+``fit`` takes any statsmodels formula model as ``model``; ``model_kwargs``
+go to the model and further keyword arguments to its ``fit()``:
+
+.. code-block:: python
+
+   import statsmodels.api as sm
+   import statsmodels.formula.api as smf
+
+   # logistic regression of high cholesterol
+   mice.fit("I((chl > 230) * 1) ~ age + bmi", model=smf.logit, disp=False)
+   print(mice.pool()["table"][["estimate", "std_error", "df", "fmi"]].round(3))
+
+   # gamma GLM with a log link
+   mice.fit("chl ~ age + bmi", model=smf.glm, model_kwargs={"family": sm.families.Gamma(sm.families.links.Log())})
+   print(mice.pool()["table"][["estimate", "std_error", "df", "fmi"]].round(4))
+
+Formulas use patsy syntax: ``C(x)`` for a categorical term, ``x1:x2`` and
+``x1 * x2`` for interactions, ``I(x**2)`` and ``np.log(x)`` for
+transformations. Term names follow patsy (``Intercept``, ``sex[T.m]``).
+Every variable in the formula must be a column of the data.
+
+Any model with an estimate and a standard error
+-----------------------------------------------
+
+For any other model or statistic, compute the estimate and its standard
+error on each completed dataset yourself and pool them with
+``imputation.pooling.pool_estimates``, which returns the same table. Its
+arguments are the m × p arrays of estimates and of squared standard errors
+(1-D arrays for a single quantity), and the complete-data degrees of freedom
+``dfcom``, for example ``n - p`` for a regression; ``np.inf`` (the default)
+assumes a large sample.
+
+A correlation is not approximately normal, so it is pooled on Fisher's z
+scale, with variance ``1 / (n - 3)``, and transformed back:
 
 .. code-block:: python
 
    import numpy as np
-   from sklearn.linear_model import LogisticRegression
-   
-   # Fit on each imputed dataset
-   coefficients = []
-   std_errors = []
-   
-   for dataset in mice.imputed_datasets:
-       X = dataset[['predictor1', 'predictor2']]
-       y = dataset['outcome']
-       
-       model = LogisticRegression()
-       model.fit(X, y)
-       
-       coefficients.append(model.coef_[0])
-       # Calculate std errors (simplified)
-       # In practice, use proper methods for your model
-   
-   # Pool manually using Rubin's rules
    from imputation.pooling import pool_estimates
-   pooled = pool_estimates(coefficients, std_errors)
 
-Interpreting Pooled Results
-----------------------------
+   z = [np.arctanh(data["bmi"].corr(data["chl"])) for data in mice.imputed_datasets]
+   variance = [1 / (len(df) - 3)] * len(z)
 
-Statistical Significance
-~~~~~~~~~~~~~~~~~~~~~~~~
+   table = pool_estimates(np.array(z), np.array(variance), param_names=["bmi, chl"])
+   print(np.tanh(table[["estimate", "conf_low", "conf_high"]]).round(3))   # pooled correlation
+   print(table["fmi"].round(3))
 
-Use the pooled p-values and confidence intervals for inference:
+``imputation.pooling.barnard_rubin(m, b, t, dfcom)`` gives the degrees of
+freedom alone.
 
-.. code-block:: python
+Pooling descriptive statistics
+------------------------------
 
-   pooled = mice.pool(summ=True)
-   
-   # Check significance
-   significant = pooled[pooled['P>|t|'] < 0.05]
-   print("Significant predictors:")
-   print(significant)
-
-The pooled standard errors are larger than those from a single dataset (accounting 
-for imputation uncertainty), so some predictors significant in a single imputation 
-might not be significant when properly pooled.
-
-Effect Sizes
-~~~~~~~~~~~~
-
-The pooled estimates are your best point estimates:
+``imputation.pooling`` also pools means and proportions from any list of
+completed data frames, without the ``MICE`` class:
 
 .. code-block:: python
 
-   # Extract coefficient for predictor1
-   coef = pooled.loc['predictor1', 'Estimate']
-   ci_lower = pooled.loc['predictor1', '[0.025']
-   ci_upper = pooled.loc['predictor1', '0.975]']
-   
-   print(f"predictor1: {coef:.3f} (95% CI: [{ci_lower:.3f}, {ci_upper:.3f}])")
+   from imputation.pooling import pool_descriptive_statistics, pool_subset
 
-Model Comparison
-~~~~~~~~~~~~~~~~
+   stats = pool_descriptive_statistics(mice.imputed_datasets)
+   print(stats.summary().round(3))
 
-When comparing models, use pooled results:
+   print(pool_subset(mice.imputed_datasets, columns=["bmi", "chl"]).table().round(3))
 
-.. code-block:: python
+What is pooled:
 
-   # Fit two models
-   mice.fit('y ~ x1')
-   results_simple = mice.pool(summ=True)
-   
-   mice.fit('y ~ x1 + x2 + x3')
-   results_complex = mice.pool(summ=True)
-   
-   # Compare based on pooled coefficients and FMI
+- **numeric columns**: the mean, with within-imputation variance
+  ``s² / n``;
+- **categorical, object and boolean columns**: the proportion of each level,
+  named ``column[level]``, with within-imputation variance ``p (1 - p) / n``.
 
-How Many Imputations?
----------------------
+Pooling uses ``pool_estimates`` with ``dfcom = n - 1``. The result is a
+``PoolingResult`` with the arrays ``estimates``, ``variances`` (total),
+``within_variance``, ``between_variance`` and ``frac_miss_info`` (``fmi``),
+plus ``param_names``, ``n_imputations`` and ``sample_size``. Its
+``summary(alpha=0.05)`` returns a data frame with ``Estimate``,
+``Std_Error``, ``DF``, the interval, the three variances, ``Lambda`` and
+``FMI``; ``table(alpha=0.05)`` returns the full table of ``pool_estimates``.
 
-General Guidelines
-~~~~~~~~~~~~~~~~~~
+Both functions take ``include_numeric`` and ``include_categorical`` to skip
+column types. ``pool_from_files(paths, read_kwargs=None)`` reads the datasets
+from CSV files first. The datasets must have the same shape and columns; a
+dataset that still has missing values is pooled with a logged warning.
 
-**Minimum**: 5 imputations
-   Acceptable for low missingness (<10%)
-
-**Recommended**: 10-20 imputations
-   Good balance between computation and precision
-
-**High missingness**: 20-100 imputations
-   When missingness >30% or FMI >0.3
-
-**Rule of thumb**: Number of imputations ≈ percentage of missing cases
-
-Von Hippel (2020) suggests: m = # of missing cases / # of complete cases × 100
-
-Checking If You Have Enough
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-If FMI is high (>0.3) and results are unstable across repeated analyses, you may 
-need more imputations:
-
-.. code-block:: python
-
-   # Check FMI
-   pooled = mice.pool(summ=True)
-   max_fmi = pooled['FMI'].max()
-   
-   if max_fmi > 0.3:
-       print(f"High FMI ({max_fmi:.2f}). Consider more imputations.")
-
-Common Pitfalls
+Common mistakes
 ---------------
 
-Don't Use Single Imputation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+- **Analyzing one completed dataset.** Its standard errors ignore the
+  uncertainty about the missing values and are too small.
+- **Averaging the completed datasets** and analyzing the average. This is a
+  single imputation in disguise, with the same problem, and it shrinks the
+  variability of the imputed variables.
+- **Pooling quantities that are not approximately normal**, such as
+  correlations or variances, directly. Pool a transformed version (for
+  example Fisher's z for a correlation) and transform back (van Buuren 2018,
+  section 5.2).
 
-❌ **Wrong**:
+How many imputations
+--------------------
 
-.. code-block:: python
-
-   # Using only the first imputed dataset
-   dataset = mice.imputed_datasets[0]
-   model = smf.ols('y ~ x1 + x2', data=dataset).fit()
-   print(model.summary())
-
-✓ **Correct**:
-
-.. code-block:: python
-
-   # Fit on all and pool
-   mice.fit('y ~ x1 + x2')
-   pooled = mice.pool(summ=True)
-   print(pooled)
-
-Don't Average Imputed Values
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-❌ **Wrong**:
-
-.. code-block:: python
-
-   # Averaging imputed datasets
-   averaged = pd.concat(mice.imputed_datasets).groupby(level=0).mean()
-   model = smf.ols('y ~ x1 + x2', data=averaged).fit()
-
-This is actually single imputation and underestimates uncertainty!
-
-✓ **Correct**: Use proper pooling with Rubin's rules
-
-Don't Ignore Imputation Uncertainty
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Standard errors from a single imputed dataset are too small. Always pool!
-
-Checking Results
-----------------
-
-After pooling, check:
-
-.. code-block:: python
-
-   pooled = mice.pool(summ=True)
-   
-   # Summary statistics
-   print(f"Mean FMI: {pooled['FMI'].mean():.3f}")
-   print(f"Max FMI: {pooled['FMI'].max():.3f}")
-   print(f"Mean df: {pooled['df'].mean():.1f}")
-
-Tips for Better Pooling
-------------------------
-
-1. **More imputations**: When in doubt, use more (20-50)
-2. **Check FMI**: High values suggest need for more imputations
-3. **Complete convergence**: Ensure MICE converged before pooling
-4. **Include all relevant variables**: In both imputation and analysis models
-5. **Be cautious with transformations**: Pool on the analysis scale
-
-Next Steps
-----------
-
-- Read :doc:`best_practices` for overall guidance
-- Review :doc:`../theory/rubins_rules` for mathematical details
-- See complete examples in :doc:`../examples/index`
-
+The default of 5 is often enough for point estimates. Standard errors,
+p-values and intervals are more stable with more imputations; a common rule
+of thumb is to use at least as many imputations as the percentage of
+incomplete cases (White, Royston and Wood 2011). A large ``fmi`` is another
+sign that more imputations help.

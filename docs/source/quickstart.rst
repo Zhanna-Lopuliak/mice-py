@@ -1,216 +1,103 @@
-Quickstart Guide
-================
+Quick start
+===========
 
-This guide will get you started with mice-py in just a few minutes.
+The workflow has three steps, as in R mice:
 
-Basic Workflow
---------------
+1. **Impute**: ``MICE(data).impute()`` creates several completed datasets.
+2. **Analyze**: ``fit()`` fits the same model to each of them.
+3. **Pool**: ``pool()`` combines the fits with Rubin's rules.
 
-The typical MICE workflow consists of three main steps:
+.. _example-data:
 
-1. **Initialize** a MICE object with your data
-2. **Impute** missing values multiple times
-3. **Analyze** the imputed datasets and pool results
+Example data
+------------
 
-Minimal Example
----------------
-
-Here's a complete example using the NHANES dataset:
+The examples in this documentation use a small simulated dataset: ``age``
+and ``sex`` explain ``bmi``, and all three explain the cholesterol level
+``chl``. ``bmi``, ``chl`` and ``sex`` have missing values; ``age`` is
+complete. The other pages of the user guide start from this data frame
+``df``.
 
 .. code-block:: python
 
-   import pandas as pd
    import numpy as np
+   import pandas as pd
+
+   rng = np.random.default_rng(1)
+   n = 300
+   df = pd.DataFrame({"age": rng.integers(20, 80, n), "sex": rng.choice(["f", "m"], n)})
+   df["bmi"] = 18 + 0.1 * df["age"] + rng.normal(0, 3, n)
+   df["chl"] = 120 + 1.2 * df["age"] + 2.0 * df["bmi"] + rng.normal(0, 20, n)
+   df.loc[rng.random(n) < 0.2, "bmi"] = np.nan
+   df.loc[rng.random(n) < 0.3, "chl"] = np.nan
+   df.loc[rng.random(n) < 0.1, "sex"] = np.nan
+
+   print(df.isna().sum())
+
+Impute, analyze, pool
+---------------------
+
+.. code-block:: python
+
    from imputation import MICE
-   
-   # 1. Load data with missing values
-   df = pd.DataFrame({
-       'age': [25, 30, np.nan, 45, 50, np.nan, 35, 40],
-       'income': [50000, np.nan, 60000, np.nan, 80000, 70000, np.nan, 75000],
-       'education': ['Bachelor', 'Master', 'Bachelor', np.nan, 
-                     'PhD', 'Master', 'Bachelor', np.nan],
-       'employed': [1, 1, 0, 1, 1, np.nan, 1, 0]
-   })
-   
-   # 2. Initialize MICE object
+
    mice = MICE(df)
-   
-   # 3. Perform imputation
-   mice.impute(
-       n_imputations=5,    # Create 5 imputed datasets
-       maxit=10,           # Run 10 iterations
-       method='pmm'        # Use Predictive Mean Matching
-   )
-   
-   # 4. Access imputed datasets
-   imputed_datasets = mice.imputed_datasets
-   print(f"Created {len(imputed_datasets)} complete datasets")
-   
-   # 5. Fit a statistical model
-   mice.fit('income ~ age + education + employed')
-   
-   # 6. Pool results using Rubin's rules
-   pooled_results = mice.pool(summ=True)
-   print(pooled_results)
+   datasets = mice.impute(n_imputations=5, seed=1)   # pmm, 5 iterations, as R's mice()
 
-Understanding the Output
-------------------------
+   mice.fit("chl ~ age + bmi + sex")                 # one OLS fit per completed dataset
+   result = mice.pool()                              # Rubin's rules, Barnard-Rubin df
 
-After imputation, you'll have:
+   print(result["table"][["estimate", "std_error", "df", "fmi", "conf_low", "conf_high"]])
 
-**Multiple Complete Datasets**
-   The ``mice.imputed_datasets`` attribute contains a list of pandas DataFrames, 
-   each with all missing values filled in differently.
+``impute`` returns the completed datasets (also kept in
+``mice.imputed_datasets``). Without ``seed`` every call gives different
+imputations; with the same seed it gives the same ones.
 
-**Convergence Diagnostics**
-   - ``mice.chain_mean``: Mean of each variable across iterations
-   - ``mice.chain_var``: Variance of each variable across iterations
+``pool()`` returns a dictionary. Its ``"table"`` has one row per model term
+with R's columns: the pooled ``estimate``, the within (``ubar``), between
+(``b``) and total (``t``) variance, the degrees of freedom ``df``, ``riv``,
+``lambda``, the fraction of missing information ``fmi``, the standard error,
+t statistic, p-value and 95% interval. ``mice.pool(summ=True)`` returns the
+same results as a printable statsmodels summary.
 
-**Pooled Results**
-   When you call ``mice.pool()``, you get combined estimates from all imputed datasets
-   using Rubin's rules, including:
-   
-   - Pooled coefficients
-   - Standard errors
-   - Confidence intervals
-   - Fraction of missing information (FMI)
-
-Checking for Convergence
--------------------------
-
-Before analyzing results, check if the imputation converged:
-
-.. code-block:: python
-
-   from plotting.diagnostics import plot_chain_stats
-   
-   # Visualize convergence
-   plot_chain_stats(
-       chain_mean=mice.chain_mean,
-       chain_var=mice.chain_var,
-       save_path='convergence.png'
-   )
-
-The chains should stabilize after a few iterations. If they haven't, increase ``maxit``.
-
-Visualizing Imputations
+What ``impute`` decided
 -----------------------
 
-Compare observed and imputed values:
+.. code-block:: python
+
+   print(mice.method)            # {'age': '', 'sex': 'pmm', 'bmi': 'pmm', 'chl': 'pmm'}
+   print(mice.visit_sequence)    # ['sex', 'bmi', 'chl']
+   print(mice.predictor_matrix)  # rows: targets, columns: predictors
+   print(mice.logged_events)     # changes the setup step made; empty here
+
+A complete column gets the method ``""`` and is not imputed. If the setup
+step removes a constant or collinear variable, ``impute`` warns and the
+change appears in ``mice.logged_events``; see :doc:`user_guide/mice_overview`.
+
+Check the imputations
+---------------------
 
 .. code-block:: python
 
-   from plotting.diagnostics import stripplot, densityplot
-   
-   # Create missing pattern indicator
-   missing_pattern = df.notna().astype(int)
-   
-   # Stripplot: points for observed (blue) and imputed (red) values
-   stripplot(mice.imputed_datasets, missing_pattern, 
-             save_path='stripplot.png')
-   
-   # Density plot: distribution comparison
-   densityplot(mice.imputed_datasets, missing_pattern,
-               save_path='density.png')
+   from plotting import densityplot, plot_chain_stats
 
-Using Different Methods
------------------------
+   plot_chain_stats(mice.chain_mean, mice.chain_var, save_path="trace.png")
+   densityplot(mice.imputed_datasets, df.notna().astype(int), columns=["bmi", "chl"], save_path="density.png")
 
-PMM (Default)
-~~~~~~~~~~~~~
+The trace plot shows the mean and standard deviation of the imputed values
+per iteration and chain; the chains should mix and show no trend. The density
+plot compares the observed values (blue) with the imputed ones (red). In a
+notebook, leave out ``save_path`` to show the figures. See
+:doc:`user_guide/convergence_diagnostics` and
+:doc:`user_guide/diagnostic_plots`.
 
-Predictive Mean Matching is the default method and works well for most numeric data:
-
-.. code-block:: python
-
-   mice.impute(n_imputations=5, method='pmm')
-
-CART
-~~~~
-
-Classification and Regression Trees handle non-linear relationships:
-
-.. code-block:: python
-
-   mice.impute(n_imputations=5, method='cart')
-
-Random Forest
-~~~~~~~~~~~~~
-
-Random Forest captures complex interactions:
-
-.. code-block:: python
-
-   mice.impute(n_imputations=5, method='rf')
-
-Method Per Variable
-~~~~~~~~~~~~~~~~~~~
-
-Use different methods for different variables:
-
-.. code-block:: python
-
-   method_dict = {
-       'age': 'pmm',
-       'income': 'cart',
-       'education': 'sample',
-       'employed': 'rf'
-   }
-   mice.impute(n_imputations=5, method=method_dict)
-
-Logging
--------
-
-Enable logging to track progress:
-
-.. code-block:: python
-
-   from imputation import configure_logging
-   
-   # Enable INFO level logging
-   configure_logging(level='INFO')
-   
-   # Now run MICE - you'll see progress messages
-   mice = MICE(df)
-   mice.impute(n_imputations=5, maxit=10)
-
-Common Parameters
------------------
-
-Here are the most commonly used parameters:
-
-**n_imputations** (default: 5)
-   Number of imputed datasets to create. More datasets provide more accurate 
-   pooled estimates but take longer to compute.
-
-**maxit** (default: 10)
-   Number of MICE iterations. Check convergence diagnostics to determine if 
-   more iterations are needed.
-
-**method** (default: 'pmm')
-   Imputation method. Can be a string (same method for all variables) or 
-   a dictionary mapping column names to methods.
-
-**initial** (default: 'sample')
-   Method for initial imputation before MICE iterations. Options: 'sample' 
-   or 'mean'.
-
-**visit_sequence** (default: 'monotone')
-   Order in which variables are imputed. Options: 'monotone', 'random', or 
-   a custom list.
-
-Next Steps
+Next steps
 ----------
 
-Now that you understand the basics:
-
-- **Explore methods**: Read :doc:`user_guide/imputation_methods` to choose 
-  the best method for your data
-  
-- **Advanced parameters**: Learn about predictor matrices and visit sequences 
-  in :doc:`user_guide/predictor_matrices`
-  
-- **Theory**: Understand the theory behind MICE in :doc:`theory/index`
-
-- **Examples**: See complete workflows in :doc:`examples/index`
-
+- :doc:`user_guide/imputation_methods`: pmm, midas, cart, rf and sample, and
+  their parameters.
+- :doc:`user_guide/predictor_matrices`: choosing the predictors.
+- :doc:`user_guide/pooling_analysis`: other models, the pooled table, pooling
+  without ``MICE``.
+- :doc:`r_mice/differences`: for users of R mice.
+- :doc:`upgrading`: for users of mice-py 0.1.

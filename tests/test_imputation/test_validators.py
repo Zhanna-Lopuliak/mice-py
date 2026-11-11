@@ -2,98 +2,128 @@
 Tests for validation functions in the imputation module.
 """
 
-import pytest
-import pandas as pd
-import numpy as np
 import warnings
 
+import numpy as np
+import pandas as pd
+import pytest
+
 from imputation.validators import (
-    validate_dataframe,
-    validate_columns,
-    check_n_imputations,
+    check_initial_method,
     check_maxit,
     check_method,
-    check_initial_method,
-    validate_predictor_matrix,
+    check_n_imputations,
     check_visit_sequence,
-    validate_formula
+    validate_columns,
+    validate_dataframe,
+    validate_formula,
+    validate_predictor_matrix,
 )
 
 
 class TestValidateDataframe:
     """Test dataframe validation."""
-    
+
     def test_valid_dataframe(self, sample_data_complete):
         """Test validation of valid dataframe."""
         result = validate_dataframe(sample_data_complete)
         assert isinstance(result, pd.DataFrame)
         assert result.shape == sample_data_complete.shape
-        
+
     def test_convert_array_to_dataframe(self):
         """Test conversion of array to dataframe."""
         data = [[1, 2], [3, 4]]
         result = validate_dataframe(data)
         assert isinstance(result, pd.DataFrame)
         assert result.shape == (2, 2)
-        
+
     def test_duplicate_columns_error(self):
         """Test error on duplicate column names."""
-        data = pd.DataFrame([[1, 2], [3, 4]], columns=['A', 'A'])
+        data = pd.DataFrame([[1, 2], [3, 4]], columns=["A", "A"])
         with pytest.raises(ValueError, match="DataFrame contains duplicate column names"):
             validate_dataframe(data)
-            
-    def test_drop_empty_rows(self):
-        """Test dropping of fully empty rows."""
-        data = pd.DataFrame({
-            'A': [1, np.nan, 3],
-            'B': [2, np.nan, 4]
-        })
-        result = validate_dataframe(data)
-        assert result.shape[0] == 2  # One row should be dropped
-        
-    def test_drop_empty_columns(self):
-        """Test dropping of fully empty columns."""
-        data = pd.DataFrame({
-            'A': [1, 2, 3],
-            'B': [np.nan, np.nan, np.nan],
-            'C': [4, 5, 6]
-        })
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+
+    def test_keeps_empty_rows_and_warns(self, capsys):
+        """Fully empty rows are kept (and imputed later); a warning says so."""
+        data = pd.DataFrame({"A": [1, np.nan, 3], "B": [2, np.nan, 4]})
+        with pytest.warns(UserWarning, match="1 row"):
             result = validate_dataframe(data)
-        assert 'B' not in result.columns
-        assert result.shape[1] == 2
+        pd.testing.assert_frame_equal(result, data)
+        assert capsys.readouterr().out == ""
+
+    def test_keeps_empty_columns(self, capsys):
+        """Fully empty columns are kept: they are not imputed and not used as predictors."""
+        data = pd.DataFrame({"A": [1, 2, 3], "B": [np.nan, np.nan, np.nan], "C": [4, 5, 6]})
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            result = validate_dataframe(data)
+        pd.testing.assert_frame_equal(result, data)
+        assert capsys.readouterr().out == ""
+
+    def test_duplicate_columns_error_does_not_print(self, capsys):
+        data = pd.DataFrame([[1, 2], [3, 4]], columns=["A", "A"])
+        with pytest.raises(ValueError, match=r"duplicate column names: \['A'\]"):
+            validate_dataframe(data)
+        assert capsys.readouterr().out == ""
 
 
 class TestValidateColumns:
     """Test column validation."""
-    
+
     def test_valid_columns(self, sample_data_missing):
         """Test validation of valid columns."""
         result = validate_columns(sample_data_missing)
         assert isinstance(result, pd.DataFrame)
-        
-    def test_drop_nan_only_columns(self):
-        """Test dropping of columns with only NaN values."""
-        data = pd.DataFrame({
-            'A': [1, 2, 3],
-            'B': [np.nan, np.nan, np.nan],
-            'C': [4, 5, 6]
-        })
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            result = validate_columns(data)
-        assert 'B' not in result.columns
+
+    def test_keeps_nan_only_columns(self):
+        """Columns with only NaN values are kept."""
+        data = pd.DataFrame({"A": [1, 2, 3], "B": [np.nan, np.nan, np.nan], "C": [4, 5, 6]})
+        result = validate_columns(data)
+        pd.testing.assert_frame_equal(result, data)
+
+    @pytest.mark.parametrize(
+        "values",
+        [
+            pd.date_range("2024-01-01", periods=3),
+            pd.to_timedelta([1, 2, 3], unit="D"),
+            np.array([1 + 1j, 2, 3]),
+            pd.period_range("2024-01", periods=3, freq="M"),
+        ],
+        ids=["datetime", "timedelta", "complex", "period"],
+    )
+    def test_unsupported_dtype_names_column_and_dtype(self, values):
+        data = pd.DataFrame({"A": [1.0, np.nan, 3.0], "when": values})
+        dtype = str(data["when"].dtype)
+        with pytest.raises(TypeError) as info:
+            validate_columns(data)
+        assert "'when'" in str(info.value) and dtype in str(info.value)
+
+    @pytest.mark.parametrize("dtype", ["Int64", "Float64", "boolean", "string", "category", "object", "bool"])
+    def test_supported_dtypes(self, dtype):
+        values = {
+            "Int64": [1, None, 3],
+            "Float64": [1.5, None, 3.0],
+            "boolean": [True, None, False],
+            "string": ["u", None, "v"],
+            "category": ["u", None, "v"],
+            "object": ["u", None, "v"],
+            "bool": [True, False, True],
+        }[dtype]
+        data = pd.DataFrame({"A": [1.0, np.nan, 3.0], "z": pd.Series(values, dtype=dtype)})
+        assert validate_columns(data) is data
 
 
 class TestCheckParameters:
     """Test parameter validation functions."""
-    
+
     def test_check_n_imputations_valid(self):
         """Test valid n_imputations values."""
-        check_n_imputations(5)  # Should not raise
-        check_n_imputations(1)  # Should not raise
-        
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert check_n_imputations(5) is None
+            assert check_n_imputations(1) is None
+            assert check_n_imputations(100) is None
+
     def test_check_n_imputations_invalid(self):
         """Test invalid n_imputations values."""
         with pytest.raises(ValueError, match="n_imputations must be a positive integer"):
@@ -102,151 +132,182 @@ class TestCheckParameters:
             check_n_imputations(-1)
         with pytest.raises(ValueError, match="n_imputations must be a positive integer"):
             check_n_imputations(1.5)
-            
+        with pytest.raises(ValueError, match="n_imputations must be a positive integer"):
+            check_n_imputations(True)
+
+    def test_numpy_integers_are_accepted(self):
+        assert check_n_imputations(np.int64(5)) is None
+        assert check_n_imputations(np.int32(1)) is None
+        assert check_maxit(np.int64(3)) is None
+        assert check_maxit(np.uint8(2)) is None
+
+    def test_many_imputations_warn_instead_of_print(self, capsys):
+        with pytest.warns(UserWarning, match="101 imputations"):
+            check_n_imputations(101)
+        assert capsys.readouterr().out == ""
+
     def test_check_maxit_valid(self):
         """Test valid maxit values."""
-        check_maxit(10)  # Should not raise
-        check_maxit(1)   # Should not raise
-        
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert check_maxit(10) is None
+            assert check_maxit(1) is None
+            assert check_maxit(50) is None
+
     def test_check_maxit_invalid(self):
         """Test invalid maxit values."""
         with pytest.raises(ValueError, match="maxit must be a positive integer"):
             check_maxit(0)
         with pytest.raises(ValueError, match="maxit must be a positive integer"):
             check_maxit(-1)
-            
+
     def test_check_maxit_warning(self):
         """Test warning for large maxit values."""
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
+        with pytest.warns(UserWarning, match="maxit is greater than 50") as record:
             check_maxit(100)
-            assert len(w) == 1
-            assert "maxit is greater than 50" in str(w[0].message)
+        assert len(record) == 1
 
 
 class TestCheckMethod:
     """Test method validation."""
-    
+
     def test_check_method_string(self):
         """Test method validation with string input."""
-        columns = ['A', 'B', 'C']
-        result = check_method('sample', columns)
-        expected = {'A': 'sample', 'B': 'sample', 'C': 'sample'}
+        columns = ["A", "B", "C"]
+        result = check_method("sample", columns)
+        expected = {"A": "sample", "B": "sample", "C": "sample"}
         assert result == expected
-        
+
     def test_check_method_invalid_string(self):
         """Test method validation with invalid string."""
-        columns = ['A', 'B']
+        columns = ["A", "B"]
         with pytest.raises(ValueError, match="Unsupported method"):
-            check_method('invalid_method', columns)
-            
+            check_method("invalid_method", columns)
+
     def test_check_method_dictionary(self):
         """Test method validation with dictionary input."""
-        columns = ['A', 'B', 'C']
-        method_dict = {'A': 'pmm', 'B': 'sample'}
+        columns = ["A", "B", "C"]
+        method_dict = {"A": "pmm", "B": "sample"}
         result = check_method(method_dict, columns)
-        
-        assert result['A'] == 'pmm'
-        assert result['B'] == 'sample'
-        
+
+        assert result["A"] == "pmm"
+        assert result["B"] == "sample"
+
+    def test_check_method_accepts_empty_method(self):
+        """ "" marks a column that is not imputed, as in R."""
+        assert check_method({"A": "", "B": "pmm"}, ["A", "B"]) == {"A": "", "B": "pmm"}
+        assert check_method("", ["A", "B"]) == {"A": "", "B": ""}
+
     def test_check_method_invalid_column(self):
         """Test method validation with invalid column in dictionary."""
-        columns = ['A', 'B']
-        method_dict = {'A': 'pmm', 'C': 'sample'}  # C doesn't exist
+        columns = ["A", "B"]
+        method_dict = {"A": "pmm", "C": "sample"}  # C doesn't exist
         with pytest.raises(ValueError, match="Columns not found in data"):
             check_method(method_dict, columns)
 
 
 class TestCheckInitialMethod:
     """Test initial method validation."""
-    
+
     def test_check_initial_method_valid(self):
         """Test valid initial methods."""
-        check_initial_method('sample')  
-        check_initial_method('meanobs')  
-        
+        assert check_initial_method("sample") is None
+        assert check_initial_method("meanobs") is None
+
     def test_check_initial_method_invalid(self):
         """Test invalid initial methods."""
         with pytest.raises(ValueError, match="Unsupported initial method"):
-            check_initial_method('invalid_method')
+            check_initial_method("invalid_method")
         with pytest.raises(ValueError, match="initial_method must be a string"):
             check_initial_method(123)
 
 
 class TestValidatePredictorMatrix:
     """Test predictor matrix validation."""
-    
+
     def test_valid_predictor_matrix(self, predictor_matrix, sample_data_missing):
         """Test validation of valid predictor matrix."""
-        data_subset = sample_data_missing[['bmi', 'cholesterol']]
-        result = validate_predictor_matrix(
-            predictor_matrix, 
-            list(data_subset.columns), 
-            data_subset
-        )
+        data_subset = sample_data_missing[["bmi", "cholesterol"]]
+        result = validate_predictor_matrix(predictor_matrix, list(data_subset.columns), data_subset)
         assert isinstance(result, pd.DataFrame)
         assert result.shape == predictor_matrix.shape
-        
+
     def test_predictor_matrix_invalid_type(self, sample_data_complete):
         """Test error with invalid predictor matrix type."""
         with pytest.raises(ValueError, match="predictor_matrix must be a pandas DataFrame"):
-            validate_predictor_matrix([[1, 0], [0, 1]], ['A', 'B'], sample_data_complete)
-            
+            validate_predictor_matrix([[1, 0], [0, 1]], ["A", "B"], sample_data_complete)
+
     def test_predictor_matrix_invalid_columns(self, sample_data_complete):
         """Test error with invalid columns in predictor matrix."""
-        matrix = pd.DataFrame([[1, 0], [0, 1]], 
-                            index=['A', 'B'], 
-                            columns=['A', 'C'])  # C doesn't exist
+        matrix = pd.DataFrame([[1, 0], [0, 1]], index=["A", "B"], columns=["A", "C"])  # C doesn't exist
         with pytest.raises(ValueError, match="predictor_matrix contains columns not in data"):
-            validate_predictor_matrix(matrix, ['A', 'B'], sample_data_complete)
-            
+            validate_predictor_matrix(matrix, ["A", "B"], sample_data_complete)
+
+    def test_rows_of_complete_variables_do_not_warn(self, sample_data_missing):
+        """A row for a complete variable is allowed and unused, as in R."""
+        data = sample_data_missing[["age", "bmi", "cholesterol"]]
+        matrix = pd.DataFrame(1, index=data.columns, columns=data.columns)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            result = validate_predictor_matrix(matrix, list(data.columns), data)
+        assert result is matrix
+
+    def test_incomplete_column_without_row(self, sample_data_missing):
+        data = sample_data_missing[["age", "bmi", "cholesterol"]]
+        matrix = pd.DataFrame([[0]], index=["bmi"], columns=["age"])
+        with pytest.raises(ValueError, match=r"no row for the incomplete columns \['cholesterol'\]"):
+            validate_predictor_matrix(matrix, list(data.columns), data)
+
     def test_predictor_matrix_invalid_values(self, sample_data_complete):
         """Test error with invalid values in predictor matrix."""
-        matrix = pd.DataFrame([[1, 0.5], [0, 1]], 
-                            index=['A', 'B'], 
-                            columns=['A', 'B'])
+        matrix = pd.DataFrame([[1, 0.5], [0, 1]], index=["A", "B"], columns=["A", "B"])
         with pytest.raises(ValueError, match="predictor_matrix must contain only 0s and 1s"):
-            validate_predictor_matrix(matrix, ['A', 'B'], sample_data_complete)
+            validate_predictor_matrix(matrix, ["A", "B"], sample_data_complete)
 
 
 class TestCheckVisitSequence:
     """Test visit sequence validation."""
-    
+
     def test_check_visit_sequence_string(self):
         """Test visit sequence validation with string."""
-        columns = ['A', 'B', 'C']
-        check_visit_sequence('monotone', columns)
-        
+        columns = ["A", "B", "C"]
+        for keyword in ("roman", "arabic", "monotone", "revmonotone", "random"):
+            assert check_visit_sequence(keyword, columns) == (None, [])
+        with pytest.raises(ValueError, match="Unsupported visit sequence"):
+            check_visit_sequence("alphabetical", columns)
+
     def test_check_visit_sequence_list(self):
         """Test visit sequence validation with list."""
-        columns = ['A', 'B', 'C']
-        check_visit_sequence(['A', 'B', 'C'], columns)  
-        
+        columns = ["A", "B", "C"]
+        assert check_visit_sequence(["C", "A"], columns) == (["C", "A"], [])
+        # with the incomplete columns given, the others are dropped and reported
+        assert check_visit_sequence(["C", "B", "A"], columns, ["A", "C"]) == (["C", "A"], ["B"])
+
     def test_check_visit_sequence_invalid_column(self):
         """Test visit sequence validation with invalid column."""
-        columns = ['A', 'B']
+        columns = ["A", "B"]
         with pytest.raises(ValueError, match="Visit sequence contains columns not in data"):
-            check_visit_sequence(['A', 'B', 'C'], columns)
+            check_visit_sequence(["A", "B", "C"], columns)
 
 
 class TestValidateFormula:
     """Test formula validation."""
-    
+
     def test_valid_formula(self):
         """Test validation of valid formula."""
-        columns = ['age', 'bmi', 'cholesterol']
-        formula = 'age ~ bmi + cholesterol'
-        validate_formula(formula, columns) 
-        
+        columns = ["age", "bmi", "cholesterol"]
+        assert validate_formula("age ~ bmi + cholesterol", columns) is None
+        assert validate_formula("np.log(age) ~ C(bmi) + I(cholesterol ** 2)", columns) is None
+
     def test_formula_missing_variables(self):
         """Test error with missing variables in formula."""
-        columns = ['age', 'bmi']
-        formula = 'age ~ bmi + cholesterol'  # cholesterol not in columns
+        columns = ["age", "bmi"]
+        formula = "age ~ bmi + cholesterol"  # cholesterol not in columns
         with pytest.raises(ValueError, match="variables in the formula are not present"):
             validate_formula(formula, columns)
-            
+
     def test_formula_invalid_type(self):
         """Test error with invalid formula type."""
-        columns = ['age', 'bmi']
+        columns = ["age", "bmi"]
         with pytest.raises(ValueError, match="formula must be a string"):
             validate_formula(123, columns)

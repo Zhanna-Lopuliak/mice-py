@@ -1,28 +1,17 @@
-Pooling Functions
-=================
+Pooling
+=======
 
-Functions for combining results from multiple imputed datasets using Rubin's rules.
+See :doc:`../user_guide/pooling_analysis` and :doc:`../theory/rubins_rules`.
 
-MICEresult Class
-----------------
-
-.. automodule:: imputation.mice_result
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Pooling Module
---------------
+Pooling functions
+-----------------
 
 .. automodule:: imputation.pooling
    :members:
-   :undoc-members:
+
+Pooled model results
+--------------------
+
+.. automodule:: imputation.mice_result
+   :members:
    :show-inheritance:
-
-See Also
---------
-
-- :doc:`../user_guide/pooling_analysis` for practical guidance
-- :doc:`../theory/rubins_rules` for theoretical background
-- :doc:`mice` for the main MICE.pool() method
-

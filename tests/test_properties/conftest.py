@@ -1,0 +1,14 @@
+"""Fixtures for the L4 invariant tests."""
+
+import matplotlib
+
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt  # noqa: E402
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _close_figures():
+    yield
+    plt.close("all")

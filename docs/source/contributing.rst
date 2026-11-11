@@ -1,381 +1,119 @@
 Contributing
 ============
 
-We welcome contributions to mice-py! This guide will help you get started.
+Bug reports, fixes, documentation and new methods are welcome. Open an issue
+on `GitHub <https://github.com/Zhanna-Lopuliak/mice-py/issues>`_ with a
+minimal example and your versions (Python, numpy, pandas, scikit-learn), or
+a pull request against ``main``.
 
-Ways to Contribute
-------------------
+Setup
+-----
 
-There are many ways to contribute:
-
-**Report Bugs**
-   Found a bug? Open an issue on GitHub with:
-   
-   - Clear description of the problem
-   - Minimal reproducible example
-   - Your environment (Python version, OS, package versions)
-
-**Suggest Features**
-   Have an idea for improvement? Open an issue describing:
-   
-   - The proposed feature
-   - Use cases and benefits
-   - Possible implementation approach
-
-**Improve Documentation**
-   Documentation can always be better:
-   
-   - Fix typos or unclear explanations
-   - Add examples
-   - Improve docstrings
-   - Write tutorials
-
-**Submit Code**
-   Code contributions are welcome:
-   
-   - Bug fixes
-   - New features
-   - Performance improvements
-   - Additional imputation methods
-
-Development Setup
------------------
-
-Fork and Clone
-~~~~~~~~~~~~~~
-
-1. Fork the repository on GitHub
-
-2. Clone your fork:
-
-   .. code-block:: bash
-
-      git clone https://github.com/YOUR_USERNAME/mice-py.git
-      cd mice-py
-
-3. Add upstream remote:
-
-   .. code-block:: bash
-
-      git remote add upstream https://github.com/Zhanna-Lopuliak/mice-py.git
-
-Install Development Dependencies
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The project uses `uv <https://docs.astral.sh/uv/>`_:
 
 .. code-block:: bash
 
-   # Install in development mode with all dependencies
-   pip install -e ".[dev]"
+   git clone https://github.com/Zhanna-Lopuliak/mice-py.git
+   cd mice-py
+   uv sync                       # package (editable), test extra, ruff, mypy, pre-commit
+   uv run pre-commit install     # ruff check and ruff format on every commit
 
-This installs:
-   - The package in editable mode
-   - Testing tools (pytest, pytest-cov)
-   - Development tools (black, flake8, mypy)
-   - Documentation tools (sphinx, sphinx-rtd-theme)
+``uv sync`` installs the ``dev`` dependency group by default. The docs and
+notebook tools are extras: ``uv run --extra docs ...`` and
+``uv run --extra notebooks ...`` install them on demand.
 
-Create a Branch
-~~~~~~~~~~~~~~~
+Checks
+------
 
-.. code-block:: bash
-
-   git checkout -b feature/your-feature-name
-
-Or for bug fixes:
+The same commands run in CI (``.github/workflows/ci.yml``):
 
 .. code-block:: bash
 
-   git checkout -b fix/issue-description
+   uv run ruff check .                     # lint
+   uv run ruff format --check .            # formatting (line length 120)
+   uv run mypy                             # type check of imputation and plotting
+   uv run pytest                           # all tests
+   uv run pytest --cov --cov-report=term-missing   # with coverage; CI requires 89%
+   uv run pytest --doctest-modules imputation plotting
+   uv run --extra docs sphinx-build -W --keep-going -b html docs/source docs/build/html
+   uv run --extra notebooks pytest --nbmake examples/
 
-Development Workflow
---------------------
+CI runs the tests on Python 3.9 to 3.13 on Linux and on 3.13 on macOS.
 
-Making Changes
-~~~~~~~~~~~~~~
+Tests
+-----
 
-1. Make your changes to the code
-2. Add or update tests
-3. Update documentation if needed
-4. Run tests locally
+``tests/README.md`` describes the layout. In short:
 
-Running Tests
-~~~~~~~~~~~~~
+- ``tests/test_imputation``, ``tests/test_plotting``,
+  ``tests/test_integration.py``: unit and workflow tests;
+- ``tests/test_parity``: comparisons with R mice 3.19.0 (marker ``parity``),
+  against the fixtures in ``tests/reference/fixtures``;
+- ``tests/test_properties``: invariants and edge cases, partly with
+  hypothesis.
 
-.. code-block:: bash
-
-   # Run all tests
-   pytest
-   
-   # Run with coverage
-   pytest --cov=imputation --cov=plotting --cov-report=term-missing
-   
-   # Run specific test file
-   pytest tests/test_imputation/test_mice.py
-   
-   # Run specific test
-   pytest tests/test_imputation/test_mice.py::test_basic_imputation
-
-Code Style
-~~~~~~~~~~
-
-We follow PEP 8 style guidelines:
+A change that affects imputations should keep the parity tests passing. If R
+behaves differently from what you expect, check R first: the fixtures are
+produced by the scripts in ``tests/reference/r`` (see
+``tests/reference/README.md``). To regenerate them you need R with mice
+3.19.0, ranger, rpart and jsonlite:
 
 .. code-block:: bash
 
-   # Format code with black
-   black imputation/ plotting/ tests/
-   
-   # Check with flake8
-   flake8 imputation/ plotting/ tests/
-   
-   # Type checking (optional but encouraged)
-   mypy imputation/
+   Rscript tests/reference/r/generate_all.R
+   git diff --exit-code tests/reference/fixtures
 
-Writing Tests
-~~~~~~~~~~~~~
+The workflow ``.github/workflows/r-fixtures.yml`` does the same on GitHub
+(started by hand). The simulation study against R is described in
+``simulations/README.md`` and on :doc:`r_mice/validation`.
 
-- Add tests for new features
-- Ensure bug fixes include regression tests
-- Maintain or improve code coverage
-- Tests should be clear and well-documented
+Style
+-----
 
-Example test:
+- ruff for lint and formatting, configured in ``pyproject.toml``.
+- Type hints on the public API; mypy must pass.
+- NumPy-style docstrings, with a blank line before every list so that Sphinx
+  renders it. Examples in docstrings are run as doctests.
+- The library does not print: use ``warnings.warn`` for what the user must
+  see and ``logging.getLogger(__name__)`` for the rest.
+- When porting from R mice, read the source of the ``v3.19.0`` tag and say
+  in the docstring which R function is followed. mice-py is derived from
+  mice and, like mice, is licensed under the GPL, version 2 or later; see
+  ``COPYRIGHT``.
 
-.. code-block:: python
+Adding an imputation method
+---------------------------
 
-   def test_basic_imputation():
-       """Test that basic imputation runs without errors."""
-       df = pd.DataFrame({
-           'a': [1, 2, np.nan, 4],
-           'b': [5, np.nan, 7, 8]
-       })
-       
-       mice = MICE(df)
-       mice.impute(n_imputations=2, maxit=2)
-       
-       assert len(mice.imputed_datasets) == 2
-       assert mice.imputed_datasets[0].isnull().sum().sum() == 0
+1. Write the function in a new module ``imputation/<name>.py`` with the
+   signature of the others:
+   ``f(y, id_obs, x, id_mis=None, <parameters>, rng=None) -> np.ndarray``.
+   It returns the imputations of the cells in ``id_mis`` (all missing cells
+   if ``None``) and draws all random numbers from ``rng``.
+2. Add the name to ``ImputationMethod`` in ``imputation/constants.py`` and
+   the function to ``_IMPUTER_MAP`` in ``imputation/utils.py``. Its
+   parameters then become ``<name>_<parameter>`` arguments of
+   ``MICE.impute``.
+3. Add unit tests, and the method to the property tests in
+   ``tests/test_properties``. If R mice has the method, add parity tests.
+4. Document it in :doc:`user_guide/imputation_methods` and
+   ``docs/source/api/methods.rst``, and add a line to ``CHANGELOG.md``.
 
 Documentation
-~~~~~~~~~~~~~
+-------------
 
-- Update docstrings for new/modified functions
-- Follow NumPy docstring format
-- Add examples to docstrings when helpful
-- Update relevant user guide sections
-
-Example docstring:
-
-.. code-block:: python
-
-   def my_function(x, y, method='default'):
-       """
-       Brief one-line description.
-       
-       More detailed description of what the function does,
-       including any important details about behavior.
-       
-       Parameters
-       ----------
-       x : array-like
-           Description of x parameter
-       y : int
-           Description of y parameter
-       method : str, default='default'
-           Description of method parameter
-           
-       Returns
-       -------
-       result : float
-           Description of return value
-           
-       Examples
-       --------
-       >>> my_function([1, 2, 3], 5)
-       42.0
-       """
-       pass
-
-Submitting Changes
-------------------
-
-Commit Your Changes
-~~~~~~~~~~~~~~~~~~~
+The docs are in ``docs/source`` (Sphinx, reStructuredText); see
+``docs/BUILD_DOCS.md``. Build them with warnings as errors before a pull
+request:
 
 .. code-block:: bash
 
-   git add .
-   git commit -m "Brief description of changes"
+   uv run --extra docs sphinx-build -W --keep-going -b html docs/source docs/build/html
 
-Write clear commit messages:
-   - Use present tense ("Add feature" not "Added feature")
-   - First line should be brief (50 chars or less)
-   - Add detailed description after blank line if needed
-
-Push to Your Fork
-~~~~~~~~~~~~~~~~~
-
-.. code-block:: bash
-
-   git push origin feature/your-feature-name
-
-Open a Pull Request
-~~~~~~~~~~~~~~~~~~~
-
-1. Go to the original repository on GitHub
-2. Click "New Pull Request"
-3. Select your fork and branch
-4. Fill in the PR template:
-   
-   - Clear title
-   - Description of changes
-   - Related issue number (if applicable)
-   - Checklist of completed items
-
-5. Submit the PR
-
-Pull Request Guidelines
------------------------
-
-Before submitting:
-
-☐ All tests pass
-☐ Code follows style guidelines
-☐ New tests added for new features
-☐ Documentation updated
-☐ Commit messages are clear
-☐ No merge conflicts with main branch
-
-Your PR should:
-
-- Have a clear purpose (one feature or fix per PR)
-- Include tests for new functionality
-- Update relevant documentation
-- Pass all CI checks
-
-After Submission
-~~~~~~~~~~~~~~~~
-
-- Respond to review comments
-- Make requested changes
-- Push updates to your branch (PR will update automatically)
-- Be patient and respectful
-
-Code Review Process
--------------------
-
-What to Expect
-~~~~~~~~~~~~~~
-
-- Maintainers will review your PR
-- They may request changes or ask questions
-- Discussion helps improve the code
-- Multiple rounds of review are normal
-
-Tips for Success
-~~~~~~~~~~~~~~~~
-
-- Keep PRs focused and reasonably sized
-- Respond to feedback promptly
-- Be open to suggestions
-- Ask questions if anything is unclear
-
-Adding New Imputation Methods
-------------------------------
-
-To add a new imputation method:
-
-1. **Create method file**: ``imputation/new_method.py``
-
-2. **Implement function**:
-
-   .. code-block:: python
-
-      def new_method(y, id_obs, x, id_mis=None, **kwargs):
-          """
-          Docstring describing the method.
-          
-          Parameters should follow PMM/CART conventions.
-          """
-          # Implementation
-          pass
-
-3. **Add to utils.py**: Register in ``get_imputer_func()``
-
-4. **Add tests**: ``tests/test_imputation/test_methods.py``
-
-5. **Update documentation**:
-   
-   - API reference
-   - User guide
-   - Examples
-
-6. **Add to constants**: If needed, update ``constants.py``
-
-Building Documentation
-----------------------
-
-Local Build
-~~~~~~~~~~~
-
-.. code-block:: bash
-
-   cd docs
-   sphinx-build -b html source build
-
-Then open ``docs/build/index.html`` in your browser.
-
-Auto-rebuild
-~~~~~~~~~~~~
-
-.. code-block:: bash
-
-   pip install sphinx-autobuild
-   sphinx-autobuild docs/source docs/build
-
-Then visit http://127.0.0.1:8000
-
-Getting Help
-------------
-
-If you need help:
-
-- Check existing issues and PRs
-- Read the :doc:`user_guide/index`
-- Ask in your PR or issue
-- Contact maintainers
-
-Code of Conduct
----------------
-
-Be Respectful
-~~~~~~~~~~~~~
-
-- Treat everyone with respect
-- Be welcoming to newcomers
-- Value diverse perspectives
-- Focus on constructive feedback
-
-Be Collaborative
-~~~~~~~~~~~~~~~~
-
-- Help others
-- Share knowledge
-- Give credit where due
-- Work together toward shared goals
+Every code block of the README, the quick start and the user guide should
+run as written.
 
 License
 -------
 
-By contributing, you agree that your contributions will be licensed under the 
-MIT License.
-
-Questions?
-----------
-
-Open an issue on GitHub if you have questions about contributing.
-
-Thank You!
-----------
-
-Thank you for contributing to mice-py! Your help makes this project better for everyone.
-
+Contributions are licensed under the GNU General Public License, version 2
+or later, as the rest of the project; see ``LICENSE`` and ``COPYRIGHT``.

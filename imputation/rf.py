@@ -1,176 +1,169 @@
-import numpy as np
-import pandas as pd
-from typing import Union, Optional
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+"""Imputation by random forests (``rf``), as R mice's ``mice.impute.rf``."""
+
+from __future__ import annotations
+
 import logging
 
-# Get a logger for the current module.
-# This will be a child of the 'imputation' logger configured in MICE.py
-logger = logging.getLogger('imputation.rf')
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+
+from .cart import _design_matrix, _draw_pooled_donors, _is_numeric_target, _label_codes
+
+logger = logging.getLogger(__name__)
+
+# ranger's default min.node.size: a node is split only if it holds more
+# observations than this (5 for regression, 1 for classification). The
+# defaults of `min_samples_split` below follow the settings that matched
+# ranger in the layer-2 comparisons: 5 for regression, 2 for classification.
+_MIN_SAMPLES_SPLIT = {"regression": 5, "classification": 2}
+
 
 def rf(
-    y: Union[pd.Series, np.ndarray],
+    y: pd.Series | np.ndarray,
     id_obs: np.ndarray,
-    x: Union[pd.DataFrame, np.ndarray],
-    id_mis: Optional[np.ndarray] = None,
+    x: pd.DataFrame | np.ndarray,
+    id_mis: np.ndarray | None = None,
     n_estimators: int = 10,
-    rng: Optional[np.random.Generator] = None,
-    **kwargs
+    max_depth: int | None = None,
+    min_samples_leaf: int = 1,
+    min_samples_split: int | None = None,
+    forest_params: dict | None = None,
+    rng: np.random.Generator | None = None,
 ) -> np.ndarray:
     """
     Impute missing values using Random Forests with donor sampling.
-    
-    This function is designed to be compatible with the MICE framework,
-    following the same interface as PMM, midas, CART, and sample methods.
-    
+
+    This function is designed to be compatible with the MICE framework and
+    follows R's ``mice.impute.rf``, which grows the forest with ``ranger``.
+
     Parameters
     ----------
-    y : Union[pd.Series, np.ndarray]
+    y : pd.Series or np.ndarray
         Target variable with missing values
     id_obs : np.ndarray
         Boolean mask of observed values in y (True = observed, False = missing)
-    x : Union[pd.DataFrame, np.ndarray]
-        Predictor variables (should be the current completed columns)
+    x : pd.DataFrame or np.ndarray
+        Predictor variables (should be the current completed columns). A
+        DataFrame with categorical, object, string or boolean columns is
+        dummy-coded first by :func:`imputation.design.obtain_design`, as MICE
+        does. Without any predictor, the imputations are draws from the
+        observed values, as with ``cart``.
     id_mis : np.ndarray, optional
         Boolean mask of missing values. If None, uses ~id_obs.
     n_estimators : int, default=10
-        Number of trees in the forest
+        Number of trees in the forest (R mice's ``ntree``).
+    max_depth : int, optional
+        Maximum depth of the trees; None grows them until the leaves are pure
+        or reach the node size limits, as ranger does.
+    min_samples_leaf : int, default=1
+        Minimum number of samples required to be at a leaf node (ranger's
+        ``min.bucket``).
+    min_samples_split : int, optional
+        Minimum number of samples in a node for a split to be tried. None
+        means 5 for a numeric target and 2 for any other, after ranger's
+        ``min.node.size`` (see Notes).
+    forest_params : dict, optional
+        Further arguments for scikit-learn's ``RandomForestRegressor`` or
+        ``RandomForestClassifier``, e.g. ``{"n_jobs": -1}`` to grow the trees
+        in parallel. It must not set ``n_estimators``, ``max_depth``,
+        ``min_samples_leaf``, ``min_samples_split`` or ``random_state``.
+        ``max_features`` defaults to ``"sqrt"`` (ranger's ``mtry``, the
+        square root of the number of predictors, rounded down, at least 1);
+        ``n_jobs`` is left at scikit-learn's default (one job).
     rng : np.random.Generator, optional
         Random number generator for reproducibility. If None, a fresh generator is used.
-    **kwargs : dict
-        Additional parameters passed to the random forest model.
-        
+
     Returns
     -------
     np.ndarray
-        Imputed values for missing positions only.
-        
+        Imputed values for missing positions only. A numeric target gets a
+        regression forest. Any other target (categorical, object, string,
+        boolean) gets a classification forest, and its imputations are
+        observed labels of `y`, so booleans stay booleans.
+
+    Raises
+    ------
+    ValueError
+        If `y` has no observed value and some value is to be imputed.
+
     Notes
     -----
-    Algorithm (Doove et al., 2014; mirrors R mice):
-    1. Fit a random forest on observed data.
-    2. For each missing case, find terminal nodes across all trees.
-    3. For each tree, collect donors (observed cases in same node).
-    4. Randomly sample one donor per tree.
-    5. Take final imputation as a random draw from those donor predictions.
-    
-    Bootstrapping is inherent to Random Forest (bagging), so no additional
-    bootstrap is applied (matching R mice behavior). Each tree is already
-    built on a bootstrap sample of the data.
+    Algorithm (Doove et al., 2014), as R's ``mice.impute.rf``:
+
+    1. Fit a random forest on the observed rows; each tree is grown on a
+       bootstrap sample of them.
+    2. For each missing row, find its leaf in every tree.
+    3. Pool, over all trees, the observed values that share that leaf (all
+       observed rows, whether in the tree's bootstrap sample or not; a row
+       counts once per tree), and draw one value from the pool.
+
+    ranger counts a node's size with the bootstrap duplicates and splits a
+    node when it holds more than ``min.node.size`` observations;
+    scikit-learn counts distinct rows. The defaults here are the settings
+    that agreed with ranger in distribution on the layer-2 inputs; the
+    forests are not the same.
     """
     logger.debug("Starting Random Forest imputation.")
-    
+
+    forest_params = dict(forest_params or {})
+    reserved = {"n_estimators", "max_depth", "min_samples_leaf", "min_samples_split", "random_state"}
+    if reserved & set(forest_params):
+        raise TypeError(
+            f"forest_params must not set {sorted(reserved & set(forest_params))}: pass "
+            "n_estimators, max_depth, min_samples_leaf and min_samples_split as arguments "
+            "of rf; the random state is drawn from rng."
+        )
+
     if rng is None:
         rng = np.random.default_rng()
-    
-    # One-hot encode categoricals
-    if isinstance(x, pd.DataFrame) and (x.select_dtypes(include=["object", "category"]).shape[1] > 0):
-        logger.debug("One-hot encoding categorical predictors.")
-        x = pd.get_dummies(x, drop_first=True)
-    
-    x = np.asarray(x)
+
+    x = _design_matrix(x)
     id_obs = np.asarray(id_obs, bool)
     if id_mis is None:
         id_mis = ~id_obs
-    
+    id_mis = np.asarray(id_mis, bool)
+
+    is_numeric = _is_numeric_target(y)
     x_obs, y_obs = x[id_obs], np.asarray(y)[id_obs]
     x_mis = x[id_mis]
     if x_mis.shape[0] == 0:
         return np.array([])
-    
-    if len(y_obs) < 2:
-        logger.warning("Not enough observed data for RF. Using fallback imputation.")
-        if pd.api.types.is_numeric_dtype(y_obs):
-            return np.full(np.sum(id_mis), np.mean(y_obs))
-        else:
-            from collections import Counter
-            most_frequent = Counter(y_obs).most_common(1)[0][0]
-            return np.full(np.sum(id_mis), most_frequent)
-    
-    is_numeric = pd.api.types.is_numeric_dtype(y_obs)
+    if len(y_obs) == 0:
+        raise ValueError(
+            "rf: the target has no observed value in the rows used for the model, so there is no donor to draw from."
+        )
+
+    if x.shape[1] == 0:
+        # No predictor: every tree is a single leaf holding all observed
+        # values, so the imputation is a draw from them (as cart does)
+        logger.debug("No predictors: drawing from the observed values.")
+        return rng.choice(y_obs, size=x_mis.shape[0])
+
     if is_numeric:
         logger.debug("Performing regression random forest imputation.")
-        imputed_values = _rf_regression_impute(x_obs, x_mis, y_obs, n_estimators, rng, **kwargs)
+        target = y_obs.astype(float)
+        forest_class = RandomForestRegressor
+        kind = "regression"
     else:
         logger.debug("Performing classification random forest imputation.")
-        imputed_values = _rf_classification_impute(x_obs, x_mis, y_obs, n_estimators, rng, **kwargs)
-    
+        # fitted on label codes, so that any label type works (e.g. booleans)
+        target = _label_codes(y_obs)
+        if target.max() == 0:  # a single observed label
+            return np.repeat(y_obs[:1], x_mis.shape[0])
+        forest_class = RandomForestClassifier
+        kind = "classification"
+
+    forest = forest_class(
+        n_estimators=max(1, int(n_estimators)),
+        max_depth=max_depth,
+        min_samples_leaf=min_samples_leaf,
+        min_samples_split=_MIN_SAMPLES_SPLIT[kind] if min_samples_split is None else min_samples_split,
+        random_state=int(rng.integers(2**31 - 1)),
+        **{"max_features": "sqrt", **forest_params},
+    )
+    forest.fit(x_obs, target)
+
+    imputed_values = _draw_pooled_donors(forest.apply(x_obs), forest.apply(x_mis), y_obs, rng)
     logger.debug(f"Random Forest imputation complete. Imputed {len(imputed_values)} values.")
     return imputed_values
-
-def _rf_regression_impute(x_obs, x_mis, y_obs, n_estimators, rng, **kwargs):
-    """Helper for regression random forest imputation."""
-    rf_seed = int(rng.integers(2**31 - 1))
-    kwargs.pop("random_state", None)
-    rf = RandomForestRegressor(
-        n_estimators=n_estimators,
-        max_depth=kwargs.pop("max_depth", None),
-        min_samples_leaf=kwargs.pop("min_samples_leaf", 1),
-        random_state=rf_seed,
-        n_jobs=-1,
-        **kwargs
-    )
-    rf.fit(x_obs, y_obs)
-    
-    nodes_obs = np.array([t.apply(x_obs) for t in rf.estimators_]).T
-    nodes_mis = np.array([t.apply(x_mis) for t in rf.estimators_]).T
-    
-    imputed = np.empty(x_mis.shape[0])
-    fallback_count = 0
-    
-    for i in range(x_mis.shape[0]):
-        donors_all = []
-        for j, _ in enumerate(rf.estimators_):
-            same = nodes_obs[:, j] == nodes_mis[i, j]
-            if same.any():
-                donors_all.append(rng.choice(y_obs[same]))
-        if donors_all:
-            imputed[i] = rng.choice(donors_all)
-        else:
-            imputed[i] = y_obs.mean()
-            fallback_count += 1
-    
-    if fallback_count:
-        logger.debug(f"RF regression donor fallback used {fallback_count}/{len(imputed)} times.")
-    return imputed
-
-def _rf_classification_impute(x_obs, x_mis, y_obs, n_estimators, rng, **kwargs):
-    """Helper for classification random forest imputation."""
-    unique_cats = np.unique(y_obs)
-    if len(unique_cats) == 1:
-        return np.repeat(unique_cats[0], x_mis.shape[0])
-    
-    rf_seed = int(rng.integers(2**31 - 1))
-    kwargs.pop("random_state", None)
-    rf = RandomForestClassifier(
-        n_estimators=n_estimators,
-        max_depth=kwargs.pop("max_depth", None),
-        min_samples_leaf=kwargs.pop("min_samples_leaf", 1),
-        random_state=rf_seed,
-        n_jobs=-1,
-        **kwargs
-    )
-    rf.fit(x_obs, y_obs)
-    
-    nodes_obs = np.array([t.apply(x_obs) for t in rf.estimators_]).T
-    nodes_mis = np.array([t.apply(x_mis) for t in rf.estimators_]).T
-    
-    imputed = np.empty(x_mis.shape[0], dtype=y_obs.dtype)
-    fallback_count = 0
-    
-    for i in range(x_mis.shape[0]):
-        donors_all = []
-        for j, _ in enumerate(rf.estimators_):
-            same = nodes_obs[:, j] == nodes_mis[i, j]
-            if same.any():
-                donors_all.append(rng.choice(y_obs[same]))
-        if donors_all:
-            imputed[i] = rng.choice(donors_all)
-        else:
-            vals, counts = np.unique(y_obs, return_counts=True)
-            imputed[i] = vals[rng.choice(np.flatnonzero(counts == counts.max()))]
-            fallback_count += 1
-    
-    if fallback_count:
-        logger.debug(f"RF classification donor fallback used {fallback_count}/{len(imputed)} times.")
-    return imputed
