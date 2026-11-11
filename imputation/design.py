@@ -1,8 +1,8 @@
-"""Design matrix and predictor pruning, as in R mice.
+"""Design matrix, predictor selection and pruning, as in R mice.
 
-Three pure functions behind the setup step of :class:`imputation.MICE` and
+Pure functions behind the setup step of :class:`imputation.MICE` and
 behind each univariate imputation call. Each reproduces the rule of the
-matching internal function of R ``mice`` 3.19.0:
+matching function of R ``mice`` 3.19.0:
 
 - :func:`obtain_design` builds the numeric design matrix of the predictors of
   one target, as R's ``model.matrix`` does inside ``mice``
@@ -12,6 +12,8 @@ matching internal function of R ``mice`` 3.19.0:
 - :func:`find_collinear` lists the variables that (nearly) duplicate another
   variable, so that the setup step can stop using them
   (``mice:::find.collinear``).
+- :func:`quickpred` builds a predictor matrix from simple statistics
+  (``mice::quickpred``); it is also available as ``imputation.quickpred``.
 
 The functions only compute; they neither log nor warn.
 """
@@ -24,7 +26,7 @@ import numpy as np
 import pandas as pd
 from scipy import linalg
 
-__all__ = ["obtain_design", "remove_lindep", "find_collinear"]
+__all__ = ["obtain_design", "remove_lindep", "find_collinear", "quickpred"]
 
 #: The event R's ``remove.lindep`` logs when no column survives the variance
 #: and correlation screen.
@@ -525,3 +527,178 @@ def find_collinear(data: pd.DataFrame, threshold: float = 0.999) -> list[Hashabl
         hit = np.abs(corr) >= threshold  # NaN compares False
     collinear = hit.any(axis=0)
     return [columns[order[j]] for j in np.flatnonzero(collinear)]
+
+
+# ---------------------------------------------------------------------------
+# quickpred
+# ---------------------------------------------------------------------------
+
+_CORRELATION_METHODS = ("pearson", "kendall", "spearman")
+
+
+def _correlation_columns_with(a: np.ndarray, b: np.ndarray, method: str) -> np.ndarray:
+    """Correlation of each column of ``a`` with ``b``, neither with missing values.
+
+    NaN where a column or ``b`` is constant (or fewer than two rows exist),
+    as R's ``cor`` returns NA there. Spearman ranks the values with average
+    ranks for ties; Kendall is tau-b, as in R.
+    """
+    if a.shape[0] < 2:
+        return np.full(a.shape[1], np.nan)
+    if method == "kendall":
+        from scipy.stats import kendalltau
+
+        with np.errstate(invalid="ignore", divide="ignore"):
+            out = np.array([kendalltau(column, b)[0] for column in a.T], dtype=float)
+        constant = (np.ptp(a, axis=0) == 0) | (np.ptp(b) == 0)
+        out[constant] = np.nan
+        return out
+    if method == "spearman":
+        from scipy.stats import rankdata
+
+        a = rankdata(a, axis=0)
+        b = rankdata(b)
+    da = a - a.mean(axis=0)
+    db = b - b.mean()
+    scale = np.sqrt(np.einsum("ij,ij->j", da, da) * (db @ db))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out = (db @ da) / scale
+    out[scale == 0] = np.nan
+    return np.clip(out, -1.0, 1.0)
+
+
+def _column_labels(names, columns: list, argument: str) -> list:
+    """``include`` / ``exclude`` as a list of column labels; unknown labels raise."""
+    if names is None:
+        return []
+    if isinstance(names, str) or not isinstance(names, (list, tuple, set, pd.Index, np.ndarray)):
+        names = [names]
+    names = list(names)
+    unknown = [name for name in names if name not in columns]
+    if unknown:
+        raise ValueError(f"quickpred: {argument} names columns that are not in the data: {unknown}")
+    return names
+
+
+def quickpred(
+    data: pd.DataFrame,
+    mincor=0.1,
+    minpuc=0.0,
+    include=None,
+    exclude=None,
+    method: str = "pearson",
+) -> pd.DataFrame:
+    """Select predictors by simple statistics, as R's ``quickpred``.
+
+    Reproduces ``mice::quickpred`` of R mice 3.19.0. For every pair of a
+    target (row) and a predictor (column) it computes, on the pairwise
+    complete cases,
+
+    - the absolute correlation between the two columns, and
+    - the absolute correlation between the target's response indicator
+      (1 where the target is observed, 0 where it is missing) and the
+      predictor,
+
+    and uses the predictor if the larger of the two exceeds `mincor`
+    (strictly). Then:
+
+    1. if `minpuc` is not 0, a predictor is dropped when its proportion of
+       usable cases is below `minpuc`: of the rows where the target is
+       missing, the share where the predictor is observed;
+    2. the columns in `exclude` are dropped as predictors of every target;
+    3. the columns in `include` are added as predictors of every target
+       (so a column in both lists is included);
+    4. the diagonal is set to 0, and so are the rows of complete columns.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        The incomplete data. Categorical, object, string and boolean columns
+        enter by their level codes, as R's ``data.matrix`` does (see Notes).
+    mincor : float or array-like, default 0.1
+        Minimum absolute correlation. A vector of length ``n_columns`` holds
+        one threshold per target, a square matrix one per pair, as in R.
+    minpuc : float or array-like, default 0.0
+        Minimum proportion of usable cases, shaped like `mincor`. With 0 no
+        predictor is dropped for this reason.
+    include : label or list of labels, optional
+        Columns used as predictors of every target.
+    exclude : label or list of labels, optional
+        Columns never used as predictors.
+    method : {"pearson", "kendall", "spearman"}, default "pearson"
+        Correlation coefficient.
+
+    Returns
+    -------
+    pd.DataFrame
+        Integer 0/1 matrix with the columns of `data` as index (targets) and
+        as columns (predictors); pass it to ``MICE.impute`` as
+        ``predictor_matrix``.
+
+    Raises
+    ------
+    ValueError
+        For an unknown `method`, or `include` / `exclude` naming a column
+        that is not in `data`.
+
+    Notes
+    -----
+    Differences from R: `include` and `exclude` take exact column labels
+    (R matches partial names with ``pmatch``), and an unknown label raises
+    instead of being ignored. The level codes of an unordered categorical
+    with three or more levels depend on its level order, so its
+    correlations do too, as in R; object and string columns use their
+    sorted values as levels.
+
+    Examples
+    --------
+    >>> import imputation
+    >>> pred = imputation.quickpred(data, mincor=0.3, include=["age"])
+    >>> imputation.MICE(data).impute(predictor_matrix=pred)  # doctest: +SKIP
+    """
+    if not isinstance(data, pd.DataFrame):
+        data = pd.DataFrame(data)
+    if method not in _CORRELATION_METHODS:
+        raise ValueError(f"quickpred: method must be one of {_CORRELATION_METHODS}, got {method!r}")
+    columns = list(data.columns)
+    include = _column_labels(include, columns, "include")
+    exclude = _column_labels(exclude, columns, "exclude")
+    n_cols = len(columns)
+    predictors = np.zeros((n_cols, n_cols), dtype=int)
+    if n_cols == 0:
+        return pd.DataFrame(predictors, index=data.columns, columns=data.columns)
+
+    x = np.column_stack([_as_numeric(data.iloc[:, j]) for j in range(n_cols)])
+    observed = ~np.isnan(x)
+
+    # 1) correlation of the columns, pairwise complete
+    v = pd.DataFrame(x).corr(method=method).to_numpy()
+    # 2) correlation of the target's response indicator (row) with the
+    #    predictor's values (column), on the rows where the predictor is observed
+    u = np.empty((n_cols, n_cols))
+    for j in range(n_cols):
+        rows = observed[:, j]
+        u[:, j] = _correlation_columns_with(observed[rows].astype(float), x[rows, j], method)
+    largest = np.fmax(np.nan_to_num(np.abs(v)), np.nan_to_num(np.abs(u)))
+
+    mincor = np.asarray(mincor, dtype=float)
+    minpuc = np.asarray(minpuc, dtype=float)
+    # A vector holds one value per target (row), as R recycles it by column
+    if mincor.ndim == 1:
+        mincor = mincor[:, None]
+    if minpuc.ndim == 1:
+        minpuc = minpuc[:, None]
+    predictors[largest > mincor] = 1
+
+    if np.any(minpuc != 0):
+        missing = ~observed
+        usable = missing.T.astype(int) @ observed.astype(int)  # target missing, predictor observed
+        with np.errstate(invalid="ignore", divide="ignore"):
+            puc = usable / missing.sum(axis=0)[:, None]
+        predictors[puc < minpuc] = 0  # NaN (complete target) compares False
+
+    predictors[:, [columns.index(c) for c in exclude]] = 0
+    predictors[:, [columns.index(c) for c in include]] = 1
+    np.fill_diagonal(predictors, 0)
+    predictors[observed.all(axis=0), :] = 0
+    return pd.DataFrame(predictors, index=data.columns, columns=data.columns)

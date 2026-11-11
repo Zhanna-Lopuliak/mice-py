@@ -323,3 +323,101 @@ def test_find_collinear_threshold():
 def test_find_collinear_empty_frame():
     # Not R: R stops with "'x' is empty" (mice never calls it without predictors)
     assert find_collinear(pd.DataFrame(index=range(3))) == []
+
+
+# ---------------------------------------------------------------------------
+# quickpred
+# ---------------------------------------------------------------------------
+
+
+def _quickpred_frame():
+    """Numeric, categorical (level order mid, lo, hi), object and boolean columns,
+    all incomplete. R: the same with ``factor(..., levels = c("mid", "lo", "hi"))``,
+    a character column ``s`` and a logical column ``b``."""
+    i = np.arange(1, 31)
+    a = np.sin(i)
+    cg = np.cos(1.7 * i)
+    g = pd.Categorical(
+        np.where(cg > 0.3, "hi", np.where(cg < -0.3, "lo", "mid")), categories=["mid", "lo", "hi"]
+    )
+    data = pd.DataFrame(
+        {
+            "y": a + 0.4 * np.cos(2.3 * i),
+            "a": a,
+            "g": g,
+            "s": pd.Series(np.array(["r", "p", "q"], dtype=object)[i % 3], dtype=object),
+            "b": pd.Series(np.sin(0.9 * i) > 0, dtype=object),
+        }
+    )
+    data.loc[np.array([2, 5, 9, 14, 22, 27]) - 1, "y"] = np.nan
+    data.loc[np.array([3, 9, 17, 25]) - 1, "g"] = np.nan
+    data.loc[a > 0.85, "a"] = np.nan
+    data.loc[np.array([4, 11]) - 1, "s"] = np.nan
+    data.loc[np.array([6, 21, 30]) - 1, "b"] = np.nan
+    return data
+
+
+# R: quickpred(d, ...) rows y, a, g, s, b, each row written as a string of 0/1
+@pytest.mark.parametrize(
+    "arguments, expected",
+    [
+        ({}, "01110 10111 10011 11101 01110"),
+        ({"mincor": 0.25}, "01010 10000 00000 11101 00010"),
+        ({"mincor": 0.25, "minpuc": 0.7}, "00010 00000 00000 11101 00010"),
+        ({"mincor": 0.25, "method": "spearman"}, "01000 10000 00000 11101 00010"),
+        ({"mincor": 0.25, "method": "kendall"}, "01000 10000 00000 11101 00010"),
+        ({"mincor": [0.5, 0.05, 0.3, 0.2, 0.9]}, "01000 10111 00000 11101 00000"),
+        ({"mincor": 0.25, "include": "s", "exclude": ["a", "s"]}, "00010 10010 00010 10101 00010"),
+    ],
+    ids=["default", "mincor", "minpuc", "spearman", "kendall", "mincor_per_target", "include_exclude"],
+)
+def test_quickpred_with_categorical_object_and_boolean_columns_matches_r(arguments, expected):
+    from imputation import quickpred
+
+    data = _quickpred_frame()
+    got = quickpred(data, **arguments)
+    assert list(got.index) == list(data.columns) and list(got.columns) == list(data.columns)
+    assert all(dtype.kind == "i" for dtype in got.dtypes)
+    assert " ".join("".join(map(str, row)) for row in got.to_numpy()) == expected
+
+
+def test_quickpred_uses_the_response_indicator():
+    """Row s with mincor 0.25: every predictor enters through the correlation of
+    s's response indicator with it (0.30 to 0.34 in R), none through the data
+    correlation (at most 0.27, with y)."""
+    from imputation import quickpred
+
+    data = _quickpred_frame()
+    got = quickpred(data, mincor=0.25)
+    assert got.loc["s"].tolist() == [1, 1, 1, 0, 1]
+
+
+def test_quickpred_threshold_is_strict():
+    """A constant predictor has no correlation (R: NA, counted as 0); 0 > 0 is
+    false, so it is not selected even with mincor 0."""
+    from imputation import quickpred
+
+    data = _frame(y=np.where(RY, Y, np.nan), x=X1, c=np.ones(N))
+    got = quickpred(data, mincor=0.0)
+    assert got.loc["y"].tolist() == [0, 1, 0]
+    assert got.loc[["x", "c"]].eq(0).all().all()
+
+
+def test_quickpred_rejects_unknown_columns_and_methods():
+    from imputation import quickpred
+
+    data = _quickpred_frame()
+    with pytest.raises(ValueError, match="include"):
+        quickpred(data, include=["nope"])
+    with pytest.raises(ValueError, match="exclude"):
+        quickpred(data, exclude="nope")
+    with pytest.raises(ValueError, match="method"):
+        quickpred(data, method="cosine")
+
+
+def test_quickpred_is_exported():
+    import imputation
+    from imputation.design import quickpred
+
+    assert imputation.quickpred is quickpred
+    assert "quickpred" in imputation.__all__

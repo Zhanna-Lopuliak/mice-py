@@ -6,10 +6,13 @@ imputer signatures and raises on unknown names. Planned: NumPy integers are
 accepted for ``n_imputations`` and ``maxit``.
 """
 
+import warnings
+
 import numpy as np
+import pandas as pd
 import pytest
 
-from ._helpers import METHODS, impute, numeric_frame, pmm_reference_frame
+from ._helpers import METHODS, full_predictor_matrix, impute, numeric_frame, pmm_reference_frame
 
 
 def _problem():
@@ -68,13 +71,32 @@ def test_valid_parameter_of_another_method_is_accepted():
 
 
 def test_quickpred_arguments_still_accepted():
+    """Deprecated for one version; they build the matrix with imputation.quickpred,
+    whose rows of complete columns (d, k) are 0, as in R."""
     df = numeric_frame(n=30)
-    mice, _ = impute(
-        df, "pmm", n_imputations=1, maxit=1, predictor_matrix=None,
-        min_cor=0.0, min_puc=0.0, include=["d"], exclude=["k"], correlation_method="spearman",
-    )
-    assert mice.predictor_matrix["d"].drop("d").eq(1).all()
+    with pytest.warns(DeprecationWarning, match="imputation.quickpred"):
+        mice, _ = impute(
+            df, "pmm", n_imputations=1, maxit=1, predictor_matrix=None,
+            min_cor=0.0, min_puc=0.0, include=["d"], exclude=["k"], correlation_method="spearman",
+        )
+    assert mice.predictor_matrix.loc[["a", "b", "c"], "d"].eq(1).all()
     assert mice.predictor_matrix["k"].eq(0).all()
+    assert mice.predictor_matrix.loc[["d", "k"]].eq(0).all().all()
+
+
+def test_quickpred_arguments_with_predictor_matrix_are_ignored_and_deprecated():
+    df = numeric_frame(n=30)
+    with pytest.warns(DeprecationWarning, match="min_cor"):
+        mice, _ = impute(df, "pmm", n_imputations=1, maxit=1, min_cor=0.9)
+    pd.testing.assert_frame_equal(mice.predictor_matrix, full_predictor_matrix(df), check_dtype=False)
+
+
+def test_without_quickpred_arguments_the_full_matrix_is_used_without_warning():
+    df = numeric_frame(n=30)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        mice, _ = impute(df, "pmm", n_imputations=1, maxit=1, predictor_matrix=None)
+    pd.testing.assert_frame_equal(mice.predictor_matrix, full_predictor_matrix(df), check_dtype=False)
 
 
 def test_output_dir_is_deprecated_and_ignored(tmp_path):

@@ -34,10 +34,9 @@ def method_params(xfails=None, methods=METHODS):
 
 
 def full_predictor_matrix(df):
-    """All ones with a zero diagonal: R's default and the planned default (A7).
+    """All ones with a zero diagonal: R's default and the default of ``impute``.
 
-    Passing it explicitly keeps these tests independent of today's
-    ``_quickpred`` default, so a test flips only when its own finding is fixed.
+    Passing it explicitly keeps these tests independent of that default.
     """
     pm = pd.DataFrame(1, index=df.columns, columns=df.columns)
     np.fill_diagonal(pm.values, 0)

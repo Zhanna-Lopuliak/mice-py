@@ -12,12 +12,14 @@ package_logger.addHandler(logging.NullHandler())
 package_logger.propagate = False
 
 from .MICE import MICE
+from .design import quickpred
 from .logging_config import setup_logging, get_logger, disable_logging, reset_logging
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     'MICE', 
+    'quickpred',
     'setup_logging', 
     'get_logger',
     'disable_logging',

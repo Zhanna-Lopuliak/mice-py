@@ -59,10 +59,17 @@ from .utils import get_imputer_func, get_imputer_params
 # External helpers
 from .mice_result import MICEresult
 from .pooling import pool_descriptive_statistics, pool_estimates, _residual_df
-from .design import obtain_design, find_collinear, _as_numeric, _remove_lindep
+from .design import obtain_design, find_collinear, quickpred, _as_numeric, _remove_lindep
 
-# Keyword arguments of `MICE.impute` that are passed to `_quickpred`
-_QUICKPRED_ARGUMENTS = ('min_cor', 'min_puc', 'include', 'exclude', 'correlation_method')
+# Deprecated keyword arguments of `MICE.impute`, and the matching arguments
+# of `imputation.quickpred`
+_QUICKPRED_ARGUMENTS = {
+    'min_cor': 'mincor',
+    'min_puc': 'minpuc',
+    'include': 'include',
+    'exclude': 'exclude',
+    'correlation_method': 'method',
+}
 
 # Columns of `MICE.logged_events`, as R's `loggedEvents`
 _LOG_COLUMNS = ('it', 'im', 'dep', 'meth', 'out')
@@ -146,7 +153,7 @@ def _check_method_params(params):
             hint = (
                 "Method parameters take the form <method>_<parameter>; valid ones: "
                 f"{', '.join(f'{m}_{p}' for m, names in valid.items() for p in names)}. "
-                f"Other keyword arguments: {', '.join(_QUICKPRED_ARGUMENTS)}."
+                f"Deprecated keyword arguments: {', '.join(_QUICKPRED_ARGUMENTS)}."
             )
         raise TypeError(f"impute() got an unexpected keyword argument '{key}'. {hint}")
 
@@ -320,13 +327,14 @@ class MICE:
             - `output_dir`: deprecated and ignored; passing it issues a
               ``DeprecationWarning``.
 
-            When `predictor_matrix` is not specified, the following can be passed for `_quickpred`:
-            - `min_cor` (float, default=0.1): Minimum correlation for a predictor.
-            - `min_puc` (float, default=0.0): Minimum proportion of usable cases.
-            - `include` (list, optional): Columns to always include as predictors.
-            - `exclude` (list, optional): Columns to always exclude as predictors.
-            - `correlation_method` (str, default="pearson"): Correlation method used to
-              compute the correlation matrix inside `_quickpred`.
+            Deprecated, to be removed in the next version: `min_cor`,
+            `min_puc`, `include`, `exclude` and `correlation_method`. When
+            `predictor_matrix` is None, they build the predictor matrix with
+            ``imputation.quickpred(data, mincor=min_cor, minpuc=min_puc,
+            include=include, exclude=exclude, method=correlation_method)``;
+            otherwise they are ignored. Passing any of them issues a
+            ``DeprecationWarning``. Call `imputation.quickpred` and pass its
+            result as `predictor_matrix` instead.
 
         Returns
         -------
@@ -386,24 +394,29 @@ class MICE:
                 DeprecationWarning,
                 stacklevel=2,
             )
-        quickpred_args = {name: kwargs.pop(name) for name in _QUICKPRED_ARGUMENTS if name in kwargs}
+        deprecated = [name for name in _QUICKPRED_ARGUMENTS if name in kwargs]
+        quickpred_args = {_QUICKPRED_ARGUMENTS[name]: kwargs.pop(name) for name in deprecated}
         _check_method_params(kwargs)
+        if deprecated:
+            warnings.warn(
+                f"The arguments {', '.join(deprecated)} of impute() are deprecated and will be removed "
+                "in the next version. Build the predictor matrix with imputation.quickpred(data, "
+                "mincor=..., minpuc=..., include=..., exclude=..., method=...) and pass it as "
+                "predictor_matrix.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
         if predictor_matrix is None and not quickpred_args:
             predictor_matrix = _full_predictor_matrix(list(self.data.columns))
         elif predictor_matrix is None:
-            predictor_matrix = self._quickpred(
-                min_cor=quickpred_args.get('min_cor', 0.1),
-                min_puc=quickpred_args.get('min_puc', 0.0),
-                include=quickpred_args.get('include'),
-                exclude=quickpred_args.get('exclude'),
-                method=quickpred_args.get('correlation_method', 'pearson')
-            )
+            predictor_matrix = quickpred(self.data, **quickpred_args)
+            logger.debug(f"Predictor matrix from quickpred:\n{predictor_matrix}")
         else:
             if quickpred_args:
                 logger.warning(
                     "Arguments %s only apply when predictor_matrix is None; they are ignored.",
-                    sorted(quickpred_args)
+                    deprecated
                 )
             predictor_matrix = validate_predictor_matrix(predictor_matrix, list(self.data.columns), self.data)
             logger.debug("Predictor matrix validated successfully")
@@ -595,85 +608,6 @@ class MICE:
         if self._not_imputed:
             logger.info("Not imputed because constant or collinear: %s", self._not_imputed)
         return pd.DataFrame(pred, index=predictor_matrix.index, columns=predictor_matrix.columns)
-
-    def _quickpred(
-        self, 
-        min_cor: float = 0.1, 
-        min_puc: float = 0.0, 
-        include: Optional[List[str]] = None,
-        exclude: Optional[List[str]] = None,
-        method: str = "pearson"
-    ) -> pd.DataFrame:
-        """
-        Generate a predictor matrix based on correlation and proportion of usable cases.
-        
-        This method is inspired by the `quickpred` function from the R `mice` package.
-        
-        Parameters
-        ----------
-        min_cor : float, default=0.1
-            The minimum absolute correlation required to be included as a predictor.
-        min_puc : float, default=0.0
-            The minimum proportion of usable cases for correlation calculation.
-        include : list of str, optional
-            Columns to always include as predictors.
-        exclude : list of str, optional
-            Columns to always exclude as predictors.
-        method : str, default="pearson"
-            The correlation method to use ('pearson', 'kendall', 'spearman').
-        
-        Returns
-        -------
-        pd.DataFrame
-            A square binary matrix indicating predictor relationships.
-        """
-        logger.info(f"Estimating predictor matrix with min_cor={min_cor}, min_puc={min_puc}, method='{method}'")
-        
-        predictor_matrix = pd.DataFrame(0, index=self.data.columns, columns=self.data.columns)
-        
-        # Calculate correlation matrix only for numeric columns
-        numeric_cols = self.data.select_dtypes(include=[np.number]).columns
-        cor_matrix = self.data[numeric_cols].corr(method=method)
-
-        for target_col in self.data.columns:
-            # Skip targets with no missing values
-            if self.id_obs[target_col].all():
-                continue
-
-            for predictor_col in self.data.columns:
-                if target_col == predictor_col:
-                    continue
-
-                # Proportion of usable cases
-                puc = self.data[[target_col, predictor_col]].notna().all(axis=1).mean()
-
-                if puc >= min_puc:
-                    # Only use correlation if both columns are numeric
-                    if target_col in cor_matrix.index and predictor_col in cor_matrix.columns:
-                        correlation = cor_matrix.loc[target_col, predictor_col]
-                        if abs(correlation) >= min_cor:
-                            predictor_matrix.loc[target_col, predictor_col] = 1
-                    else:
-                        # For non-numeric columns, use them as predictors
-                        predictor_matrix.loc[target_col, predictor_col] = 1
-        
-        # Handle include and exclude lists with validation for unknown columns
-        if include:
-            unknown_includes = [c for c in include if c not in predictor_matrix.columns]
-            if unknown_includes:
-                raise ValueError(f"_quickpred include contains unknown columns: {unknown_includes}")
-            predictor_matrix.loc[:, include] = 1
-        if exclude:
-            unknown_excludes = [c for c in exclude if c not in predictor_matrix.columns]
-            if unknown_excludes:
-                raise ValueError(f"_quickpred exclude contains unknown columns: {unknown_excludes}")
-            predictor_matrix.loc[:, exclude] = 0
-            
-        # Ensure diagonal is zero
-        np.fill_diagonal(predictor_matrix.values, 0)
-        
-        logger.debug(f"Estimated predictor matrix:\n{predictor_matrix}")
-        return predictor_matrix
 
     def fit(self, formula: str, model=None, model_kwargs: Optional[Dict] = None, **fit_kwargs):
         """
