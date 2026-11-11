@@ -1,0 +1,41 @@
+{
+  "description": "Scenario S4: n = 50, x1 MCAR 50%, m = 5, univariate mice.impute.* calls, lm(y ~ x1 + x2); mean over replications of the pooled x1 coefficient and of its between-imputation variance B, with sd / sqrt(reps).",
+  "n": 50,
+  "m": 5,
+  "reps": 20000,
+  "chunks": 40,
+  "seed": 20261111,
+  "rng": "L'Ecuyer-CMRG, one stream per chunk",
+  "mean_n_obs": 24.9895,
+  "truth_x1": 1,
+  "methods": {
+    "pmm": {
+      "qbar_x1": {
+        "mean": 0.94300161944338001,
+        "se": 0.0017387168313176347,
+        "sd": 0.24589169239757722
+      },
+      "b_x1": {
+        "mean": 0.016008228779470227,
+        "se": 0.00018353727567550551,
+        "sd": 0.025956090446130946
+      }
+    },
+    "midastouch": {
+      "qbar_x1": {
+        "mean": 0.95179850779345487,
+        "se": 0.0017959483313981094,
+        "sd": 0.25398544875845364
+      },
+      "b_x1": {
+        "mean": 0.02670515812692462,
+        "se": 0.00026275275470887764,
+        "sd": 0.037158850926018588
+      }
+    }
+  },
+  "meta": {
+    "r": "R version 4.6.2 (2026-10-29)",
+    "mice": "3.19.0"
+  }
+}
