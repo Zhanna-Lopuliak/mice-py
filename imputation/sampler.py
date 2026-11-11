@@ -237,14 +237,15 @@ def estimice(x: ArrayLike, y: ArrayLike, ls_meth: str = "qr", ridge: float = 1e-
         return {"c": c.flatten(), "r": r.flatten(), "v": v, "df": df, "ls_meth": ls_meth}
     # Singular Value Decomposition
     elif ls_meth == "svd":
-        svd = np.linalg.svd(x, full_matrices=False)
+        # unpacked rather than read by name: NumPy < 2.0 returns a plain tuple
+        u, s, vh = np.linalg.svd(x, full_matrices=False)
         # x = U diag(S) V' with V = Vh.T; singular values near 0 contribute nothing
-        kept = svd.S > ALIAS_TOL * svd.S.max(initial=0.0)
-        uty = (svd.U).T @ y
-        c = svd.Vh.T @ np.divide(uty, svd.S, out=np.zeros_like(uty), where=kept)
+        kept = s > ALIAS_TOL * s.max(initial=0.0)
+        uty = u.T @ y
+        c = vh.T @ np.divide(uty, s, out=np.zeros_like(uty), where=kept)
         f = x @ c
         r = f - y
-        v = _inverse_or_ridge((svd.Vh.T * svd.S**2) @ svd.Vh, ridge)
+        v = _inverse_or_ridge((vh.T * s**2) @ vh, ridge)
         return {"c": c.flatten(), "r": r.flatten(), "v": v, "df": df, "ls_meth": ls_meth}
     raise ValueError(f"unknown ls_meth {ls_meth!r}; use 'qr', 'ridge' or 'svd'")
 
