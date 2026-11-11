@@ -183,11 +183,15 @@ class MICE:
         ------
         ValueError
             If data is not a pandas DataFrame or contains duplicate column names
+        TypeError
+            If a column has a dtype that cannot be imputed (for example
+            datetime or complex); the message names the column and the dtype
 
         Notes
         -----
-        Columns that are entirely missing are kept: they are not imputed and
-        not used as predictors (see `impute`).
+        Rows and columns that are entirely missing are kept. Such a row is
+        imputed like any other; such a column is not imputed and not used as
+        a predictor (see `impute`).
         """
         # Check if logging has been configured and provide guidance if needed
         _check_logging_configured()
@@ -347,6 +351,8 @@ class MICE:
         check_n_imputations(n_imputations)
         check_maxit(maxit)
         check_initial_method(initial)
+        n_imputations = int(n_imputations)
+        maxit = int(maxit)
 
         # One seed sequence per call, split into independent streams: the
         # first for the random visit sequence, then one per chain. Chain k

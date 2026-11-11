@@ -24,9 +24,6 @@ from ._helpers import (
 
 NON_MIDAS = ("pmm", "cart", "rf", "sample")
 
-C4_EMPTY = "C4: validate_dataframe drops all-empty rows"
-C4_PRINT = "C4: validators print to stdout"
-
 
 def _check(df, method, n_imputations=N_IMP, maxit=MAXIT, **kwargs):
     before = df.copy(deep=True)
@@ -344,7 +341,7 @@ def test_target_without_predictors(method):
 # Rows, columns and sizes
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("method", method_params({m: C4_EMPTY for m in METHODS}))
+@pytest.mark.parametrize("method", method_params())
 def test_all_empty_row_is_kept_and_imputed(method):
     df = numeric_frame(n=30)
     df["k"] = df["k"].astype(float)  # the int column is about to hold a NaN
@@ -352,7 +349,6 @@ def test_all_empty_row_is_kept_and_imputed(method):
     _check(df, method)
 
 
-@pytest.mark.xfail(strict=True, reason=C4_PRINT)
 def test_validation_does_not_print(capsys):
     from imputation import MICE
 

@@ -1,4 +1,4 @@
-"""The setup step and the per-call design matrix of ``MICE.impute`` (C6, B2, B7 to B9).
+"""The setup step and the per-call design matrix of ``MICE.impute`` (C6, B2, B7 to B9, C4).
 
 ``impute`` edits the imputation model as R's ``mice`` does: before the chains
 (``mice.edit.setup``: constant and collinear variables) and around each
@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ._helpers import assert_all_invariants, full_predictor_matrix, impute
+from ._helpers import N_IMP, MAXIT, assert_all_invariants, full_predictor_matrix, impute
 
 LOG_COLUMNS = ["it", "im", "dep", "meth", "out"]
 
@@ -361,3 +361,38 @@ def test_tree_methods_accept_string_dtype_predictors_directly(method):
     ry[::8] = False
     out = imputer(y, ry, pd.DataFrame({"s": s, "x": rng.normal(size=n)}), rng=np.random.default_rng(0))
     assert len(out) == 5 and np.isin(out, y[ry]).all()
+
+
+# ---------------------------------------------------------------------------
+# input handling (C4)
+# ---------------------------------------------------------------------------
+
+def test_unsupported_dtype_raises_type_error_naming_column_and_dtype():
+    from imputation import MICE
+
+    df = pd.DataFrame({"a": [1.0, np.nan, 3.0], "when": pd.date_range("2024-01-01", periods=3)})
+    with pytest.raises(TypeError, match=r"'when' has dtype datetime64\[ns\]"):
+        MICE(df)
+
+
+def test_all_empty_row_warns_and_nothing_is_printed(capsys):
+    from imputation import MICE
+
+    df = _redundant_columns_frame()
+    df.iloc[6, :] = np.nan
+    with pytest.warns(UserWarning, match="1 row"):
+        mice = MICE(df)
+    assert mice.data.shape == df.shape
+    assert capsys.readouterr().out == ""
+
+
+def test_complete_rows_in_predictor_matrix_do_not_warn():
+    """Rows of complete variables are allowed and unused, as in R."""
+    from ._helpers import regression_frame
+
+    df = regression_frame()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        mice, out = impute(df, "pmm", n_imputations=N_IMP, maxit=MAXIT)
+    assert mice.method == {"y": "pmm", "x1": "", "x2": ""}
+    assert len(out) == N_IMP

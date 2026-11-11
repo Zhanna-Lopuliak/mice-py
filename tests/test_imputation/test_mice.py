@@ -19,7 +19,7 @@ class TestMICEInitialization:
         mice = MICE(sample_data_missing)
         
         assert isinstance(mice.data, pd.DataFrame)
-        assert mice.data.shape == sample_data_missing.dropna(how='all').shape
+        assert mice.data.shape == sample_data_missing.shape
         assert hasattr(mice, 'id_obs')
         assert hasattr(mice, 'id_mis')
         

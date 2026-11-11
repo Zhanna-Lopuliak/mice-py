@@ -1,4 +1,5 @@
 import logging
+import numbers
 import pandas as pd
 import warnings
 from typing import Dict, Union, List
@@ -7,6 +8,11 @@ import numpy as np
 import re
 
 logger = logging.getLogger('imputation.validators')
+
+
+def _is_integer(value) -> bool:
+    """True for Python and NumPy integers; False for booleans."""
+    return isinstance(value, numbers.Integral) and not isinstance(value, (bool, np.bool_))
 
 
 def _is_valid_method(method) -> bool:
@@ -21,21 +27,25 @@ def check_n_imputations(n_imputations: int) -> None:
     Parameters
     ----------
     n_imputations : int
-        Number of imputations to perform
+        Number of imputations to perform (a Python or NumPy integer)
         
     Raises
     ------
     ValueError
         If n_imputations is not a positive integer
     """
-    if not isinstance(n_imputations, int):
+    if not _is_integer(n_imputations):
         raise ValueError("n_imputations must be a positive integer")
     
     if n_imputations <= 0:
         raise ValueError("n_imputations must be a positive integer")
         
     if n_imputations > 100:
-        print(f"Warning: {n_imputations} imputations is a large number. This might take a while to compute.")
+        warnings.warn(
+            f"{n_imputations} imputations is a large number. This might take a while to compute.",
+            UserWarning,
+            stacklevel=3,
+        )
 
 def check_maxit(maxit: int) -> None:
     """
@@ -44,21 +54,22 @@ def check_maxit(maxit: int) -> None:
     Parameters
     ----------
     maxit : int
-        Maximum number of iterations for each imputation cycle
+        Maximum number of iterations for each imputation cycle (a Python or
+        NumPy integer)
         
     Raises
     ------
     ValueError
         If maxit is not a positive integer
     """
-    if not isinstance(maxit, int):
+    if not _is_integer(maxit):
         raise ValueError("maxit must be an integer")
     
     if maxit <= 0:
         raise ValueError("maxit must be a positive integer")
         
     if maxit > 50:
-        warnings.warn("maxit is greater than 50, imputations will take a lot of time", UserWarning)
+        warnings.warn("maxit is greater than 50, imputations will take a lot of time", UserWarning, stacklevel=3)
 
 def check_method(method: Union[str, Dict[str, str]], columns: List[str]) -> Dict[str, str]:
     """
@@ -275,12 +286,28 @@ def validate_predictor_matrix(predictor_matrix: pd.DataFrame, data_columns: List
 
     return predictor_matrix
 
+def _is_supported_dtype(dtype) -> bool:
+    """Numeric (not complex), boolean, categorical, object or string."""
+    if isinstance(dtype, pd.CategoricalDtype):
+        return True
+    if pd.api.types.is_bool_dtype(dtype):
+        return True
+    if pd.api.types.is_complex_dtype(dtype):
+        return False
+    if pd.api.types.is_numeric_dtype(dtype):
+        return True
+    return pd.api.types.is_object_dtype(dtype) or pd.api.types.is_string_dtype(dtype)
+
+
 def validate_columns(data: pd.DataFrame) -> pd.DataFrame:
     """
-    Validate columns in the DataFrame.
+    Check that every column has a dtype that can be imputed.
     
-    Columns that are entirely missing are kept: they are neither imputed
-    nor used as predictors (see :meth:`imputation.MICE.impute`).
+    Supported are numeric columns (including pandas' nullable ``Int64`` and
+    ``Float64``), ``bool`` and ``boolean``, ``category``, ``object`` and
+    ``string``. Object and string columns are treated as categorical
+    variables. Columns that are entirely missing are kept: they are neither
+    imputed nor used as predictors (see :meth:`imputation.MICE.impute`).
     
     Parameters
     ----------
@@ -292,11 +319,25 @@ def validate_columns(data: pd.DataFrame) -> pd.DataFrame:
     pd.DataFrame
         The same DataFrame
         
+    Raises
+    ------
+    TypeError
+        If a column has another dtype (for example datetime, timedelta,
+        period or complex); the message names the column and its dtype.
+        
     Notes
     -----
     Missing data values that are treated as NaN:
-    - pandas NaN (numpy.nan)
+    - pandas NaN (numpy.nan), None and pd.NA
     """
+    unsupported = [(col, data[col].dtype) for col in data.columns if not _is_supported_dtype(data[col].dtype)]
+    if unsupported:
+        details = ", ".join(f"{col!r} has dtype {dtype}" for col, dtype in unsupported)
+        raise TypeError(
+            f"Unsupported column dtype: {details}. Columns must be numeric (int, float, "
+            "Int64, Float64), bool, boolean, category, object or string."
+        )
+
     empty_cols = [col for col in data.columns if data[col].isna().all()]
     if empty_cols:
         logger.info("Columns without any observed value (not imputed, not used as predictors): %s", empty_cols)
@@ -315,17 +356,24 @@ def validate_dataframe(data) -> pd.DataFrame:
     Returns
     -------
     pd.DataFrame
-        Validated and cleaned DataFrame
+        The data as a DataFrame. Rows and columns that are entirely missing
+        are kept.
         
     Raises
     ------
     ValueError
         If data cannot be converted to DataFrame or has duplicate column names
         
+    Warns
+    -----
+    UserWarning
+        If some rows are entirely missing. They are kept and imputed, but
+        their imputations carry no information from the row itself.
+
     Notes
     -----
     Missing data values that are treated as NaN:
-    - pandas NaN (numpy.nan)
+    - pandas NaN (numpy.nan), None and pd.NA
     """
     # Try to convert to DataFrame if it's not already one
     try:
@@ -337,19 +385,20 @@ def validate_dataframe(data) -> pd.DataFrame:
     # Check for duplicate column names
     duplicate_cols = data.columns[data.columns.duplicated()].tolist()
     if duplicate_cols:
-        print(f"Found duplicate column names: {duplicate_cols}. Please make sure that the column names are unique.")
-        raise ValueError("DataFrame contains duplicate column names")
-    
-    # Check for fully empty rows
-    n_rows_before = len(data)
-    data = data.dropna(how='all')
-    n_rows_after = len(data)
-    n_dropped = n_rows_before - n_rows_after
-    
-    if n_dropped > 0:
-        print(f"Dropped {n_dropped} fully empty rows")
-    
-    # Columns with no values are kept; MICE neither imputes nor uses them
+        raise ValueError(
+            f"DataFrame contains duplicate column names: {duplicate_cols}. "
+            "Please make sure that the column names are unique."
+        )
+
+    # Fully empty rows are kept and imputed
+    n_empty_rows = int(data.isna().all(axis=1).sum()) if data.shape[1] else 0
+    if n_empty_rows > 0:
+        warnings.warn(
+            f"{n_empty_rows} row(s) have no observed value. They are kept and imputed, "
+            "but their imputations use no information from the row itself.",
+            UserWarning,
+            stacklevel=3,
+        )
     
     return data
 

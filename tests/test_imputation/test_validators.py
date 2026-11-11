@@ -42,14 +42,16 @@ class TestValidateDataframe:
         with pytest.raises(ValueError, match="DataFrame contains duplicate column names"):
             validate_dataframe(data)
             
-    def test_drop_empty_rows(self):
-        """Test dropping of fully empty rows."""
+    def test_keeps_empty_rows_and_warns(self, capsys):
+        """Fully empty rows are kept (and imputed later); a warning says so."""
         data = pd.DataFrame({
             'A': [1, np.nan, 3],
             'B': [2, np.nan, 4]
         })
-        result = validate_dataframe(data)
-        assert result.shape[0] == 2  # One row should be dropped
+        with pytest.warns(UserWarning, match="1 row"):
+            result = validate_dataframe(data)
+        pd.testing.assert_frame_equal(result, data)
+        assert capsys.readouterr().out == ""
         
     def test_keeps_empty_columns(self, capsys):
         """Fully empty columns are kept: they are not imputed and not used as predictors."""
@@ -62,6 +64,12 @@ class TestValidateDataframe:
             warnings.simplefilter("error")
             result = validate_dataframe(data)
         pd.testing.assert_frame_equal(result, data)
+        assert capsys.readouterr().out == ""
+
+    def test_duplicate_columns_error_does_not_print(self, capsys):
+        data = pd.DataFrame([[1, 2], [3, 4]], columns=['A', 'A'])
+        with pytest.raises(ValueError, match=r"duplicate column names: \['A'\]"):
+            validate_dataframe(data)
         assert capsys.readouterr().out == ""
 
 
@@ -83,6 +91,27 @@ class TestValidateColumns:
         result = validate_columns(data)
         pd.testing.assert_frame_equal(result, data)
 
+    @pytest.mark.parametrize("values", [
+        pd.date_range("2024-01-01", periods=3),
+        pd.to_timedelta([1, 2, 3], unit="D"),
+        np.array([1 + 1j, 2, 3]),
+        pd.period_range("2024-01", periods=3, freq="M"),
+    ], ids=["datetime", "timedelta", "complex", "period"])
+    def test_unsupported_dtype_names_column_and_dtype(self, values):
+        data = pd.DataFrame({'A': [1.0, np.nan, 3.0], 'when': values})
+        dtype = str(data['when'].dtype)
+        with pytest.raises(TypeError) as info:
+            validate_columns(data)
+        assert "'when'" in str(info.value) and dtype in str(info.value)
+
+    @pytest.mark.parametrize("dtype", ["Int64", "Float64", "boolean", "string", "category", "object", "bool"])
+    def test_supported_dtypes(self, dtype):
+        values = {"Int64": [1, None, 3], "Float64": [1.5, None, 3.0], "boolean": [True, None, False],
+                  "string": ["u", None, "v"], "category": ["u", None, "v"], "object": ["u", None, "v"],
+                  "bool": [True, False, True]}[dtype]
+        data = pd.DataFrame({'A': [1.0, np.nan, 3.0], 'z': pd.Series(values, dtype=dtype)})
+        assert validate_columns(data) is data
+
 
 class TestCheckParameters:
     """Test parameter validation functions."""
@@ -100,6 +129,19 @@ class TestCheckParameters:
             check_n_imputations(-1)
         with pytest.raises(ValueError, match="n_imputations must be a positive integer"):
             check_n_imputations(1.5)
+        with pytest.raises(ValueError, match="n_imputations must be a positive integer"):
+            check_n_imputations(True)
+
+    def test_numpy_integers_are_accepted(self):
+        check_n_imputations(np.int64(5))
+        check_n_imputations(np.int32(1))
+        check_maxit(np.int64(3))
+        check_maxit(np.uint8(2))
+
+    def test_many_imputations_warn_instead_of_print(self, capsys):
+        with pytest.warns(UserWarning, match="101 imputations"):
+            check_n_imputations(101)
+        assert capsys.readouterr().out == ""
             
     def test_check_maxit_valid(self):
         """Test valid maxit values."""

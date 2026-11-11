@@ -173,10 +173,6 @@ def test_default_donors_are_not_deterministic():
     assert not all(np.array_equal(c.loc[mis, "y"].to_numpy(), expected) for c in out)
 
 
-C4_NUMPY_INT = "C4: validators require a Python int and reject NumPy integers"
-
-
-@pytest.mark.xfail(strict=True, reason=C4_NUMPY_INT)
 @pytest.mark.parametrize("dtype", [np.int64, np.int32], ids=["int64", "int32"])
 def test_numpy_integer_n_imputations(dtype):
     df = numeric_frame(n=30)
@@ -185,7 +181,6 @@ def test_numpy_integer_n_imputations(dtype):
     assert all(v.shape == (2, 3) for v in mice.chain_mean.values())
 
 
-@pytest.mark.xfail(strict=True, reason=C4_NUMPY_INT)
 @pytest.mark.parametrize("dtype", [np.int64, np.int32], ids=["int64", "int32"])
 def test_numpy_integer_maxit(dtype):
     df = numeric_frame(n=30)
