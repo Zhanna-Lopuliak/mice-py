@@ -1,52 +1,37 @@
 Imputation Methods
 ==================
 
-This page documents the five imputation methods available in mice-py.
+Each method can be called on its own: ``f(y, id_obs, x, id_mis=None, ...,
+rng=None)`` returns the imputations of the cells in ``id_mis``. Through
+:meth:`imputation.MICE.impute` their parameters are passed with the method
+name as prefix (``pmm_donors=3``). See :doc:`../user_guide/imputation_methods`.
 
-PMM: Predictive Mean Matching
-------------------------------
+pmm
+---
 
 .. automodule:: imputation.PMM
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-CART: Classification and Regression Trees
-------------------------------------------
-
-.. automodule:: imputation.cart
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Random Forest
--------------
-
-.. automodule:: imputation.rf
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-MIDAS: Distance Aided Substitution
------------------------------------
+midas
+-----
 
 .. automodule:: imputation.midas
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-Sample: Random Sampling
------------------------
+cart
+----
+
+.. automodule:: imputation.cart
+   :members:
+
+rf
+--
+
+.. automodule:: imputation.rf
+   :members:
+
+sample
+------
 
 .. automodule:: imputation.sample
    :members:
-   :undoc-members:
-   :show-inheritance:
-
-See Also
---------
-
-- :doc:`../user_guide/imputation_methods` for practical guidance on choosing methods
-- :doc:`../theory/method_details` for theoretical background
-- :doc:`mice` for the main MICE class
-

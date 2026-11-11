@@ -1,31 +1,25 @@
 Theory & Background
 ===================
 
-Brief theoretical background for understanding MICE.
+A short theoretical background for using MICE. For derivations and proofs,
+see the :doc:`../references`, in particular van Buuren (2018), which is free
+online.
 
 .. toctree::
    :maxdepth: 2
 
    missing_data_mechanisms
    multiple_imputation_theory
-   method_details
    rubins_rules
 
-Overview
---------
+**Missing data mechanisms**
+   MCAR, MAR and MNAR.
 
-This section provides essential theoretical concepts needed to use MICE correctly.
+**Multiple imputation theory**
+   Why multiple imputation, and how chained equations work.
 
-**Missing Data Mechanisms**
-   MCAR, MAR, and MNAR definitions
+**Rubin's rules**
+   How the results of the completed datasets are combined.
 
-**Multiple Imputation Theory**
-   Why multiple imputation and how MICE works
-
-**Method Details**
-   Technical overview of each imputation method
-
-**Rubin's Rules**
-   How results are pooled
-
-For detailed mathematical derivations and proofs, see the references.
+The algorithms of the five imputation methods are described on
+:doc:`../user_guide/imputation_methods`.

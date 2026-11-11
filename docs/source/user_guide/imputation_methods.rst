@@ -1,417 +1,251 @@
 Imputation Methods
 ==================
 
-mice-py provides five different imputation methods. This guide helps you choose and 
-configure the right method for your data.
-
-Overview of Methods
--------------------
+mice-py has five of R mice's univariate imputation methods. Every method
+fills a missing cell with a value **observed** in the same column, so
+imputations stay within the range and the type of the data. The examples use ``df`` from the
+:ref:`example data <example-data>`.
 
 .. list-table::
    :header-rows: 1
-   :widths: 15 20 20 20 25
+   :widths: 13 17 35 35
 
    * - Method
-     - Best For
-     - Data Type
-     - Preserves
-     - Complexity
-   * - PMM
-     - General purpose
-     - Numeric
-     - Distribution
-     - Low
-   * - CART
-     - Non-linear
-     - Both
-     - Interactions
-     - Medium
-   * - Random Forest
-     - Complex patterns
-     - Both
-     - Interactions
-     - High
-   * - MIDAS
-     - Small samples
-     - Numeric
-     - Local patterns
-     - Low
-   * - Sample
-     - Quick & simple
-     - Both
-     - Observed values
-     - Very Low
+     - R name
+     - Model
+     - Target types
+   * - ``"pmm"``
+     - ``pmm``
+     - Bayesian linear regression, then the nearest observed values
+     - numeric, boolean, categorical, object, string
+   * - ``"midas"``
+     - ``midastouch``
+     - bootstrap-weighted regression, donors weighted by distance
+     - numeric, boolean
+   * - ``"cart"``
+     - ``cart``
+     - one classification or regression tree
+     - all
+   * - ``"rf"``
+     - ``rf``
+     - random forest
+     - all
+   * - ``"sample"``
+     - ``sample``
+     - none: draws from the observed values
+     - all
 
-PMM: Predictive Mean Matching
-------------------------------
-
-**When to use**: Default choice for numeric data, especially when preserving the 
-original distribution is important.
-
-How It Works
-~~~~~~~~~~~~
-
-1. Fit a Bayesian linear regression on observed values
-2. Generate predictions for both observed and missing values
-3. For each missing value, find the *k* closest observed values (donors) based on 
-   predicted values
-4. Randomly select one donor and use its observed value as the imputed value
-
-**Key advantage**: Imputed values are always from the observed data, so impossible 
-values cannot be generated.
-
-Usage
-~~~~~
+Choose a method per column with a dict; columns left out get ``"pmm"``.
+Method parameters are passed to ``impute`` with the method name as prefix:
 
 .. code-block:: python
 
-   # Basic usage
-   mice.impute(method='pmm')
-   
-   # With custom parameters
+   from imputation import MICE
+
+   mice = MICE(df)
    mice.impute(
-       method='pmm',
-       pmm_donors=5,         # Number of donor candidates (default: 5)
-       pmm_matchtype=1,      # Matching type (0, 1, or 2)
-       pmm_ridge=1e-5        # Ridge regularization parameter
+       method={"bmi": "pmm", "chl": "midas", "sex": "cart"},
+       pmm_donors=3,
+       cart_min_samples_leaf=10,
+       seed=1,
    )
-
-Parameters
-~~~~~~~~~~
-
-**donors** (default: 5)
-   Number of closest donors to consider. Larger values increase variability; smaller 
-   values make imputations more deterministic.
-
-**matchtype** (default: 1)
-   - 0: Match predicted values (no randomness)
-   - 1: Match using drawn parameter values (default, adds uncertainty)
-   - 2: Maximum randomness
-
-**ridge** (default: 1e-5)
-   Regularization to stabilize estimation with collinear predictors.
-
-When PMM Works Best
-~~~~~~~~~~~~~~~~~~~
-
-✓ Numeric data with moderate to large sample size
-✓ Preserving distribution properties is important
-✓ Data has outliers that should be preserved
-✓ MAR mechanism with linear relationships
-
-Limitations
-~~~~~~~~~~~
-
-✗ Only generates values already in the data
-✗ Assumes approximately linear relationships
-✗ May struggle with highly skewed data
-✗ Not suitable for categorical variables
-
-CART: Classification and Regression Trees
-------------------------------------------
-
-**When to use**: Data with non-linear relationships or interactions between variables.
-
-How It Works
-~~~~~~~~~~~~
-
-1. Build a decision tree using complete observations
-2. For classification (categorical): predict class probabilities
-3. For regression (numeric): predict values
-4. Add appropriate random variation to predictions
-
-**Key advantage**: Automatically captures interactions and non-linear patterns without 
-needing to specify them.
-
-Usage
-~~~~~
-
-.. code-block:: python
-
-   # Basic usage
-   mice.impute(method='cart')
-   
-   # With custom parameters
-   mice.impute(
-       method='cart',
-       cart_max_depth=None,        # Maximum tree depth
-       cart_min_samples_split=2,   # Min samples to split
-       cart_min_samples_leaf=1     # Min samples in leaf
-   )
-
-Parameters
-~~~~~~~~~~
-
-**max_depth** (default: None)
-   Maximum depth of the tree. ``None`` allows unlimited depth. Use smaller values 
-   (e.g., 10-20) to prevent overfitting.
-
-**min_samples_split** (default: 2)
-   Minimum samples required to split an internal node.
-
-**min_samples_leaf** (default: 1)
-   Minimum samples required at a leaf node.
-
-When CART Works Best
-~~~~~~~~~~~~~~~~~~~~
-
-✓ Non-linear relationships
-✓ Interaction effects between variables
-✓ Mixed data types (numeric and categorical)
-✓ Robust to outliers
-✓ Categorical variables with many levels
-
-Limitations
-~~~~~~~~~~~
-
-✗ Can overfit with small samples
-✗ May not preserve distribution as well as PMM
-✗ Less stable than other methods (high variance)
-
-Random Forest
--------------
-
-**When to use**: Complex data with many interactions and non-linear relationships.
-
-How It Works
-~~~~~~~~~~~~
-
-1. Build an ensemble of decision trees using bootstrap samples
-2. Each tree uses a random subset of predictors
-3. Average predictions across all trees
-4. Add random variation appropriate for the data type
-
-**Key advantage**: More stable and accurate than CART, especially with complex patterns.
-
-Usage
-~~~~~
-
-.. code-block:: python
-
-   # Basic usage
-   mice.impute(method='rf')
-   
-   # With custom parameters
-   mice.impute(
-       method='rf',
-       rf_n_estimators=100,     # Number of trees
-       rf_max_depth=None,       # Maximum depth
-       rf_min_samples_split=2,  # Min samples to split
-       rf_max_features='sqrt'   # Features per split
-   )
-
-Parameters
-~~~~~~~~~~
-
-**n_estimators** (default: 100)
-   Number of trees in the forest. More trees = more stable but slower.
-
-**max_depth** (default: None)
-   Maximum depth of each tree.
-
-**max_features** (default: 'sqrt')
-   Number of features to consider for each split. Options: 'sqrt', 'log2', or an integer.
-
-When Random Forest Works Best
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-✓ Complex, non-linear relationships
-✓ Many interaction effects
-✓ Large datasets
-✓ High-dimensional data
-✓ Mixed data types
-✓ When accuracy is more important than interpretability
-
-Limitations
-~~~~~~~~~~~
-
-✗ Computationally expensive
-✗ Slower than other methods
-✗ Less interpretable than simpler methods
-✗ May not preserve marginal distributions as well as PMM
-
-MIDAS: Multiple Imputation with Distant Average Substitution
--------------------------------------------------------------
-
-**When to use**: Numeric data, especially with small samples or skewed distributions.
-
-How It Works
-~~~~~~~~~~~~
-
-1. For each missing value, identify nearby observed values using distance metrics
-2. Use a weighted average of distant donors (farther donors get less weight)
-3. Add random variation
-
-**Key advantage**: Often performs well with small samples and skewed distributions 
-where PMM struggles.
-
-Usage
-~~~~~
-
-.. code-block:: python
-
-   # Basic usage
-   mice.impute(method='midas')
-   
-   # With custom parameters
-   mice.impute(
-       method='midas',
-       midas_donors=5,      # Number of donors
-       midas_ridge=1e-5     # Ridge parameter
-   )
-
-When MIDAS Works Best
-~~~~~~~~~~~~~~~~~~~~~
-
-✓ Small sample sizes
-✓ Skewed distributions
-✓ Numeric data
-✓ When PMM struggles with distribution
-
-Limitations
-~~~~~~~~~~~
-
-✗ Only for numeric variables
-✗ Less commonly used (less validated than PMM/CART/RF)
-✗ May require parameter tuning
-
-Sample: Random Sampling
------------------------
-
-**When to use**: Quick imputations, initial values, or when other methods aren't suitable.
-
-How It Works
-~~~~~~~~~~~~
-
-Simply draws random values from the observed values of each variable.
-
-**Key advantage**: Very fast, simple, preserves observed distribution exactly.
-
-Usage
-~~~~~
-
-.. code-block:: python
-
-   mice.impute(method='sample')
-
-When Sample Works Best
-~~~~~~~~~~~~~~~~~~~~~~
-
-✓ Initial imputation (before MICE iterations)
-✓ Categorical variables with many levels
-✓ Quick exploratory analysis
-✓ When no predictive relationship exists
-
-Limitations
-~~~~~~~~~~~
-
-✗ Ignores relationships between variables
-✗ No predictive component
-✗ Only useful for simple cases or initialization
-
-Choosing a Method
+   print(mice.method)
+
+Each method is also a plain function, ``f(y, id_obs, x, id_mis=None, ...,
+rng=None)``, that returns the imputations of the cells in ``id_mis``; see
+:doc:`../api/methods`.
+
+pmm: predictive mean matching
+-----------------------------
+
+R's default for numeric data, and mice-py's default for every column.
+
+1. Fit a linear regression of the target on the predictors in the observed
+   rows (with a small ridge penalty) and draw the coefficients from their
+   posterior distribution (Rubin 1987).
+2. Predict the target for the observed and the missing rows.
+3. For each missing row, find the ``donors`` observed rows whose predictions
+   are closest, pick one at random (ties are broken at random) and impute
+   its observed value.
+
+With ``matchtype=1`` (default) the observed rows are predicted with the
+estimated coefficients and the missing rows with the drawn ones; ``0`` uses
+the estimated coefficients for both, ``2`` the drawn ones for both. For a
+categorical target the categories are first replaced by optimal scores
+(``quantify``, as R), and the imputations are categories.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 20 50
+
+   * - Parameter (in ``impute``)
+     - Default
+     - Meaning
+   * - ``pmm_donors``
+     - 5
+     - number of candidate donors; clamped to the number of observed values
+   * - ``pmm_matchtype``
+     - 1
+     - 0, 1 or 2, see above
+   * - ``pmm_quantify``
+     - ``True``
+     - optimal scaling of a categorical target; ``False`` uses its codes
+   * - ``pmm_ridge``
+     - 1e-5
+     - ridge penalty of the regression
+   * - ``pmm_ls_meth``
+     - ``"qr"``
+     - least-squares method: ``"qr"``, ``"ridge"`` or ``"svd"``
+
+midas: distance-aided donor selection
+-------------------------------------
+
+R's ``midastouch`` (Gaffert, Meinfelder and Bosch 2018), a variant of
+predictive mean matching that represents the uncertainty of the regression
+by a bootstrap instead of drawn coefficients, and weights the donors by their
+distance.
+
+1. Draw bootstrap weights for the observed rows.
+2. Fit a weighted linear regression on the observed rows with these weights.
+3. With ``outout=True`` (default), predict each observed row from a fit that
+   leaves that row out.
+4. Give each observed row a probability proportional to its bootstrap weight
+   times its distance to the missing row's prediction raised to the power
+   ``-kappa``, and draw one donor per missing cell.
+
+``kappa`` is estimated from the R² of the fit unless it is given (Siddique and
+Belin 2008 find 3 sensible). midas imputes numeric and boolean targets only:
+a categorical or text target raises ``ValueError``, as R's midastouch cannot
+impute factors either.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 20 50
+
+   * - Parameter (in ``impute``)
+     - Default
+     - Meaning
+   * - ``midas_kappa``
+     - ``None``
+     - sharpness of the distance weighting; ``None`` estimates it
+   * - ``midas_outout``
+     - ``True``
+     - leave-one-out predictions of the donors
+   * - ``midas_ridge``
+     - 1e-5
+     - ridge penalty of the regression
+
+cart: classification and regression trees
+-----------------------------------------
+
+R's ``cart`` (Breiman et al. 1984; Doove, van Buuren and Dusseldorp 2014),
+which grows the tree with rpart;
+mice-py uses scikit-learn with rpart's settings.
+
+1. Fit a regression tree (numeric target) or a classification tree (any other
+   target) on the observed rows.
+2. For each missing row, find its leaf and draw one of the observed values in
+   that leaf.
+
+A numeric target's tree is pruned by cost complexity with
+``ccp_alpha = cp × var(y_obs)``, which is rpart's relative ``cp``. A
+classification tree is not pruned unless ``cart_ccp_alpha`` is given.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 20 50
+
+   * - Parameter (in ``impute``)
+     - Default
+     - Meaning
+   * - ``cart_min_samples_leaf``
+     - 5
+     - minimum observations in a leaf (rpart's ``minbucket``)
+   * - ``cart_cp``
+     - 1e-4
+     - complexity parameter, relative to the variance of the target
+   * - ``cart_min_samples_split``
+     - ``None`` (3 × ``min_samples_leaf``)
+     - minimum observations in a node to try a split (rpart's ``minsplit``)
+   * - ``cart_max_depth``
+     - 30
+     - maximum depth (rpart's ``maxdepth``)
+   * - ``cart_ccp_alpha``
+     - ``None``
+     - pruning in scikit-learn's absolute units; replaces ``cp``
+   * - ``cart_bootstrap``
+     - ``False``
+     - fit the tree on a bootstrap sample (mice-py 0.1's behavior; not in R)
+   * - ``cart_tree_params``
+     - ``None``
+     - further arguments of scikit-learn's tree, e.g.
+       ``{"max_leaf_nodes": 20}``
+
+rf: random forest
 -----------------
 
-Decision Tree
-~~~~~~~~~~~~~
+R's ``rf`` (Doove, van Buuren and Dusseldorp 2014), which grows the forest
+with ranger; mice-py uses scikit-learn with ranger-like settings.
 
-.. code-block:: text
+1. Fit ``n_estimators`` trees, each on a bootstrap sample of the observed
+   rows, with the square root of the number of predictors tried per split.
+2. For each missing row, collect, over all trees, the observed values that
+   share its leaf, and draw one of them.
 
-   Is your data numeric or categorical?
-   │
-   ├── Mostly numeric
-   │   │
-   │   ├── Linear relationships? → PMM
-   │   │
-   │   ├── Non-linear? → CART or RF
-   │   │
-   │   └── Small sample or skewed? → MIDAS or PMM
-   │
-   └── Mixed or mostly categorical
-       │
-       ├── Simple relationships? → CART
-       │
-       └── Complex interactions? → RF
+With categorical predictors the forests of scikit-learn and ranger differ
+noticeably; see :ref:`rf-categorical`.
 
-General Guidelines
-~~~~~~~~~~~~~~~~~~
+.. list-table::
+   :header-rows: 1
+   :widths: 30 20 50
 
-**Start with PMM**
-   It's the most well-studied method and works well in most cases.
+   * - Parameter (in ``impute``)
+     - Default
+     - Meaning
+   * - ``rf_n_estimators``
+     - 10
+     - number of trees (R's ``ntree``)
+   * - ``rf_max_depth``
+     - ``None``
+     - maximum depth; ``None`` grows the trees fully
+   * - ``rf_min_samples_leaf``
+     - 1
+     - minimum observations in a leaf
+   * - ``rf_min_samples_split``
+     - ``None`` (5 for a numeric target, 2 otherwise)
+     - minimum observations in a node to try a split
+   * - ``rf_forest_params``
+     - ``None``
+     - further arguments of scikit-learn's forest, e.g. ``{"n_jobs": -1}``
+       to grow the trees in parallel
 
-**Use CART for interactions**
-   If you know or suspect important interactions between variables.
+sample: random draws
+--------------------
 
-**Use RF for complexity**
-   When you have complex patterns and computational resources.
+Draws each missing value from the observed values of the column, ignoring
+the predictors. It keeps the marginal distribution but not the relations
+with other variables. It has no parameters.
 
-**Use MIDAS when PMM fails**
-   Particularly with small samples or skewed data.
-
-**Use Sample for initialization**
-   Or for very simple cases.
-
-Using Different Methods for Different Variables
-------------------------------------------------
-
-You can use different methods for different variables:
-
-.. code-block:: python
-
-   method_dict = {
-       'age': 'pmm',           # Numeric, approximately normal
-       'income': 'midas',      # Numeric, highly skewed
-       'education': 'sample',  # Categorical with few levels
-       'job_type': 'cart',     # Categorical with many levels
-       'health_score': 'rf'    # Numeric with complex patterns
-   }
-   
-   mice.impute(n_imputations=5, method=method_dict)
-
-Comparing Methods
+Choosing a method
 -----------------
 
-To compare methods empirically:
+- **pmm** is R's default for numeric data and a reasonable first choice;
+  its imputations are observed values.
+- **midas** is an alternative to pmm for numeric targets, proposed to make
+  predictive mean matching proper (Gaffert et al. 2018).
+- **cart** and **rf** model interactions and non-linear relations without
+  specifying them (Doove et al. 2014).
+- **sample** ignores all relations; useful as a baseline.
+- For categorical columns R uses logistic, multinomial or ordered logistic
+  regression, which mice-py does not have; pmm, cart, rf and sample impute
+  them.
 
-.. code-block:: python
+Compare methods on your data with the plots of :doc:`diagnostic_plots`. The
+simulation study of :doc:`../r_mice/validation` compares mice-py with R, not
+the methods with each other.
 
-   from plotting.diagnostics import densityplot, stripplot
-   
-   # Try PMM
-   mice_pmm = MICE(df)
-   mice_pmm.impute(method='pmm')
-   
-   # Try CART
-   mice_cart = MICE(df)
-   mice_cart.impute(method='cart')
-   
-   # Compare distributions
-   missing_pattern = df.notna().astype(int)
-   densityplot(mice_pmm.imputed_datasets, missing_pattern, 
-               save_path='pmm_density.png')
-   densityplot(mice_cart.imputed_datasets, missing_pattern,
-               save_path='cart_density.png')
-
-Look for:
-   - How well imputed values match observed distribution
-   - Whether extreme values are reasonable
-   - Smooth transitions between observed and imputed
-
-Research Findings
------------------
-
-Based on simulation studies in the thesis:
-
-- **PMM** performs reliably under MCAR and mild MAR with symmetric distributions
-- **MIDAS** consistently matches or outperforms PMM with skewness or small samples
-- **CART/RF** handle non-linear relationships effectively but may not preserve 
-  marginal distributions as well
-- Method choice should consider data characteristics, missingness patterns, and sample size
-
-Next Steps
+Next steps
 ----------
 
-- Learn about :doc:`predictor_matrices` to control which variables predict which
-- Check :doc:`convergence_diagnostics` after imputation
-- See practical examples in :doc:`../examples/index`
-
+- :doc:`predictor_matrices`
+- :doc:`convergence_diagnostics`

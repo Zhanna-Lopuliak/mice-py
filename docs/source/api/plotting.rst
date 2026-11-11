@@ -1,27 +1,19 @@
-Plotting Functions
-==================
+Plotting
+========
 
-Diagnostic and visualization tools for analyzing imputation results and missing data patterns.
+All functions are also available from ``plotting`` directly. See
+:doc:`../user_guide/diagnostic_plots`.
 
-Diagnostic Plots
+.. automodule:: plotting
+
+Diagnostic plots
 ----------------
 
 .. automodule:: plotting.diagnostics
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-Plotting Utilities
-------------------
+Missing-data pattern
+--------------------
 
 .. automodule:: plotting.utils
    :members:
-   :undoc-members:
-   :show-inheritance:
-
-See Also
---------
-
-- :doc:`../user_guide/convergence_diagnostics` for guidance on checking convergence
-- :doc:`../examples/index` for plotting examples
-

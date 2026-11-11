@@ -1,43 +1,36 @@
 Utilities
 =========
 
-Helper functions for configuration, validation, and predictor selection.
+Logging
+-------
 
-Logging Configuration
----------------------
+.. autofunction:: imputation.configure_logging
 
 .. automodule:: imputation.logging_config
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-Validation Functions
---------------------
+See :doc:`../user_guide/logging`.
 
-.. automodule:: imputation.validators
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Utility Functions
------------------
-
-.. automodule:: imputation.utils
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Sampler Functions
------------------
+Least squares and the coefficient draw
+--------------------------------------
 
 .. automodule:: imputation.sampler
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-See Also
---------
+Names of methods and options
+----------------------------
 
-- :doc:`../user_guide/predictor_matrices` for guidance on using quickpred
-- :doc:`../user_guide/best_practices` for logging recommendations
+.. automodule:: imputation.constants
+   :members:
 
+Method lookup
+-------------
+
+.. automodule:: imputation.utils
+   :members:
+
+Validation of arguments
+-----------------------
+
+.. automodule:: imputation.validators
+   :members:

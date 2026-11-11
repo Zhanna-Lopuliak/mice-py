@@ -1,7 +1,9 @@
 User Guide
 ==========
 
-This guide provides comprehensive documentation for using mice-py effectively in your data analysis workflows.
+How to use mice-py, from looking at the missing data to the pooled result.
+The examples continue from the :ref:`example data <example-data>` of the
+quick start: run that block first, then the blocks of a page in order.
 
 .. toctree::
    :maxdepth: 2
@@ -11,45 +13,38 @@ This guide provides comprehensive documentation for using mice-py effectively in
    imputation_methods
    predictor_matrices
    convergence_diagnostics
+   diagnostic_plots
    pooling_analysis
+   logging
    best_practices
 
-Overview
---------
+**Understanding missing data**
+   Missing-data patterns and mechanisms.
 
-The user guide covers all aspects of using mice-py, from understanding missing data 
-to producing final pooled results. Each section builds on the previous ones, but you 
-can also jump directly to topics of interest.
+**MICE overview**
+   What ``impute()`` does, step by step, and its arguments.
 
-**Understanding Missing Data**
-   Learn about missing data mechanisms, patterns, and why they matter for your analysis.
+**Imputation methods**
+   pmm, midas, cart, rf and sample: algorithms and parameters.
 
-**MICE Overview**
-   Understand how the MICE algorithm works and when to use it.
+**Predictor matrices**
+   Which variables predict which, ``quickpred``, and the setup step.
 
-**Imputation Methods**
-   Detailed guide to all available imputation methods and how to choose the right one.
+**Convergence diagnostics**
+   Chain statistics and trace plots.
 
-**Predictor Matrices**
-   Learn how to control which variables predict which other variables during imputation.
+**Diagnostic plots**
+   All plot functions of the ``plotting`` package.
 
-**Convergence Diagnostics**
-   Check if your imputation has converged and what to do if it hasn't.
+**Pooling analysis**
+   Fitting models, Rubin's rules, and pooling without the ``MICE`` class.
 
-**Pooling Analysis**
-   Combine results from multiple imputed datasets using Rubin's rules.
+**Logging**
+   How to see what the package does.
 
-**Best Practices**
-   Tips, tricks, and common pitfalls to avoid when using MICE.
+**Best practices**
+   A short checklist.
 
-Getting Help
-------------
-
-If you need help:
-
-1. Check the relevant section in this user guide
-2. Look at the :doc:`../examples/index` for practical examples
-3. Consult the :doc:`../api/index` for detailed API documentation
-4. Review the :doc:`../theory/index` for theoretical background
-5. Open an issue on `GitHub <https://github.com/Zhanna-Lopuliak/mice-py/issues>`_
-
+If something is unclear, see :doc:`../examples/index` for notebooks,
+:doc:`../api/index` for every function, or open an issue on
+`GitHub <https://github.com/Zhanna-Lopuliak/mice-py/issues>`_.
