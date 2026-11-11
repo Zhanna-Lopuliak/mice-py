@@ -123,17 +123,38 @@ achieve:
   `min_samples_split=5`, `min_samples_leaf=1`, `max_features = floor(sqrt(p))`
   and donors pooled over all trees passed the three tests at 300 calls.
 
-## L3 so far
+## L3: the simulation study on the baseline code
 
-Only a 20-replication pipeline check was run, to prove the study works end to
-end. It is not evidence about the methods.
+Run at commit `fc1d3e8`: the code above plus the seed fix (C1, C2, A5), which
+the study needs so that replications get independent random streams. No other
+defect was fixed. Full output: `simulations/results/baseline/`.
 
-- On complete data Python and R give the same numbers (largest difference in
-  an estimate 4e-15), and coverage is within its Monte Carlo band.
-- The study's own Rubin pooling agrees with R's `pool()` to 1e-11.
-- R's `midastouch` fails on scenario S5 (factor target), so that cell is
-  excluded on both sides.
-- Measured runtime for the full study: about 15 minutes on 8 cores.
+Six scenarios, five methods, 1000 replications (rf 500), m = 5. R mice ran on
+the same incomplete datasets. Each cell below shows how many paired
+Python-minus-R comparisons (bias, coverage, interval width, RMSE,
+between-imputation and total variance, per term) were flagged at |z| > 4.2,
+and the largest |z| in the cell.
+
+| Scenario | pmm | midastouch | cart | rf | sample |
+|---|---|---|---|---|---|
+| S1, normal, MCAR | 0 of 24 (3.4) | 0 of 24 (2.1) | 14 of 24 (15.0) | 11 of 24 (19.3) | 0 of 24 (1.9) |
+| S2, normal, MAR | 0 of 24 (1.7) | 0 of 24 (2.1) | 16 of 24 (19.3) | 17 of 24 (22.5) | 0 of 24 (1.1) |
+| S3, two incomplete variables | 3 of 30 (5.7) | 0 of 30 (2.2) | 17 of 30 (13.6) | 2 of 30 (22.2) | 0 of 30 (1.9) |
+| S4, small sample | 0 of 24 (4.0) | 0 of 24 (1.6) | 15 of 24 (18.3) | 13 of 24 (23.1) | 0 of 24 (1.5) |
+| S5, categorical | crashed | not possible | 22 of 36 (8.8) | 22 of 36 (61.6) | 0 of 36 (3.2) |
+| S6, skewed | 9 of 24 (8.9) | 0 of 24 (1.3) | 17 of 24 (18.9) | 6 of 24 (12.3) | 0 of 24 (1.0) |
+
+In total 184 of 738 comparisons were flagged. pmm crashed on every S5 dataset
+(B1, B2). midastouch cannot run on S5 in either engine: R's own function fails
+on a factor target.
+
+As the design predicted, the simulation barely sees the transposed Cholesky
+factor (A1): pmm is flagged only in S3 and S6. Layer 2 is what caught it.
+
+The harness itself was checked in the same run: on complete data Python and R
+give the same numbers (largest difference in an estimate 6e-15), coverage of
+the complete-data analysis is within its Monte Carlo band in every cell, and
+the study's own Rubin pooling agrees with R's `pool()` to 1e-11.
 
 ## Reproduce
 
