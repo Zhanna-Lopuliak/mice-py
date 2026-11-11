@@ -36,13 +36,6 @@ def _impute(case, **kwargs):
     return df, mice
 
 
-def _params(cases, known):
-    for case in cases:
-        reason = known.get(case["name"])
-        marks = [pytest.mark.xfail(strict=True, reason=reason)] if reason else []
-        yield pytest.param(case, id=case["name"], marks=marks)
-
-
 def _r_matrix(payload):
     return pd.DataFrame(
         np.array(payload["values"], dtype=int),
@@ -55,10 +48,6 @@ def _r_matrix(payload):
 # method
 # ---------------------------------------------------------------------------
 
-A2 = "A2: default method is 'sample', R uses 'pmm'"
-
-
-@pytest.mark.xfail(strict=True, reason=A2)
 @pytest.mark.parametrize("case", SETUP["cases"], ids=[c["name"] for c in SETUP["cases"]])
 def test_default_method_is_pmm_for_numeric_columns(case):
     df, mice = _impute(case)
@@ -75,12 +64,7 @@ def test_default_method_is_pmm_for_numeric_columns(case):
 # predictor matrix
 # ---------------------------------------------------------------------------
 
-PRED_KNOWN = {
-    "nhanes": "A7: default predictor matrix comes from _quickpred, R uses the full matrix",
-}
-
-
-@pytest.mark.parametrize("case", list(_params(SETUP["cases"], PRED_KNOWN)))
+@pytest.mark.parametrize("case", SETUP["cases"], ids=[c["name"] for c in SETUP["cases"]])
 def test_default_predictor_matrix_matches_r(case):
     _, mice = _impute(case)
     expected = _r_matrix(case["predictor_matrix"])
@@ -99,7 +83,7 @@ LOG_COLUMNS = ("it", "im", "dep", "meth", "out")
 def _impute_full(case):
     """``_impute`` with R's default predictor matrix (all ones, zero diagonal),
     passed explicitly so that these checks of the setup step do not depend on
-    the port's default (finding A7)."""
+    the default (which is the same matrix)."""
     df = decode_frame(case["data"])
     full = pd.DataFrame(1, index=df.columns, columns=df.columns)
     np.fill_diagonal(full.values, 0)
@@ -159,10 +143,6 @@ def _check_visit_sequence(case, df, visit_sequence, expected):
     assert [v for v in visit_sequence if v in imputed] == str_list(expected)
 
 
-C3 = "C3: default visit order is 'monotone', R uses left to right ('roman')"
-
-
-@pytest.mark.xfail(strict=True, reason=C3)
 @pytest.mark.parametrize("case", SETUP["cases"], ids=[c["name"] for c in SETUP["cases"]])
 def test_default_visit_sequence_matches_r(case):
     df, mice = _impute(case)
@@ -172,11 +152,7 @@ def test_default_visit_sequence_matches_r(case):
 def _visit_params():
     for case in SETUP["cases"]:
         for code in VISITS:
-            marks = []
-            if code != "monotone":
-                reason = f"C3: visit_sequence='{code}' is not supported"
-                marks = [pytest.mark.xfail(strict=True, reason=reason)]
-            yield pytest.param(case, code, id=f"{case['name']}-{code}", marks=marks)
+            yield pytest.param(case, code, id=f"{case['name']}-{code}")
 
 
 @pytest.mark.parametrize("case, code", list(_visit_params()))

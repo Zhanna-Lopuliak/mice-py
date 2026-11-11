@@ -50,6 +50,7 @@ from .constants import (
     InitialMethod,
     DEFAULT_METHOD,
     DEFAULT_INITIAL_METHOD,
+    DEFAULT_VISIT_SEQUENCE,
     VisitSequence,
 )
 
@@ -68,6 +69,13 @@ _LOG_COLUMNS = ('it', 'im', 'dep', 'meth', 'out')
 
 # A variable whose variance is below this is constant (R: 1000 * .Machine$double.eps)
 _CONSTANT_VARIANCE = 1000 * np.finfo(float).eps
+
+
+def _full_predictor_matrix(columns) -> pd.DataFrame:
+    """All ones with a zero diagonal: R's default predictor matrix."""
+    matrix = pd.DataFrame(1, index=columns, columns=columns)
+    np.fill_diagonal(matrix.values, 0)
+    return matrix
 
 
 def _empty_log() -> pd.DataFrame:
@@ -237,11 +245,11 @@ class MICE:
     def impute(
         self,
         n_imputations: int = 5,
-        maxit: int = 10,
+        maxit: int = 5,
         predictor_matrix: Optional[pd.DataFrame] = None,
         initial: str = DEFAULT_INITIAL_METHOD,
         method: Optional[Union[str, Dict[str, str]]] = None,
-        visit_sequence: Union[str, List[str]] = "monotone",
+        visit_sequence: Union[str, List[str]] = DEFAULT_VISIT_SEQUENCE,
         seed: Optional[Union[int, List[int]]] = None,
         **kwargs
     ) -> None:
@@ -253,7 +261,7 @@ class MICE:
         n_imputations : int, default=5
             Number of imputations to perform
             
-        maxit : int, default=10
+        maxit : int, default=5
             Maximum number of iterations for each imputation cycle.
             Must be a positive integer.
             
@@ -261,7 +269,9 @@ class MICE:
             Binary matrix indicating which variables should be used as predictors
             for each target variable. Should have column names as both index and columns.
             A 1 indicates that the column variable is used as predictor for the index variable.
-            If None, a predictor matrix is estimated using `_quickpred`.
+            If None, every other column predicts every incomplete column (all
+            ones with a zero diagonal), as in R. The setup step described in
+            the Notes then removes constant and collinear predictors.
             
         initial : str, default=DEFAULT_INITIAL_METHOD
             Initial imputation method. Must be one of SUPPORTED_INITIAL_METHODS.
@@ -269,17 +279,25 @@ class MICE:
         method : Union[str, Dict[str, str]], optional
             Imputation method(s) to use:
             - str: use the same method for all columns
-            - Dict[str, str]: dictionary mapping column names to their methods
-            - None: use default method for all columns
+            - Dict[str, str]: dictionary mapping column names to their methods;
+              columns not in it get ``"pmm"``
+            - None: ``"pmm"`` for every incomplete column, whatever its type
+              (R uses ``pmm`` for numeric columns and logreg, polyreg or polr
+              for factors, which this package does not have)
             Must be one of SUPPORTED_METHODS, or ``""`` for a column that is
             not imputed. As in R, a complete column always gets ``""``. A
             column with method ``""`` keeps its missing values; where it is
             used as a predictor, the rows in which it is missing are left out
             of the imputation model and are not imputed.
             
-        visit_sequence : Union[str, List[str]], default="monotone"
-            Sequence in which variables should be visited during imputation:
-            - str: "monotone" for monotone missing data pattern
+        visit_sequence : Union[str, List[str]], default="roman"
+            Sequence in which variables should be visited during imputation.
+            Only incomplete columns that are imputed are visited.
+            - "roman": data order (R's default)
+            - "arabic": reverse data order
+            - "monotone": increasing number of missing values, ties in data order
+            - "revmonotone": the reverse of "monotone"
+            - "random": a random order, drawn once per call from `seed`
             - List[str]: list of column names specifying the order to visit variables
 
         seed : int, sequence of int, or None, default=None
@@ -371,7 +389,9 @@ class MICE:
         quickpred_args = {name: kwargs.pop(name) for name in _QUICKPRED_ARGUMENTS if name in kwargs}
         _check_method_params(kwargs)
 
-        if predictor_matrix is None:
+        if predictor_matrix is None and not quickpred_args:
+            predictor_matrix = _full_predictor_matrix(list(self.data.columns))
+        elif predictor_matrix is None:
             predictor_matrix = self._quickpred(
                 min_cor=quickpred_args.get('min_cor', 0.1),
                 min_puc=quickpred_args.get('min_puc', 0.0),
@@ -1126,14 +1146,18 @@ class MICE:
         ----------
         visit_sequence : Union[str, List[str]]
             Visit sequence specification. Can be:
-            - str: "monotone" or "random" for predefined sequences
+            - str: "roman", "arabic", "monotone", "revmonotone" or "random"
             - List[str]: list of column names specifying the order to visit variables
                         Must include all columns that are imputed. Columns that are not
                         imputed (complete, or with method "") are dropped from it.
         rng : np.random.Generator, optional
             Draws the "random" sequence. If None, a fresh generator is used.
 
-        Only incomplete columns with a method other than "" are visited.
+        Only incomplete columns with a method other than "" are visited. The
+        keywords follow R's ``mice``: "roman" is data order, "arabic" its
+        reverse, "monotone" sorts by the number of missing values with a
+        stable sort (ties keep data order) and "revmonotone" is the reverse
+        of "monotone".
         """
         columns_with_missing = [
             col for col in self.data.columns
@@ -1157,11 +1181,17 @@ class MICE:
             self.visit_sequence = validated_sequence
         else:
             # For string sequences, generate based on type
+            nmis = np.array([self.id_mis[col].sum() for col in columns_with_missing], dtype=int)
+            monotone = [columns_with_missing[i] for i in np.argsort(nmis, kind="stable")]
             if visit_sequence == VisitSequence.RANDOM.value:
                 if rng is None:
                     rng = np.random.default_rng()
-                self.visit_sequence = list(rng.permutation(columns_with_missing))
+                self.visit_sequence = [columns_with_missing[i] for i in rng.permutation(len(columns_with_missing))]
+            elif visit_sequence == VisitSequence.ROMAN.value:
+                self.visit_sequence = list(columns_with_missing)
+            elif visit_sequence == VisitSequence.ARABIC.value:
+                self.visit_sequence = columns_with_missing[::-1]
             elif visit_sequence == VisitSequence.MONOTONE.value:
-                nmis = np.array([self.id_mis[col].sum() for col in columns_with_missing])
-                ii = np.argsort(nmis)
-                self.visit_sequence = [columns_with_missing[i] for i in ii]
+                self.visit_sequence = monotone
+            elif visit_sequence == VisitSequence.REVMONOTONE.value:
+                self.visit_sequence = monotone[::-1]

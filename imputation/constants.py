@@ -48,9 +48,11 @@ class ImputationMethod(Enum):
         Get the default imputation method.
         
         Returns:
-            str: Default method name
+            str: Default method name, ``"pmm"`` as in R's ``mice`` for numeric
+            columns. R uses logreg, polyreg and polr for factors; this
+            package has none of those and uses pmm for every column type.
         """
-        return cls.SAMPLE.value
+        return cls.PMM.value
 
 
 class InitialMethod(Enum):
@@ -102,11 +104,20 @@ class VisitSequence(Enum):
     """
     Enumeration of supported visit sequence types for MICE.
     
+    The keywords of R's ``mice``, plus ``random``. Only incomplete columns
+    that are imputed are visited.
+    
     Attributes:
-        MONOTONE: Monotone missing data pattern
-        RANDOM: Random visit sequence
+        ROMAN: Columns in data order (R's default)
+        ARABIC: Columns in reverse data order
+        MONOTONE: Columns by increasing number of missing values; ties in data order
+        REVMONOTONE: The reverse of MONOTONE
+        RANDOM: A random order, drawn once per call of ``impute``
     """
+    ROMAN = "roman"
+    ARABIC = "arabic"
     MONOTONE = "monotone"
+    REVMONOTONE = "revmonotone"
     RANDOM = "random"
     
     @classmethod
@@ -138,9 +149,9 @@ class VisitSequence(Enum):
         Get the default visit sequence.
         
         Returns:
-            str: Default visit sequence name
+            str: Default visit sequence name (``"roman"``, as in R)
         """
-        return cls.MONOTONE.value
+        return cls.ROMAN.value
 
 
 SUPPORTED_METHODS = ImputationMethod.get_all_methods()

@@ -80,7 +80,8 @@ def check_method(method: Union[str, Dict[str, str]], columns: List[str]) -> Dict
     method : Union[str, Dict[str, str]]
         Method specification. Can be:
         - str: use the same method for all columns
-        - Dict[str, str]: dictionary mapping column names to their methods
+        - Dict[str, str]: dictionary mapping column names to their methods;
+          columns not in it get DEFAULT_METHOD (``"pmm"``)
         A method is one of SUPPORTED_METHODS, or "" for a column that is
         not imputed.
     columns : List[str]
@@ -114,10 +115,8 @@ def check_method(method: Union[str, Dict[str, str]], columns: List[str]) -> Dict
         if invalid_methods:
             raise ValueError(f"Unsupported methods: {invalid_methods}. Supported methods are: {SUPPORTED_METHODS}")
         
-        # Create result dict with default method for unspecified columns
-        # TODO: make default method dependent on column type or just handle it otherwise, 
-        # e.g. not let method for a column be not specified
-        result = {col: DEFAULT_METHOD for col in columns}  # Default method
+        # Columns not in the dict get the default method (pmm)
+        result = {col: DEFAULT_METHOD for col in columns}
         result.update(method)  # Override with specified methods
         return result
     
@@ -155,7 +154,8 @@ def check_visit_sequence(
     ----------
     visit_sequence : Union[str, List[str]]
         Visit sequence specification. Can be:
-        - str: "monotone" or "random" for predefined sequences
+        - str: one of SUPPORTED_VISIT_SEQUENCES ("roman", "arabic",
+          "monotone", "revmonotone", "random")
         - List[str]: list of column names specifying the order to visit variables
     columns : List[str]
         List of all column names in the data
@@ -177,8 +177,8 @@ def check_visit_sequence(
         
     Notes
     -----
-    For string visit sequences ("monotone", "random"), the actual sequence will be
-    generated in MICE._set_visit_sequence() based on the data.
+    For string visit sequences, the actual sequence will be generated in
+    MICE._set_visit_sequence() based on the data.
     
     For list visit sequences, this function validates that:
     1. All columns exist in the data

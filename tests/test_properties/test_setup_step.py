@@ -396,3 +396,90 @@ def test_complete_rows_in_predictor_matrix_do_not_warn():
         mice, out = impute(df, "pmm", n_imputations=N_IMP, maxit=MAXIT)
     assert mice.method == {"y": "pmm", "x1": "", "x2": ""}
     assert len(out) == N_IMP
+
+
+# ---------------------------------------------------------------------------
+# defaults and visit sequences (A2, C3, A7)
+# ---------------------------------------------------------------------------
+
+def test_defaults_follow_r():
+    """Without arguments: pmm for every incomplete column (R uses pmm for
+    numeric columns; the port has no logreg / polyreg, so categorical columns
+    get pmm too), five iterations, data order and the full predictor matrix."""
+    from imputation import MICE
+
+    from ._helpers import mixed_frame
+
+    df = mixed_frame()
+    mice = MICE(df)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        out = mice.impute(n_imputations=1, seed=1)
+    assert mice.method == {"a": "pmm", "b": "pmm", "g": "pmm", "h": "pmm", "d": ""}
+    assert mice.maxit == 5
+    assert mice.chain_mean["a"].shape == (5, 1)
+    assert mice.visit_sequence == ["a", "b", "g", "h"]
+    pd.testing.assert_frame_equal(mice.predictor_matrix, full_predictor_matrix(df), check_dtype=False)
+    assert not out[0].isna().any().any()
+
+
+def test_method_dict_fills_unlisted_columns_with_pmm():
+    from ._helpers import numeric_frame
+
+    df = numeric_frame(n=40)
+    mice, _ = impute(df, {"a": "sample"}, n_imputations=1, maxit=1)
+    assert mice.method == {"a": "sample", "b": "pmm", "c": "pmm", "d": "", "k": ""}
+
+
+def _visit_frame():
+    """Missing counts: a 3, b 0, c 1, d 3, e 2, f 2 (f gets method "")."""
+    rng = np.random.default_rng(5)
+    df = pd.DataFrame(rng.normal(size=(30, 6)), columns=list("abcdef"))
+    for col, rows in {"a": [0, 7, 14], "c": [3], "d": [2, 9, 20], "e": [5, 25], "f": [1, 11]}.items():
+        df.loc[rows, col] = np.nan
+    return df
+
+
+@pytest.mark.parametrize(
+    "code, expected",
+    [
+        ("roman", ["a", "c", "d", "e"]),
+        ("arabic", ["e", "d", "c", "a"]),
+        # stable sort by number of missing values: the tie a, d keeps data order
+        ("monotone", ["c", "e", "a", "d"]),
+        ("revmonotone", ["d", "a", "e", "c"]),
+    ],
+)
+def test_visit_sequence_keywords(code, expected):
+    """R's keywords; complete columns and columns with method "" are not visited."""
+    df = _visit_frame()
+    method = {c: "pmm" for c in df.columns} | {"f": ""}
+    mice, _ = impute(df, method, n_imputations=1, maxit=1, visit_sequence=code, predictor_matrix=None)
+    assert mice.visit_sequence == expected
+
+
+def test_default_visit_sequence_is_roman():
+    from imputation import MICE
+
+    df = _visit_frame()
+    mice = MICE(df)
+    mice.impute(n_imputations=1, maxit=1, method={"f": ""}, seed=2)
+    assert mice.visit_sequence == ["a", "c", "d", "e"]
+
+
+def test_random_visit_sequence_is_a_permutation_of_the_imputed_columns():
+    df = _visit_frame()
+    method = {c: "pmm" for c in df.columns} | {"f": ""}
+    orders = set()
+    for seed in range(8):
+        mice, _ = impute(df, method, n_imputations=1, maxit=1, visit_sequence="random", seed=seed)
+        assert sorted(mice.visit_sequence) == ["a", "c", "d", "e"]
+        assert all(type(col) is str for col in mice.visit_sequence)
+        orders.add(tuple(mice.visit_sequence))
+    assert len(orders) > 1
+
+
+def test_unknown_visit_sequence_keyword_lists_the_supported_ones():
+    df = _visit_frame()
+    with pytest.raises(ValueError, match="revmonotone"):
+        impute(df, "pmm", n_imputations=1, maxit=1, visit_sequence="backwards")
