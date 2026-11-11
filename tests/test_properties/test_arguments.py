@@ -252,6 +252,7 @@ DOTTED_PARAMS = {
     "norm.nob": ["ls_meth", "ridge"],
     "logreg": [],
     "logreg.boot": [],
+    "polyreg": ["maxit", "max_weights"],
 }
 
 
@@ -264,6 +265,7 @@ DOTTED_PARAMS = {
         # no method has the parameter: the longest match is reported
         ("logreg_boot_x", ("logreg.boot", "x")),
         ("norm_boot_donors", ("norm.boot", "donors")),
+        ("polyreg_max_weights", ("polyreg", "max_weights")),
         ("foo_bar", None),
         ("norm", None),
         # the prefix has underscores where the name has dots

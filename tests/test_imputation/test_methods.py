@@ -621,6 +621,134 @@ class TestLogregImputation:
         assert not fit.aliased.any()
 
 
+class TestPolyregImputation:
+    """Input handling and building blocks of polyreg and multinom_fit."""
+
+    @staticmethod
+    def _problem(n=24):
+        x = np.random.default_rng(0).normal(size=(n, 2))
+        score = x[:, 0] + np.cos(np.arange(n))
+        y = np.where(score > 0.6, "c", np.where(score > -0.6, "b", "a")).astype(object)
+        id_obs = np.arange(n) % 4 != 0
+        y[~id_obs] = None
+        return y, id_obs, x
+
+    def test_uniform_equal_to_a_cumulative_probability_stays_in_the_lower_category(self):
+        """R's ``un > cumsum(p)``: a number equal to a cumulative probability
+        does not exceed it; one just above it does."""
+        from imputation.polyreg import _draw_categories
+
+        prob = np.tile([0.25, 0.5, 0.25], (6, 1))
+        u = np.array([0.25, np.nextafter(0.25, 1), 0.75, np.nextafter(0.75, 1), 0.0, np.nextafter(0.25, 0)])
+        np.testing.assert_array_equal(_draw_categories(u, prob), [0, 1, 1, 2, 0, 0])
+
+    def test_uniform_above_the_last_cumulative_probability_gives_the_last_category(self):
+        """The probabilities may sum to slightly less than 1; R imputes NA
+        above the sum, the port the last category with a positive probability."""
+        from imputation.polyreg import _draw_categories
+
+        prob = np.array([[0.1, 0.2, 0.7 - 1e-12], [0.5, 0.5 - 1e-12, 0.0]])
+        assert np.cumsum(prob, axis=1)[:, -1].max() < 1 - 1e-13
+        np.testing.assert_array_equal(_draw_categories([1 - 1e-13, 1 - 1e-13], prob), [2, 1])
+
+    def test_zero_probability_category_is_never_drawn(self):
+        from imputation.polyreg import _draw_categories
+
+        prob = np.array([[0.4, 0.0, 0.6]] * 4)
+        np.testing.assert_array_equal(_draw_categories([0.1, 0.4, np.nextafter(0.4, 1), 0.99], prob), [0, 0, 2, 2])
+
+    def test_invalid_inputs(self):
+        from imputation.polyreg import polyreg
+
+        y, id_obs, x = self._problem()
+        with pytest.raises(ValueError, match="Predictors must be numeric for polyreg"):
+            polyreg(y, id_obs, np.full((24, 2), "a"))
+        x_nan = x.copy()
+        x_nan[3, 1] = np.nan
+        with pytest.raises(ValueError, match="Predictors must not contain missing values for polyreg"):
+            polyreg(y, id_obs, x_nan)
+        with pytest.raises(ValueError, match="polyreg: y is missing in entries that id_obs marks as observed"):
+            polyreg(y, np.ones(24, dtype=bool), x)
+
+    def test_x_as_data_frame_and_default_generator(self):
+        """A DataFrame predictor is dummy-coded as MICE does; without `rng` a fresh generator is used."""
+        from imputation.polyreg import polyreg
+
+        y, id_obs, x = self._problem()
+        frame = pd.DataFrame({"u": x[:, 0], "g": np.where(x[:, 1] > 0, "p", "q")})
+        coded = np.c_[x[:, 0], (x[:, 1] <= 0).astype(float)]
+        first = polyreg(y, id_obs, frame, rng=np.random.default_rng(4))
+        np.testing.assert_array_equal(first, polyreg(y, id_obs, coded, rng=np.random.default_rng(4)))
+        assert set(polyreg(y, id_obs, x)) <= {"a", "b", "c"}
+
+    def test_parameters_reach_the_fit(self, monkeypatch):
+        import imputation.polyreg
+
+        seen = []
+        original = imputation.polyreg.multinom_fit
+
+        def recording(*args, **kwargs):
+            seen.append((kwargs["maxit"], kwargs["max_weights"]))
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(imputation.polyreg, "multinom_fit", recording)
+        y, id_obs, x = self._problem()
+        imputation.polyreg.polyreg(y, id_obs, x, maxit=7, max_weights=50, rng=np.random.default_rng(1))
+        assert seen == [(7, 50)]
+
+    def test_multinom_fit_rejects_invalid_input(self):
+        from imputation.fitting import multinom_fit
+
+        x = np.c_[np.ones(6), [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]]
+        y = [0, 1, 2, 0, 1, 2]
+        with pytest.raises(ValueError, match="x has 6 rows, y 5"):
+            multinom_fit(x, y[:5])
+        with pytest.raises(ValueError, match="missing values in 'x'"):
+            multinom_fit(np.where(x == 3.0, np.nan, x), y)
+        with pytest.raises(ValueError, match="invalid weights vector"):
+            multinom_fit(x, y, weights=[1, 1, -1, 1, 1, 1])
+        with pytest.raises(ValueError, match="integers from 0 to 1"):
+            multinom_fit(x, y, n_classes=2)
+        with pytest.raises(ValueError, match="integers from 0 to 2"):
+            multinom_fit(x, [0, 1, 2, 0, 1.5, 2])
+        with pytest.raises(ValueError, match="need two or more classes"):
+            multinom_fit(x, [1] * 6, n_classes=3)
+        # 3 classes and 2 columns: 3 * (2 + 1) = 9 weights; 2 classes: 2 + 1
+        with pytest.raises(ValueError, match=r"too many \(9\) weights.*max_weights=8"):
+            multinom_fit(x, y, max_weights=8)
+        assert multinom_fit(x, [0, 1, 1, 0, 1, 0], max_weights=3).logistic
+
+    def test_multinom_fit_with_one_dimensional_x_and_an_empty_class(self):
+        """A 1-D x is one column; a class without rows is not fitted and has probability 0."""
+        from imputation.fitting import multinom_fit
+
+        x = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
+        fit = multinom_fit(x, [0, 0, 3, 0, 3, 3], n_classes=4)
+        assert fit.classes.tolist() == [0, 3] and fit.logistic and fit.coef.shape == (1, 1)
+        prob = fit.predict(x)
+        assert prob.shape == (6, 4) and np.all(prob[:, 1:3] == 0)
+        np.testing.assert_allclose(prob.sum(axis=1), 1.0, rtol=1e-15)
+
+    def test_softmax_probability_of_zero_costs_1000_times_the_weight(self):
+        """nnet adds ``1000 w`` where the probability of the observed class underflows to 0."""
+        from imputation.fitting import _softmax_objective
+
+        x = np.c_[np.ones(3), [-1.0, 0.0, 1.0]]
+        fn, gr = _softmax_objective(x, np.array([0, 1, 2]), np.array([2.0, 1.0, 0.5]), 3)
+        beta = np.array([0.0, -800.0, 0.0, 800.0])  # eta = (0, -800 x, 800 x)
+        # row 1 (class 1): p = exp(-800) / (...) = 0; row 2 (class 2): p = 1/3; row 3: p = 1
+        assert fn(beta) == pytest.approx(2.0 * 1000 + 1.0 * np.log(3) + 0.0, rel=1e-15)
+        assert np.isfinite(gr(beta)).all()
+
+    def test_nnet_sigmoid_is_cut_off_beyond_15(self):
+        from imputation.fitting import _nnet_sigmoid
+
+        out = _nnet_sigmoid(np.array([-800.0, -15.000001, -15.0, 0.0, 15.0, 15.000001]))
+        assert out[0] == 0.0 and out[1] == 0.0 and out[-1] == 1.0
+        np.testing.assert_allclose(out[2:5], [1 / (1 + np.exp(15)), 0.5, 1 / (1 + np.exp(-15))], rtol=1e-15)
+        assert 0 < out[2] and out[4] < 1
+
+
 class TestMethodConsistency:
     """Test consistency across imputation methods."""
 
@@ -643,7 +771,7 @@ class TestMethodConsistency:
 
         # the categorical methods impute a target with two categories
         y01 = np.array([0.0, 1.0, np.nan, 1.0, 0.0, 1.0, 0.0, 1.0])
-        for method_name in ["logreg", "logreg.boot"]:
+        for method_name in ["logreg", "logreg.boot", "polyreg"]:
             result = get_imputer_func(method_name)(y01, id_obs, x, rng=np.random.default_rng(6))
 
             assert isinstance(result, np.ndarray)

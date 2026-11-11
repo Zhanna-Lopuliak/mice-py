@@ -35,6 +35,14 @@ Each mutant is written so that it is valid once the library is fixed:
   |z| about 50, on the log-variance). F5 puts missing rows far from the
   observed ones, where the draw also moves the label probabilities towards
   1/2, so T1 flags it too (smallest p about 1e-20). Both must flag it.
+* ``polyreg`` taking the most probable category instead of a draw:
+  ``imputation.polyreg._draw_categories`` patched to return the category
+  with the largest probability, compared with R's ``polyreg`` on F3. Every
+  call then imputes the same labels. Measured with 1,000 calls (fewer than
+  the 3,000 of the parity test; the effect is large): T1 smallest p about
+  1e-294 and below 1e-8 in every cell, T3 largest |z| about 284 (mean) and
+  7,300 (log-variance; the coefficients no longer vary). The test asserts
+  p < 1e-12 and |z| > 8.
 """
 
 import functools
@@ -187,3 +195,34 @@ def test_logreg_without_coefficient_draw_is_flagged(statistic):
 def test_bootstrapped_cart_is_flagged_by_donor_sets():
     inp, r_sum, py_sum = run_python("cart", "F1", bootstrap=True, cp=1e-4, min_samples_leaf=5)
     assert donor_set_mismatches(r_sum, py_sum), "the donor-set test does not flag a bootstrapped tree"
+
+
+@functools.cache
+def polyreg_most_probable_category_comparison():
+    """polyreg on F3 with imputation.polyreg._draw_categories returning the most probable category."""
+    import imputation.polyreg as polyreg_module
+
+    calls = []
+
+    def most_probable(u, prob):
+        calls.append(1)
+        return np.argmax(prob, axis=1)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(polyreg_module, "_draw_categories", most_probable)
+        inp, r_sum, py_sum = run_python("polyreg", "F3", n_calls=1000)
+    return compare(r_sum, py_sum, inp), len(calls)
+
+
+def test_polyreg_taking_the_most_probable_category_is_flagged_by_t1():
+    comp, n_calls = polyreg_most_probable_category_comparison()
+    assert n_calls > 0, "mutant not applied: polyreg no longer calls imputation.polyreg._draw_categories"
+    assert comp.kind == "category"
+    assert comp.t1_min_p < 1e-12, "T1 does not flag the mutant clearly: " + comp.t1_message()
+
+
+def test_polyreg_taking_the_most_probable_category_is_flagged_by_t3():
+    comp, n_calls = polyreg_most_probable_category_comparison()
+    assert n_calls > 0, "mutant not applied: polyreg no longer calls imputation.polyreg._draw_categories"
+    assert np.abs(comp.t3_z_mean).max() > 8, "T3 (mean) does not flag the mutant clearly: " + comp.t3_message()
+    assert np.abs(comp.t3_z_var).max() > 8, "T3 (log-variance) does not flag the mutant clearly: " + comp.t3_message()

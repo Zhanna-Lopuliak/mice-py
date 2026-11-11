@@ -5,8 +5,9 @@ gives different output, ``seed=None`` draws fresh entropy. Chain k gets the
 same random stream whatever ``n_imputations`` is. Every imputer, midas
 included, draws only from the ``rng`` it is given.
 
-The categorical methods run on a frame with two-category columns (where the
-other columns get pmm), the others on numeric data.
+The categorical methods run on a frame with boolean, categorical and text
+columns (where the columns they cannot impute get pmm), the others on numeric
+data.
 
 ``mean`` is the one method whose output does not depend on the seed at all,
 so the tests that expect randomness skip it and its own test expects the
@@ -132,7 +133,9 @@ def test_univariate_imputer_is_reproducible_with_rng(method):
     ry = np.ones(n, dtype=bool)
     ry[::5] = False
     y[~ry] = np.nan
-    if method in CATEGORICAL_METHODS:  # a two-category target
+    if method == "polyreg":  # a three-category target
+        y = np.where(ry, np.digitize(y, [-0.5, 0.5]), None)
+    elif method in CATEGORICAL_METHODS:  # a two-category target
         y = np.where(ry, y > 0, None)
     f = get_imputer_func(method)
     first = f(y, ry, x, rng=np.random.default_rng(99))

@@ -1,4 +1,4 @@
-"""Layer 2: distribution parity of pmm, midastouch, sample, the norm family and logreg with R mice.
+"""Layer 2: distribution parity of pmm, midastouch, sample, the norm family, logreg and polyreg with R mice.
 
 For each method and fixed input (F1 to F6, see tests/reference/r/_l2_common.R)
 R called ``mice.impute.<method>`` 20,000 times; here the Python imputer is
@@ -29,6 +29,11 @@ dependence between the cells of one call that the shared coefficient draw
 missing rows lie far out where the labels depend on the poorly determined
 slopes; on F6 the observed rows are separated, so ``logreg`` depends on its
 augmentation (``logreg.boot``, which does not augment, is run on F5 only).
+
+``polyreg`` draws labels from a fitted multinomial model (category kind) on
+F3, a target with three levels: T1 compares the level counts per cell, T3
+the moments of the coefficients of the "b" and "c" indicators. R called it
+20,000 times, Python 3,000 times.
 """
 
 import pytest
@@ -71,6 +76,7 @@ CATEGORY_CASES = [
     pytest.param("logreg", "F5"),
     pytest.param("logreg", "F6"),
     pytest.param("logreg.boot", "F5"),
+    pytest.param("polyreg", "F3"),
 ]
 
 T3_CASES = T2_CASES[:1] + [pytest.param("pmm", "F2")] + T2_CASES[1:] + CATEGORY_CASES

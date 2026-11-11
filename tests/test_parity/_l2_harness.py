@@ -48,6 +48,7 @@ N_CALLS = {
     "norm.boot": 3000,
     "logreg": 3000,
     "logreg.boot": 3000,
+    "polyreg": 3000,
 }
 
 # Offset between the R seed stored in a fixture and the Python seed
@@ -172,6 +173,10 @@ def imputer(method):
         from imputation.logreg import logreg_boot
 
         return logreg_boot
+    if method == "polyreg":
+        from imputation.polyreg import polyreg
+
+        return polyreg
     raise ValueError(method)
 
 

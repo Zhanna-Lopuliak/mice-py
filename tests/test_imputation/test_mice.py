@@ -106,9 +106,9 @@ class TestMICEMethods:
         assert mice.imputed_datasets is not None
         assert len(mice.imputed_datasets) == 2
 
-    @pytest.mark.parametrize("method", ["logreg", "logreg.boot"])
+    @pytest.mark.parametrize("method", ["logreg", "logreg.boot", "polyreg"])
     def test_methods_for_two_categories(self, sample_data_missing, method):
-        """smoker holds 0 and 1: logistic regression imputes 0 or 1."""
+        """smoker holds 0 and 1: logistic and multinomial regression impute 0 or 1."""
         mice = MICE(sample_data_missing)
 
         mice.impute(n_imputations=2, maxit=2, method={"smoker": method}, seed=1)

@@ -38,17 +38,42 @@ test_l1_augment and test_l1_logreg:
 * (n) the reference category taken in the declared order of an unordered
   factor instead of the sorted order: on a factor declared as (yes, no) the
   fit models the other category.
+
+The mutants of ``polyreg`` and ``multinom_fit`` run the checks of
+test_l1_polyreg:
+
+* (o) the most probable category instead of a draw: the labels differ.
+* (p) the fit run to full convergence (no iteration limit, no tolerance)
+  instead of stopping where nnet stops: the case stopped at
+  ``nnet.maxit = 5`` shows it in the objective and the convergence flag,
+  and a converged case in the probabilities (1e-5 away).
+* (q) the categories in the declared order of an unordered factor instead
+  of the sorted order: on a factor declared as (c, a, b) the labels differ.
+* (r) an unused declared level kept: it gets probability 0, so the labels
+  do not change, but the probabilities have a column too many.
+* (s) no augmentation: the fit of the separated case changes.
+* (t) the uniform numbers not drawn when a single category is observed:
+  they are left over.
+* (u) ``u >= cumulative`` instead of R's ``u > cumulative``: no fixture can
+  show it (every number is at least 1e-4 from every cumulative
+  probability); the unit test of the helper does.
+* (v) the softmax used for two classes instead of nnet's logistic unit with
+  its cut-off at 15: invisible where polyreg augments, caught by the direct
+  multinom fit of separated data.
 """
 
 import numpy as np
 import pandas as pd
 import pytest
 
+import imputation.fitting
 import imputation.logreg
 import imputation.norm
+import imputation.polyreg
 import imputation.sampler
 
-from . import test_l1_augment, test_l1_logreg
+from ..test_imputation import test_methods
+from . import test_l1_augment, test_l1_logreg, test_l1_polyreg
 from .test_l1_norm import CASES, check_draws, check_imputations, replay
 
 pytestmark = pytest.mark.parity
@@ -337,3 +362,152 @@ def test_reference_category_in_declared_order_is_caught(monkeypatch):
     np.testing.assert_allclose(steps.fit.coef, -np.asarray(case["coef"]), rtol=1e-8)
     with pytest.raises(AssertionError, match="Not equal to tolerance"):
         test_l1_logreg.check_fit(case, steps)
+
+
+# ---------------------------------------------------------------------------
+# polyreg and multinom_fit
+# ---------------------------------------------------------------------------
+
+POLYREG = test_l1_polyreg.CASES
+
+
+def test_polyreg_taking_the_most_probable_category_is_caught(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        imputation.polyreg, "_draw_categories", _counted(calls, lambda u, prob: np.argmax(prob, axis=1))
+    )
+    case = POLYREG["polyreg_seed1"]
+    steps, rng = test_l1_polyreg.replay(case)
+    assert calls, "mutant not applied: polyreg does not call imputation.polyreg._draw_categories"
+    with pytest.raises(AssertionError, match=r"assert \[.*\] == \["):
+        test_l1_polyreg.check_labels(case, steps)
+    test_l1_polyreg.check_fit(case, steps)  # the fit itself is right
+    test_l1_polyreg.check_draws(case, rng)  # the uniforms are drawn, only not used
+
+
+def _multinom_fit_mutant(monkeypatch, calls, **overrides):
+    """Make polyreg's `multinom_fit` run with `overrides` of its keyword arguments."""
+    original = imputation.polyreg.multinom_fit
+
+    def mutant(*args, **kwargs):
+        return original(*args, **{**kwargs, **overrides})
+
+    monkeypatch.setattr(imputation.polyreg, "multinom_fit", _counted(calls, mutant))
+
+
+def test_polyreg_fitted_to_full_convergence_is_caught(monkeypatch):
+    calls = []
+    _multinom_fit_mutant(monkeypatch, calls, maxit=10_000, abstol=-np.inf, reltol=0.0)
+    case = POLYREG["polyreg_maxit"]
+    steps, rng = test_l1_polyreg.replay(case)
+    assert calls, "mutant not applied: polyreg does not call imputation.polyreg.multinom_fit"
+    assert steps.fit.converged and steps.fit.gr_count > 5
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_polyreg.check_fit(case, steps)
+    test_l1_polyreg.check_draws(case, rng)
+    # a fit that R stops by its tolerances is also 1e-5 away from the maximum
+    case = POLYREG["polyreg_seed1"]
+    steps, _ = test_l1_polyreg.replay(case)
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_polyreg.check_prediction(case, steps)
+
+
+def _target_categories_mutant(monkeypatch, calls, keep_unused):
+    """Make polyreg order an unordered Categorical as declared (as an ordered one), keeping its unused levels or not."""
+    original = imputation.polyreg.target_categories
+
+    def mutant(y, keep=False):
+        if isinstance(getattr(y, "dtype", None), pd.CategoricalDtype) and not y.dtype.ordered:
+            y = pd.Categorical(y, ordered=True)
+            keep = keep_unused
+        return original(y, keep)
+
+    monkeypatch.setattr(imputation.polyreg, "target_categories", _counted(calls, mutant))
+
+
+def test_polyreg_with_declared_level_order_is_caught(monkeypatch):
+    """Declared (c, a, b): the same probabilities are cumulated in another order."""
+    calls = []
+    _target_categories_mutant(monkeypatch, calls, keep_unused=False)
+    test_l1_polyreg.check_case(POLYREG["polyreg_seed1"])  # declared (a, b, c): sorted already
+    case = POLYREG["polyreg_unsorted"]
+    steps, _ = test_l1_polyreg.replay(case)
+    assert calls, "mutant not applied: polyreg does not call imputation.polyreg.target_categories"
+    with pytest.raises(AssertionError, match=r"assert \[.*\] == \["):
+        test_l1_polyreg.check_labels(case, steps)
+
+
+def test_polyreg_keeping_an_unused_level_is_caught(monkeypatch):
+    """The unused level "ab" gets a column of zeros: the labels stay R's, the
+    probabilities have four columns instead of three."""
+    calls = []
+    _target_categories_mutant(monkeypatch, calls, keep_unused=True)
+    case = POLYREG["polyreg_unused_level"]
+    steps, _ = test_l1_polyreg.replay(case)
+    assert calls, "mutant not applied: polyreg does not call imputation.polyreg.target_categories"
+    assert steps.prob.shape == (10, 4) and np.all(steps.prob[:, 1] == 0)
+    test_l1_polyreg.check_labels(case, steps)  # invisible in the labels
+    with pytest.raises(AssertionError, match=r"\(shapes \(10, 4\), \(10, 3\) mismatch\)"):
+        test_l1_polyreg.check_prediction(case, steps)
+
+
+def test_polyreg_without_augmentation_is_caught(monkeypatch):
+    calls = []
+
+    def unchanged(y, id_obs, x, id_mis, max_categories=50):
+        y, x = np.asarray(y), np.asarray(x, dtype=float).reshape(len(y), -1)
+        return imputation.logreg.Augmented(y, np.asarray(id_obs), x, np.asarray(id_mis), np.ones(len(y)))
+
+    monkeypatch.setattr(imputation.polyreg, "augment", _counted(calls, unchanged))
+    case = POLYREG["polyreg_separated"]
+    steps, rng = test_l1_polyreg.replay(case)
+    assert calls, "mutant not applied: polyreg does not call imputation.polyreg.augment"
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_polyreg.check_fit(case, steps)
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_polyreg.check_prediction(case, steps)
+    test_l1_polyreg.check_draws(case, rng)
+
+
+def test_polyreg_not_drawing_for_a_single_category_is_caught(monkeypatch):
+    """R draws its uniform numbers before it looks at the categories."""
+    calls = []
+    monkeypatch.setattr(imputation.polyreg, "_uniforms", _counted(calls, lambda rng, n: np.zeros(n)))
+    case = POLYREG["polyreg_one_category"]
+    steps, rng = test_l1_polyreg.replay(case)
+    assert calls, "mutant not applied: polyreg does not call imputation.polyreg._uniforms"
+    test_l1_polyreg.check_labels(case, steps)  # the single category, as in R
+    with pytest.raises(AssertionError, match=r"scripted values left over: 10 uniform"):
+        test_l1_polyreg.check_draws(case, rng)
+
+
+def test_polyreg_drawing_with_greater_or_equal_is_caught_by_the_unit_test(monkeypatch):
+    """No fixture can show it: every uniform number is at least 1e-4 away
+    from every cumulative probability. The unit test of the helper does."""
+    calls = []
+
+    def greater_or_equal(u, prob):
+        cumulative = np.cumsum(prob, axis=1)
+        return np.minimum(np.sum(np.asarray(u)[:, None] >= cumulative, axis=1), cumulative.shape[1] - 1)
+
+    monkeypatch.setattr(imputation.polyreg, "_draw_categories", _counted(calls, greater_or_equal))
+    test_l1_polyreg.check_case(POLYREG["polyreg_seed1"])  # invisible in the fixture
+    assert calls, "mutant not applied: polyreg does not call imputation.polyreg._draw_categories"
+    unit_tests = test_methods.TestPolyregImputation()
+    with pytest.raises(AssertionError, match="Arrays are not equal"):
+        unit_tests.test_uniform_equal_to_a_cumulative_probability_stays_in_the_lower_category()
+
+
+def test_softmax_for_two_classes_is_caught_on_separated_data(monkeypatch):
+    """With the augmentation of polyreg the cut-off is never reached and the
+    two models agree; on separated data nnet's logistic unit outputs exactly
+    0 and 1 beyond an activation of 15 and its fit takes another path."""
+    calls = []
+    monkeypatch.setattr(imputation.fitting, "_uses_logistic_unit", _counted(calls, lambda n_fitted: False))
+    test_l1_polyreg.check_case(POLYREG["polyreg_two_levels"])  # invisible where polyreg augments
+    case = test_l1_polyreg.MULTINOM["two_classes_separated"]
+    fit = test_l1_polyreg.fit_multinom(case)
+    assert calls, "mutant not applied: multinom_fit does not call imputation.fitting._uses_logistic_unit"
+    assert not fit.logistic
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_polyreg.check_multinom(case, fit)

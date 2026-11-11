@@ -114,14 +114,23 @@ def test_imputed_values_are_observed_values(dataset, method):
         assert_imputed_are_observed(df, completed)
 
 
+# The columns of the typed frame each categorical method imputes
+TYPED_COLUMNS = {
+    "logreg": ["flag", "two"],
+    "logreg.boot": ["flag", "two"],
+    "polyreg": ["flag", "two", "three", "grade"],
+}
+
+
 @pytest.mark.parametrize("method", CATEGORICAL_METHODS)
-def test_categorical_method_imputes_the_two_category_columns(method):
-    """On the typed frame the method imputes the boolean and the two-level
-    column, with labels observed there."""
+def test_categorical_method_imputes_its_columns(method):
+    """On the typed frame logreg and logreg.boot impute the boolean and the
+    two-level column, polyreg also the three-category text column and the
+    ordered column, with labels observed there."""
     df, _, mice, out = _run("typed", method)
-    assert [c for c in df.columns if mice.method[c] == method] == ["flag", "two"]
+    assert [c for c in df.columns if mice.method[c] == method] == TYPED_COLUMNS[method]
     for completed in out:
-        assert_imputed_are_observed(df, completed, columns=["flag", "two"])
+        assert_imputed_are_observed(df, completed, columns=TYPED_COLUMNS[method])
 
 
 @pytest.mark.parametrize("dataset,method", MODEL_CASES)
@@ -146,14 +155,17 @@ def test_chain_statistics_shape_and_finite(dataset, method):
 
 def _univariate_problem(seed=7, n=40, x_as_frame=False, method=None):
     """(y, ry, x); y is numeric, or for a categorical method an object array of
-    two labels with None where it is missing, as MICE passes a text column."""
+    labels (three for polyreg, two for the others) with None where it is
+    missing, as MICE passes a text column."""
     rng = np.random.default_rng(seed)
     x = rng.normal(size=(n, 2))
     y = x @ np.array([1.0, -0.5]) + rng.normal(scale=0.5, size=n)
     ry = np.ones(n, dtype=bool)
     ry[[0, 3, 8, 15, 22, 31]] = False
     y[~ry] = np.nan
-    if method in CATEGORICAL_METHODS:
+    if method == "polyreg":
+        y = np.where(ry, np.where(y > 0.5, "hi", np.where(y > -0.5, "mid", "lo")), None)
+    elif method in CATEGORICAL_METHODS:
         y = np.where(ry, np.where(y > 0, "yes", "no"), None)
     if x_as_frame:
         x = pd.DataFrame(x, columns=["x1", "x2"])

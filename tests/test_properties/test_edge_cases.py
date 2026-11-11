@@ -19,6 +19,7 @@ from ._helpers import (
     METHODS,
     N_IMP,
     NUMERIC_MODEL_METHODS,
+    TWO_CATEGORY_METHODS,
     assert_all_invariants,
     full_predictor_matrix,
     impute,
@@ -1002,11 +1003,11 @@ def test_norm_boot_ridge_and_norm_ridge_reach_their_own_method(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# The categorical methods: logreg and logreg.boot
+# The categorical methods: logreg, logreg.boot and polyreg
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("method", CATEGORICAL_METHODS)
+@pytest.mark.parametrize("method", TWO_CATEGORY_METHODS)
 def test_logreg_on_three_categories_raises_naming_polyreg(method):
     """R stops with "invalid 'labels'"; the port refuses clearly."""
     df = typed_frame()
@@ -1014,7 +1015,7 @@ def test_logreg_on_three_categories_raises_naming_polyreg(method):
         impute(df, {"three": method}, check_log_warning=False)
 
 
-@pytest.mark.parametrize("method", CATEGORICAL_METHODS)
+@pytest.mark.parametrize("method", TWO_CATEGORY_METHODS)
 def test_one_observed_category_is_imputed_without_random_numbers(method):
     """R imputes invented labels (logreg) or fits anyway (logreg.boot); the
     port imputes the one category and draws nothing. (Through impute such a
@@ -1058,7 +1059,8 @@ def test_two_category_column_types_keep_their_dtype(method, kind):
 
 @pytest.mark.parametrize("method", CATEGORICAL_METHODS)
 def test_numeric_zero_one_column(method):
-    """R's logreg takes a numeric 0/1 target and imputes 0 and 1."""
+    """R's logreg takes a numeric 0/1 target and imputes 0 and 1; polyreg
+    imputes the two values too (R's returns them as text)."""
     df = regression_frame()
     df["z01"] = (df["x1"] + np.random.default_rng(2).normal(size=len(df)) > 0).astype(float)
     df.loc[[3, 8, 14, 27, 33], "z01"] = np.nan
@@ -1091,3 +1093,101 @@ def test_logreg_keywords_raise_takes_no_parameters(key, method):
     df = typed_frame()
     with pytest.raises(TypeError, match=rf"'{key}'\. Method '{re.escape(method)}' takes no parameters\."):
         impute(df, method, **{key: 1})
+
+
+def test_polyreg_imputes_one_observed_category_everywhere():
+    """R draws one uniform number per cell first, then returns the category;
+    so does the port. (Through impute such a column is constant and not
+    imputed, as in R.)"""
+    from imputation.polyreg import polyreg
+
+    from ..test_parity._helpers import ScriptedGenerator
+
+    x = np.random.default_rng(3).normal(size=(12, 2))
+    y = pd.Categorical(["b"] * 9 + [None] * 3, categories=["a", "b", "c"])
+    scripted = ScriptedGenerator(uniforms=[0.1, 0.5, 0.9], strict=True)
+    assert polyreg(y, y.notna(), x, rng=scripted).tolist() == ["b"] * 3
+    scripted.assert_exhausted()
+    assert scripted.order == [("uniform", 3)]
+
+
+def test_polyreg_more_than_50_categories_raise():
+    """R's augment stops: "Maximum number of categories (50) exceeded"."""
+    from imputation.polyreg import polyreg
+
+    y = np.array([f"l{i % 51:02d}" for i in range(110)], dtype=object)
+    ry = np.arange(110) % 10 != 0
+    y[~ry] = None
+    x = np.random.default_rng(0).normal(size=(110, 1))
+    with pytest.raises(ValueError, match=r"51 categories, more than the maximum of 50 .*exceeded"):
+        polyreg(y, ry, x, rng=np.random.default_rng(1))
+
+
+def test_polyreg_two_categories_with_one_missing_value():
+    """R stops ("dim(X) must have a positive length"); the port imputes."""
+    df = regression_frame()
+    df["zcol"] = pd.Categorical(np.where(df["x1"] > 0, "yes", "no"))
+    df.loc[[7], "zcol"] = np.nan
+    mice, out = _check(df, {"zcol": "polyreg"})
+    assert mice.method["zcol"] == "polyreg"
+    assert {completed.loc[7, "zcol"] for completed in out} <= {"no", "yes"}
+
+
+def test_polyreg_ordered_column_with_unused_level():
+    """R stops ("dims ... do not match"); the port imputes the levels present
+    and keeps the declared ones."""
+    rng = np.random.default_rng(29)
+    df = regression_frame()
+    grades = np.array(["low", "mid", "high"])[np.digitize(df["x1"] + rng.normal(scale=0.5, size=len(df)), [-0.5, 0.5])]
+    df["grade"] = pd.Categorical(grades, categories=["low", "mid", "high", "top"], ordered=True)
+    mis = [0, 5, 12, 18, 27, 35]
+    df.loc[mis, "grade"] = np.nan
+    mice, out = _check(df, {"grade": "polyreg"}, n_imputations=4)
+    assert mice.method["grade"] == "polyreg"
+    for completed in out:
+        assert completed["grade"].dtype == df["grade"].dtype
+        assert set(completed.loc[mis, "grade"]) <= {"low", "mid", "high"}
+
+
+def test_polyreg_keywords_reach_the_imputer(monkeypatch):
+    """``polyreg_maxit`` and ``polyreg_max_weights`` are R's ``nnet.maxit`` and ``nnet.MaxNWts``."""
+    import imputation.polyreg
+
+    seen = []
+    original = imputation.polyreg.multinom_fit
+
+    def recording(*args, **kwargs):
+        seen.append((kwargs["maxit"], kwargs["max_weights"]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(imputation.polyreg, "multinom_fit", recording)
+    impute(typed_frame(), {"three": "polyreg"}, polyreg_maxit=7, polyreg_max_weights=99)
+    assert seen and set(seen) == {(7, 99)}
+
+
+def test_polyreg_too_many_weights_raise():
+    """R: "too many (N) weights"."""
+    with pytest.raises(ValueError, match=r"too many \(\d+\) weights.*max_weights=5"):
+        impute(typed_frame(), {"three": "polyreg"}, polyreg_max_weights=5, check_log_warning=False)
+
+
+def _three_category_column(kind, n, rng):
+    """A three-category column of the given dtype, related to nothing."""
+    labels = rng.choice(["lo", "mid", "hi"], size=n)
+    if kind == "object":
+        return pd.Series(labels, dtype=object)
+    if kind == "string":
+        return pd.Series(labels, dtype="string")
+    return pd.Series(pd.Categorical(labels, categories=["mid", "lo", "hi"]))
+
+
+@pytest.mark.parametrize("kind", ["object", "string", "category"])
+def test_polyreg_column_types_keep_their_dtype(kind):
+    """Three categories; boolean columns, which have two, are in
+    test_two_category_column_types_keep_their_dtype."""
+    rng = np.random.default_rng(19)
+    df = regression_frame()
+    df["zcol"] = _three_category_column(kind, len(df), rng)
+    df.loc[[2, 6, 11, 30, 33], "zcol"] = None
+    mice, _ = _check(df, "polyreg")
+    assert mice.method["zcol"] == "polyreg"

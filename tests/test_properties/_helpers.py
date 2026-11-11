@@ -14,14 +14,16 @@ import pytest
 from .._logged_events import impute_checking_log_warning
 
 # The methods by kind. CATEGORICAL_METHODS grows in the phases of 0.3 that
-# add the methods: polyreg (phase 4) and polr (phase 5).
+# add the methods: polr (phase 5).
 # Donor methods impute observed values or labels.
 DONOR_METHODS = ("pmm", "cart", "rf", "midas", "sample")
 # Model-based methods for numeric targets only; they impute new floats.
 NUMERIC_MODEL_METHODS = ("norm", "norm.nob", "norm.boot", "norm.predict", "mean")
 # Model-based methods for categorical targets only; they impute labels of
-# the column. logreg and logreg.boot impute columns with two categories.
-CATEGORICAL_METHODS = ("logreg", "logreg.boot")
+# the column. logreg and logreg.boot impute columns with two categories
+# (TWO_CATEGORY_METHODS), polyreg columns with any number of categories.
+TWO_CATEGORY_METHODS = ("logreg", "logreg.boot")
+CATEGORICAL_METHODS = (*TWO_CATEGORY_METHODS, "polyreg")
 # Methods whose univariate imputer draws no random number; a subset of the
 # others. Inside a chain, norm.predict still depends on the seed through the
 # (random) imputations of the other incomplete columns; mean does not.
@@ -64,21 +66,29 @@ def has_two_categories(series):
     return not is_numeric_column(series) and series.dropna().nunique() <= 2
 
 
+def can_impute(method, series):
+    """True if the categorical ``method`` takes ``series`` as its target:
+    logreg and logreg.boot a boolean, categorical or text column with two
+    categories, polyreg every boolean, categorical or text column."""
+    if method in TWO_CATEGORY_METHODS:
+        return has_two_categories(series)
+    return not is_numeric_column(series)
+
+
 def method_spec(method, df):
     """Method argument for ``impute``.
 
     A method restricted to numeric targets (midas, as R's midastouch, and
     the ``NUMERIC_MODEL_METHODS``) imputes the numeric columns and
     ``sample`` the others; a method restricted to categorical targets
-    (``CATEGORICAL_METHODS``) imputes the columns it can impute (logreg and
-    logreg.boot: the boolean, categorical and text columns with two
-    categories) and ``pmm`` the others. Every other method is used for all
-    columns.
+    (``CATEGORICAL_METHODS``) imputes the columns it can impute (see
+    `can_impute`) and ``pmm`` the others. Every other method is used for
+    all columns.
     """
     if method == "midas" or method in NUMERIC_MODEL_METHODS:
         return {c: (method if is_numeric_column(df[c]) else "sample") for c in df.columns}
     if method in CATEGORICAL_METHODS:
-        return {c: (method if has_two_categories(df[c]) else "pmm") for c in df.columns}
+        return {c: (method if can_impute(method, df[c]) else "pmm") for c in df.columns}
     return method
 
 

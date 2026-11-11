@@ -12,8 +12,8 @@ class ImputationMethod(Enum):
     The values are R's method names, dots included. The first five are
     donor methods: they impute observed values. The next five are for
     numeric targets and impute new values (floats). ``logreg`` and
-    ``logreg.boot`` are for targets with two categories and impute their
-    labels.
+    ``logreg.boot`` are for targets with two categories, ``polyreg`` for
+    categorical targets with any number of categories; they impute labels.
 
     Attributes
     ----------
@@ -42,6 +42,8 @@ class ImputationMethod(Enum):
         Bayesian logistic regression on augmented data, R's ``logreg``.
     LOGREG_BOOT
         Logistic regression on a bootstrap sample, R's ``logreg.boot``.
+    POLYREG
+        Multinomial logistic regression on augmented data, R's ``polyreg``.
     """
 
     PMM = "pmm"
@@ -56,6 +58,7 @@ class ImputationMethod(Enum):
     MEAN = "mean"
     LOGREG = "logreg"
     LOGREG_BOOT = "logreg.boot"
+    POLYREG = "polyreg"
 
     @classmethod
     def get_all_methods(cls) -> list[str]:

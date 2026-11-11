@@ -24,6 +24,7 @@ from .norm import norm, norm_boot, norm_nob, norm_predict
 
 # Import concrete imputation back-ends
 from .PMM import pmm
+from .polyreg import polyreg
 from .rf import rf
 from .sample import sample
 
@@ -45,6 +46,7 @@ _IMPUTER_MAP: dict[str, Callable[..., np.ndarray]] = {
     ImputationMethod.MEAN.value: mean,
     ImputationMethod.LOGREG.value: logreg,
     ImputationMethod.LOGREG_BOOT.value: logreg_boot,
+    ImputationMethod.POLYREG.value: polyreg,
 }
 
 # Arguments that MICE supplies to the imputers itself (`log_event` only to

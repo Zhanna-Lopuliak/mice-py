@@ -348,6 +348,10 @@ class MICE:
               categorical, text, or numeric with two distinct values), which
               imputes their labels: ``"logreg"`` (Bayesian, on data
               augmented as in R) and ``"logreg.boot"`` (bootstrap);
+            - multinomial logistic regression for categorical columns with
+              any number of categories (up to 50), which imputes their
+              labels: ``"polyreg"`` (on data augmented as in R, fitted as
+              R's ``nnet::multinom``);
             - ``""`` for a column that is not imputed.
 
             The argument is:
@@ -388,7 +392,9 @@ class MICE:
             with every dot replaced by an underscore
             (`imputation.utils.method_prefix`): ``pmm_donors=3`` passes
             ``donors=3`` to `imputation.PMM.pmm`, ``norm_boot_ridge=1e-4``
-            passes ``ridge=1e-4`` to `imputation.norm.norm_boot`. The
+            passes ``ridge=1e-4`` to `imputation.norm.norm_boot`,
+            ``polyreg_maxit=200`` passes ``maxit=200`` to
+            `imputation.polyreg.polyreg` (R's ``nnet.maxit``). The
             parameter must exist in that imputer's signature; any other
             keyword argument raises ``TypeError``.
 
@@ -416,7 +422,9 @@ class MICE:
             method, initial method, visit sequence, predictor matrix), or when
             a method cannot impute a column (for example ``"midas"`` or
             ``"norm"`` on a categorical column, ``"logreg"`` on a column with
-            more than two categories, ``"norm.nob"`` with too few observed
+            more than two categories, ``"polyreg"`` on a column with more
+            than 50 categories or a model with more weights than
+            ``polyreg_max_weights``, ``"norm.nob"`` with too few observed
             values for its predictors, or a column without observed value in
             the rows usable for its model).
         TypeError

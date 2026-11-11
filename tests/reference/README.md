@@ -11,6 +11,7 @@ fixtures are committed, so the Python tests run without R.
 |---|---|
 | R | 4.6.2 |
 | mice | 3.19.0 (asserted by `r/_common.R`; the scripts stop on any other version) |
+| nnet | 7.3-21 (recorded in `l1_polyreg.json`) |
 | jsonlite | as installed with R 4.6.2 |
 | Random numbers | `RNGkind("Mersenne-Twister", "Inversion", "Rejection")`, R's default, set in `r/_common.R` |
 
@@ -91,6 +92,8 @@ Written by `write_fixture(name, payload)` in `r/_common.R` and read by
 | `l1_norm` | `mice.impute.norm()`, `.norm.nob()`, `.norm.boot()`, `.norm.predict()`, `.mean()` with every draw captured by re-seeding (`rchisq`, `rnorm`, `sample` as 0-based indices) and the expected order of the draws | `imputation.norm.norm` / `norm_nob` / `norm_boot` / `norm_predict`, `imputation.mean.mean`, driven by a strict `ScriptedGenerator` |
 | `l1_augment` | `mice:::augment(y, ry, x, wy)`: the added rows, their targets and weights, `ry`, `wy`, the level order afterwards | `imputation.logreg.augment` on the codes R sees, `imputation.logreg.target_categories` |
 | `l1_logreg` | `mice.impute.logreg()`, `.logreg.boot()` with every draw captured by re-seeding (`rnorm`, `sample` as 0-based indices, `runif`), rebuilt from `augment()`, `glm.fit()` and `summary.glm()`: coefficients, `cov.unscaled`, iterations, convergence, `beta.star`, probabilities, labels; R's errors where the port goes on | `imputation.logreg._logreg` / `_logreg_boot` (the steps of `logreg` / `logreg_boot`), driven by a strict `ScriptedGenerator` |
+| `l1_vmmin` | `optim(par, fn, gr, method = "BFGS")` (R's C function `vmmin`, which `nnet` and `MASS::polr` call too) on a quadratic, Rosenbrock's function, a logistic likelihood, a function that is NaN outside its domain and one started at its minimum, with other `maxit`, `abstol` and `reltol`: parameters, value, function and gradient counts, convergence | `imputation.fitting.vmmin` |
+| `l1_polyreg` | `mice.impute.polyreg()` with its uniform numbers captured by re-seeding, rebuilt from `augment()`, `nnet::multinom()` and `predict()`: objective, convergence, coefficients, probabilities of every imputed cell, labels; R's errors where the port goes on or stops; direct `nnet::multinom()` fits (two classes on separated data, case weights) | `imputation.polyreg._polyreg` (the steps of `polyreg`), driven by a strict `ScriptedGenerator`; `imputation.fitting.multinom_fit` |
 
 Behaviours of R mice 3.19.0 that the fixtures pin down and that are easy to
 get wrong:
@@ -121,6 +124,22 @@ get wrong:
 - `vcov()` of a `glm` fitted with the default `epsilon = 1e-8` is about 1e-5
   (relative) away from the inverse information at the MLE. The logistic model
   in `l1_pooling` uses `glm.control(epsilon = 1e-14)`.
+- `nnet::multinom` stops where `vmmin`'s tolerances (`abstol = 1e-4`,
+  `reltol = 1e-8`) or `maxit` stop it, 1e-5 to 1e-4 (in the probabilities)
+  away from the maximum of the likelihood, without an error at the
+  iteration limit (case `polyreg_maxit`). Two classes are fitted with one
+  logistic unit whose output is exactly 0 or 1 beyond an activation of 15
+  (`two_classes_separated`). Without predictors mice adds a constant column
+  next to the intercept (`polyreg_no_predictor`).
+- `mice.impute.polyreg` draws its uniform numbers before it checks for a
+  single observed category (`polyreg_one_category`), and stops on two
+  categories with one missing value, on an ordered factor with an unused
+  level, and on a level held only by unobserved cells where it does not
+  augment; those cases store R's error and the port's result.
+- The function counts of `vmmin` can depend on the last bits of the values
+  where a search ends with a restart along the previous gradient; R's C code
+  (fused multiply-adds) and NumPy then differ by a few evaluations. The
+  cases of `l1_vmmin` avoid that ending (see the script).
 
 ## Layer 2 fixtures
 
@@ -151,7 +170,8 @@ fixture without it is of the donor kind):
   `<level>:<term>` (for example `yes:x1`). The coefficients see the
   dependence between the cells of one call that a shared parameter draw or
   bootstrap sample creates; there are no moments per cell. The donor
-  fixtures with a factor target (F3) keep the donor kind and only `counts`.
+  fixtures with a factor target (F3) keep the donor kind and only `counts`;
+  `l2_polyreg` on F3 is of the category kind.
 
 The inputs F5 and F6 have a binary factor target with the levels `no` and
 `yes` (lowercase ASCII, so their sort order does not depend on the locale)
@@ -185,6 +205,7 @@ observed rows:
 | `l2_norm_boot` | continuous | F1 | 20,000 |
 | `l2_logreg` | category | F5, F6 | 20,000 |
 | `l2_logreg_boot` | category | F5 | 20,000 |
+| `l2_polyreg` | category | F3 | 20,000 |
 
 `l2_chain` (200 full `mice()` chains with pmm) and `l3_mini_s4` (scenario S4
 of the simulation study with pmm, midastouch and norm, 20,000 replications)
