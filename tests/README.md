@@ -1,238 +1,75 @@
-# Testing Guide
+# Tests
 
-This document describes the testing strategy and how to run tests for the MICE package.
+The test suite covers the `imputation` and `plotting` packages and compares
+them with R mice 3.19.0. It runs without R: the R results are committed as
+fixtures in `reference/fixtures`.
 
-## Overview
+## Running
 
-The testing suite covers two main modules:
-- **`imputation/`**: Core MICE functionality, validation, and imputation methods
-- **`plotting/`**: Diagnostic plots and visualization utilities
-
-## Test Structure
-
-```
-tests/
-├── conftest.py                    # Shared fixtures and configuration
-├── test_integration.py            # End-to-end workflow tests
-├── test_imputation/
-│   ├── __init__.py
-│   ├── test_mice.py              # Core MICE class tests
-│   ├── test_validators.py        # Input validation tests
-│   └── test_methods.py           # Individual imputation method tests
-└── test_plotting/
-    ├── __init__.py
-    ├── test_diagnostics.py       # Diagnostic plotting tests
-    └── test_utils.py             # Plotting utility tests
-```
-
-## Running Tests
-
-### Quick Start
+From the repository root, after `uv sync`:
 
 ```bash
-# Install test dependencies
-pip install pytest pytest-cov pytest-timeout
-
-# Run all tests
-pytest
-
-# Run with coverage
-pytest --cov=imputation --cov=plotting --cov-report=term-missing
+uv run pytest                                        # everything (about 900 tests)
+uv run pytest -m parity                              # only the comparisons with R
+uv run pytest -m "not slow"                          # without the slow tree tests
+uv run pytest tests/test_imputation/test_mice.py     # one file
+uv run pytest --cov --cov-report=term-missing        # with coverage (CI requires 89%)
+uv run pytest --doctest-modules imputation plotting  # the examples in the docstrings
 ```
 
-### Using the Test Runner Script
+Without uv: `pip install -e ".[test]"`, then `pytest`. Plots use the `Agg`
+backend (set in `conftest.py`), so no window opens.
 
-```bash
-# Run all tests
-python run_tests.py
+## Layout
 
-# Run specific test suites
-python run_tests.py --suite imputation
-python run_tests.py --suite plotting
-python run_tests.py --suite integration
+| Path | What it tests |
+|---|---|
+| `test_imputation/` | Unit tests: `MICE` (`test_mice.py`), the imputation methods (`test_methods.py`), `imputation.design` (`test_design.py`), the validators, logging |
+| `test_plotting/` | Unit tests of the plot functions and the missing-data pattern |
+| `test_integration.py` | End-to-end workflows: impute, fit, pool, plot |
+| `test_parity/` | Comparisons with R mice (marker `parity`), in three layers, see below |
+| `test_properties/` | Layer 4: invariants every completed dataset must satisfy, seeds, argument handling, edge cases, pooling properties, the plotting contract; partly with `hypothesis` |
+| `reference/` | The R scripts (`reference/r/`) and the fixtures they produce; see [`reference/README.md`](reference/README.md) |
+| `conftest.py`, `_logged_events.py` | Shared fixtures and helpers |
 
-# Run with coverage
-python run_tests.py --coverage
+The parity layers:
 
-# Skip slow tests
-python run_tests.py --fast
-```
+| Files | Layer | What |
+|---|---|---|
+| `test_l1_*.py` | L1, exact parity | deterministic pieces (least squares, coefficient draw, quantify, pmm with one donor, donor matching, setup step, design, quickpred, md.pattern, pooling, midastouch probabilities) against R to a relative tolerance of 1e-8 |
+| `test_l2_*.py` | L2, distribution parity | the imputed values of many calls per method, cell by cell, against R's (chi-square and z tests); `test_l2_mutants.py` checks that the tests catch old defects; `test_l2_stats.py` tests the statistics themselves |
+| `test_l3_mini_simulation.py` | L3, in-suite | a small simulation (scenario S4, pmm and midas, 200 replications) against stored R results |
 
-### Individual Test Categories
+The full simulation study (L3) is in `simulations/`. The method and the
+results of all layers are described in the documentation page
+"Validation against R mice" (`docs/source/r_mice/validation.rst`).
 
-```bash
-# Core MICE functionality
-pytest tests/test_imputation/test_mice.py
+## Markers
 
-# Validation functions
-pytest tests/test_imputation/test_validators.py
+Declared in `pyproject.toml`:
 
-# Imputation methods
-pytest tests/test_imputation/test_methods.py
+- `parity`: comparisons with R (all of `test_parity/`).
+- `slow`: the tree tests of L2 that take several seconds.
+- `plotting`: the plotting contract tests (`unit` and `integration` are
+  declared but not used).
 
-# Plotting functions
-pytest tests/test_plotting/
+`--strict-markers` is on, so a misspelled marker is an error.
 
-# Integration tests
-pytest tests/test_integration.py
-```
+## Warnings
 
-## Test Categories
+Warnings are not suppressed globally. A test that expects one of the
+package's warnings checks it with `pytest.warns`. The few third-party warnings
+that cannot be avoided are filtered in `pyproject.toml`, each with its
+reason.
 
-### Unit Tests
-- **Validation Tests**: Input validation, parameter checking, error handling
-- **Method Tests**: Individual imputation algorithms (PMM, CART, RF, Sample, MIDAS)
-- **Plotting Tests**: Individual plotting functions and utilities
+## Adding tests
 
-### Integration Tests
-- **End-to-End Workflows**: Complete MICE workflows from data to results
-- **Plotting Integration**: MICE results with diagnostic plotting
-- **Error Recovery**: Graceful handling of edge cases
-
-## Test Data
-
-Tests use several types of synthetic data:
-
-- **`sample_data_complete`**: Complete dataset without missing values
-- **`sample_data_missing`**: Dataset with realistic missing patterns (20% BMI, 15% cholesterol, 10% smoker)
-- **`small_data_missing`**: Minimal dataset for quick tests
-- **`imputed_datasets`**: Mock imputed datasets for plotting tests
-- **`missing_pattern`**: Binary pattern matrices for plotting
-
-## What's Tested
-
-### Imputation Module (`imputation/`)
-
-#### Core MICE Class (`test_mice.py`)
-- ✅ Initialization with valid/invalid data
-- ✅ Missing value tracking and statistics
-- ✅ Basic imputation workflow
-- ✅ Different imputation methods
-- ✅ Custom predictor matrices
-- ✅ Logging integration
-
-#### Validation Functions (`test_validators.py`)
-- ✅ DataFrame validation and cleaning
-- ✅ Parameter validation (n_imputations, maxit, methods)
-- ✅ Predictor matrix validation
-- ✅ Formula validation
-- ✅ Error handling and edge cases
-
-#### Imputation Methods (`test_methods.py`)
-- ✅ Sample imputation (random sampling)
-- ✅ PMM (Predictive Mean Matching)
-- ✅ CART (Classification and Regression Trees)
-- ✅ Random Forest imputation
-- ✅ MIDAS (Multiple Imputation with Distant Average Substitution)
-- ✅ Method interface consistency
-- ✅ Parameter handling
-
-### Plotting Module (`plotting/`)
-
-#### Diagnostic Plots (`test_diagnostics.py`)
-- ✅ Stripplots (observed vs imputed values)
-- ✅ Box-and-whisker plots
-- ✅ Density plots (KDE)
-- ✅ Scatter plots (XY plots)
-- ✅ Chain statistics plots
-- ✅ Plot saving and customization
-- ✅ Error handling
-
-#### Utility Functions (`test_utils.py`)
-- ✅ Missing data pattern analysis (`md_pattern_like`)
-- ✅ Missing data pattern visualization
-- ✅ Different data types handling
-- ✅ Edge cases and error handling
-
-### Integration Tests (`test_integration.py`)
-- ✅ Complete MICE workflows
-- ✅ MICE + plotting workflows
-- ✅ Multiple method comparisons
-- ✅ Logging integration
-- ✅ Mixed data types
-- ✅ Error recovery
-- ✅ Basic performance checks
-
-## Test Configuration
-
-### pytest.ini
-- Test discovery patterns
-- Output formatting
-- Timeout settings (5 minutes)
-- Warning filters
-
-### Fixtures (conftest.py)
-- Reproducible test data (seed=42)
-- Temporary directories for file outputs
-- Matplotlib non-interactive backend
-- Shared test utilities
-
-
-## Coverage Goals
-
-Target coverage levels:
-- **Core functionality**: >90%
-- **Validation functions**: >95%
-- **Plotting functions**: >80%
-- **Overall**: >85%
-
-## Adding New Tests
-
-When adding new functionality:
-
-1. **Unit tests**: Test individual functions/methods
-2. **Integration tests**: Test how components work together
-3. **Edge cases**: Test error conditions and boundary cases
-4. **Documentation**: Update this guide if needed
-
-### Test Naming Convention
-
-```python
-class TestClassName:
-    def test_function_basic(self):
-        """Test basic functionality."""
-        
-    def test_function_with_parameters(self):
-        """Test with different parameters."""
-        
-    def test_function_error_handling(self):
-        """Test error conditions."""
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Import errors**: Make sure package is installed in development mode
-   ```bash
-   pip install -e .
-   ```
-
-2. **Matplotlib backend errors**: Tests use 'Agg' backend automatically
-
-3. **Random seed issues**: Tests use fixed seeds for reproducibility
-
-4. **Memory issues**: Large datasets are avoided in tests
-
-### Debugging Tests
-
-```bash
-# Run single test with verbose output
-pytest tests/test_imputation/test_mice.py::TestMICEInitialization::test_init_with_valid_data -v
-
-# Run with Python debugger
-pytest --pdb tests/test_imputation/test_mice.py
-
-# Show print statements
-pytest -s tests/test_imputation/test_mice.py
-```
-
-## Performance Considerations
-
-Tests are designed to be:
-- **Fast**: Most tests complete in <1 second
-- **Lightweight**: Small datasets to avoid memory issues
-- **Reliable**: Fixed random seeds for reproducible results
-- **Isolated**: Each test is independent
-
-For performance testing of larger datasets, use the examples in the main package rather than the test suite.
+- Put unit tests next to the existing ones of the same module.
+- A behavior that R mice defines belongs in `test_parity/`, with a fixture
+  from a script in `reference/r/`; see `reference/README.md` for the naming
+  and the format.
+- An invariant that should hold for every method belongs in
+  `test_properties/`; `test_properties/_helpers.py` has the method list and
+  the assertions.
+- Seed every random generator (`np.random.default_rng(seed)`, or `seed=` in
+  `MICE.impute`).

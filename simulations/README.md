@@ -94,9 +94,9 @@ Measured on an 8-core Apple machine (4 performance and 4 efficiency cores)
 with 40 replications of every scenario and method, then extrapolated to the
 full plan: about 7 minutes for `run-python` and 7 minutes for `run_r.R`, plus
 about 10 seconds for `generate`. Most of the Python time is `rf` in S3 and S5
-(1.3-1.4 s per replication against 0.3-0.6 s in R). Two Python cells fail
-immediately today (S5 with pmm and midas) and will cost more once they run.
-`report.py` prints its own extrapolation from the timings of the last run.
+(1.3-1.4 s per replication against 0.3-0.6 s in R). These figures were
+measured before the fixes; `results/REPORT.md` has the timings of the last
+run, and `report.py` prints its own extrapolation from them.
 
 ## Outputs
 
@@ -135,17 +135,17 @@ succeeded: coverage SE √(n10 + n01 - (n10 - n01)²/R)/R, others sd(d)/√R.
 
 z-scores need about 100 or more replications to mean anything.
 
-## Status before the Phase 2 fixes
+## Results
 
-- **Seeds (finding C1).** `MICE.impute` has no `seed` argument; chain j is
-  always seeded with 42 + j, so all replications reuse the same random
-  streams. `_adapter.py` passes the seed as soon as the argument exists and
-  until then warns, and the report carries a banner: such runs check the
-  pipeline only. The full study runs after the seed fix.
-- **midas** draws from NumPy's global generator (finding A5). Workers are
-  started with `spawn`, so each has its own fresh global state.
-- **Failures today:** pmm on S5 (`AttributeError`, finding B1: categorical
-  target; B2 would follow for the categorical predictor), midas on S5
-  (`ValueError`, categorical target). R's `midastouch` cannot impute a factor
-  either: it imputes level codes, which R turns into `NA` ("invalid factor
-  level"), so S5 midastouch fails on both sides.
+`results/` holds the run for mice-py 0.2.0 and `results/baseline/` the run
+on the code before the fixes (0.1.0 plus the seed fix, commit `fc1d3e8`);
+`BASELINE.md` describes that state. On 0.2.0, 18 of 774 paired comparisons
+are flagged, all for `rf` in S5, where scikit-learn and ranger grow different
+trees with categorical predictors; on the baseline it was 184 of 738. The
+documentation page "Validation against R mice"
+(`docs/source/r_mice/validation.rst`) has the tables and the cause.
+
+midastouch cannot run on S5 in either engine: R's `midastouch` imputes
+level codes, which R turns into `NA` ("invalid factor level"), and mice-py's
+`midas` raises a `ValueError` for a categorical target. Both are recorded as
+failures, not as errors of the study.
