@@ -16,10 +16,15 @@ method, stored in its fixture (see ``tests/reference/r/_l2_common.R``):
 * ``"continuous"``: the imputations are new numbers. They are kept as floats;
   T1 compares the counts per cell in the ten bins cut at the deciles of R's
   draws.
+* ``"category"``: the imputations are labels drawn from a fitted model (a
+  factor target). Each is mapped to its level index; T1 compares the level
+  counts per cell.
 
-For a numeric target both kinds give T2 (moments per cell) and T3 (moments of
-the OLS coefficients of the completed y). A kind is one :class:`Kind` entry
-in ``KINDS``.
+For a numeric target the first two kinds give T2 (moments per cell) and T3
+(moments of the OLS coefficients of the completed y). The category kind gives
+T3 on the OLS coefficients of the 0/1 indicator of each level but the first
+in the completed target; there is no T2 for labels. A kind is one
+:class:`Kind` entry in ``KINDS``.
 """
 
 import functools
@@ -41,6 +46,8 @@ N_CALLS = {
     "norm": 3000,
     "norm.nob": 3000,
     "norm.boot": 3000,
+    "logreg": 3000,
+    "logreg.boot": 3000,
 }
 
 # Offset between the R seed stored in a fixture and the Python seed
@@ -157,6 +164,14 @@ def imputer(method):
         from imputation.norm import norm_boot
 
         return norm_boot
+    if method == "logreg":
+        from imputation.logreg import logreg
+
+        return logreg
+    if method == "logreg.boot":
+        from imputation.logreg import logreg_boot
+
+        return logreg_boot
     raise ValueError(method)
 
 
@@ -178,9 +193,9 @@ def draw(func, inp, n_calls, seed, kind="donor", **kwargs):
     One ``np.random.default_rng(seed)`` is passed to every call.
 
     Returns an ``n_calls x n_mis`` matrix with one row per call, recorded as
-    ``kind`` says: for ``"donor"`` integer donor indices (-1 where an
-    imputation is not an observed value or level), for ``"continuous"`` the
-    imputed values as floats.
+    ``kind`` says: for ``"donor"`` and ``"category"`` integer donor (level)
+    indices (-1 where an imputation is not an observed value or level), for
+    ``"continuous"`` the imputed values as floats.
     """
     handler = KINDS[kind]
     rng = np.random.default_rng(seed)
@@ -251,14 +266,39 @@ def _summarise_values(vals, inp, r_sum):
     return out
 
 
+def _indicator_coef_moments(idx, inp):
+    """Moments of the OLS coefficients of the 0/1 indicator of each level but
+    the first in the completed target on ``[1, x]``, one fit per call; level
+    by level, terms in the order of ``[1, x]`` (R's ``coef$names``)."""
+    x1 = np.column_stack([np.ones(len(inp.ry)), inp.x])
+    codes = np.repeat(donor_index(inp.y, inp)[:, None], idx.shape[0], axis=1)
+    codes[~inp.ry, :] = idx.T
+    coef = [
+        np.linalg.solve(x1.T @ x1, x1.T @ (codes == level).astype(float)) for level in range(1, len(inp.donor_values))
+    ]
+    return moments(np.vstack(coef).T)
+
+
+def _summarise_labels(idx, inp, r_sum=None):
+    """Level counts per cell (as ``_summarise_donors`` for a factor target)
+    and, when every imputation is a level, the moments of the coefficients
+    of the level indicators (``coef``)."""
+    if not inp.is_factor:
+        raise ValueError("the category kind needs a factor target")
+    out = _summarise_donors(idx, inp)
+    out["kind"] = "category"
+    if out["n_not_donor"] == 0:
+        out["coef"] = _indicator_coef_moments(idx, inp)
+    return out
+
+
 @dataclass(frozen=True)
 class Kind:
     """How the draws of one kind of method are recorded, summarised and
     tested by T1.
 
-    A new kind (for example ``"category"``: label counts per cell for methods
-    that draw labels from a fitted model) is one more entry in ``KINDS`` and
-    the matching entry in ``L2_KINDS`` of ``tests/reference/r/_l2_common.R``.
+    A new kind is one more entry in ``KINDS`` and the matching entry in
+    ``L2_KINDS`` of ``tests/reference/r/_l2_common.R``.
     """
 
     dtype: type  # of the matrix returned by draw()
@@ -266,6 +306,7 @@ class Kind:
     summarise: Callable  # (that matrix, L2Input, R summary) -> Python summary
     t1_counts: Callable  # (R summary, Python summary) -> what T1 compares, per cell
     t1_label: str  # what T1 compares, for messages
+    not_recorded: str = ""  # what an imputation that record() maps to -1 is not; "" if there is none
 
 
 KINDS = {
@@ -275,6 +316,7 @@ KINDS = {
         summarise=_summarise_donors,
         t1_counts=lambda r_sum, py_sum: (r_sum["counts"], py_sum["counts"]),
         t1_label="donor counts",
+        not_recorded="observed values",
     ),
     "continuous": Kind(
         dtype=float,
@@ -282,6 +324,14 @@ KINDS = {
         summarise=_summarise_values,
         t1_counts=lambda r_sum, py_sum: (r_sum["bins"]["counts"], py_sum["bins"]),
         t1_label="counts in R's decile bins",
+    ),
+    "category": Kind(
+        dtype=int,
+        record=donor_index,
+        summarise=_summarise_labels,
+        t1_counts=lambda r_sum, py_sum: (r_sum["counts"], py_sum["counts"]),
+        t1_label="level counts",
+        not_recorded="levels of the target",
     ),
 }
 
@@ -296,7 +346,7 @@ class Comparison:
     t3_z_mean: np.ndarray = None  # per coefficient
     t3_z_var: np.ndarray = None
     coef_names: tuple = ()
-    n_not_donor: int = 0  # always 0 for a kind other than "donor"
+    n_not_donor: int = 0  # imputations that are not observed values (donor) or levels (category)
     kind: str = "donor"
 
     @staticmethod
@@ -327,7 +377,8 @@ class Comparison:
     def t1_message(self):
         order = np.argsort(self.t1_p)[:3]
         worst = ", ".join(f"cell {j}: p={self.t1_p[j]:.3g}" for j in order)
-        not_donor = f"{self.n_not_donor} imputations are not observed values; " if self.kind == "donor" else ""
+        not_recorded = KINDS[self.kind].not_recorded
+        not_donor = f"{self.n_not_donor} imputations are not {not_recorded}; " if not_recorded else ""
         return f"T1 ({KINDS[self.kind].t1_label}): {not_donor}smallest p-values {worst} (pass: p >= {P_MIN:g})"
 
     def t2_message(self):
@@ -339,7 +390,10 @@ class Comparison:
 
 def _z_message(label, zm, zv, names, n_not_donor):
     if zm is None or zv is None:
-        return f"{label}: not computed ({n_not_donor} imputations are not observed values, or the target is a factor)"
+        return (
+            f"{label}: not computed ({n_not_donor} imputations are not observed values or levels, "
+            "or the statistic does not apply to this kind and target)"
+        )
 
     def worst(z):
         j = int(np.argmax(np.abs(z)))
@@ -350,22 +404,25 @@ def _z_message(label, zm, zv, names, n_not_donor):
 
 
 def compare(r_sum, py_sum, inp):
-    """Compute T1 (all inputs) and T2/T3 (numeric targets) for one method/input.
+    """Compute T1 (all inputs), T2 (numeric targets) and T3 (numeric targets
+    and the category kind) for one method/input.
 
-    T1 compares what the kind of ``py_sum`` counts per cell: donor counts, or
-    the counts in R's decile bins.
+    T1 compares what the kind of ``py_sum`` counts per cell: donor counts,
+    the counts in R's decile bins, or level counts. T2 and T3 are computed
+    where ``py_sum`` has their moments (``cell``, ``coef``).
     """
     kind = py_sum["kind"]
     counts_r, counts_p = KINDS[kind].t1_counts(r_sum, py_sum)
     counts_r = np.array(counts_r, dtype=float).reshape(inp.n_mis, -1)
     t1_p = np.array([chi2_homogeneity(cr, cp)[2] for cr, cp in zip(counts_r, counts_p)])
     comp = Comparison(t1_p=t1_p, n_not_donor=py_sum.get("n_not_donor", 0), kind=kind)
-    if inp.is_factor or "cell" not in py_sum:
-        return comp
     n_r, n_p = r_sum["n_calls"], py_sum["n_calls"]
-    rc, pc = r_sum["cell"], py_sum["cell"]
-    comp.t2_z_mean = z_mean(pc["mean"], pc["var"], n_p, as_array(rc["mean"]), as_array(rc["var"]), n_r)
-    comp.t2_z_var = z_logvar(pc["var"], pc["kurt"], n_p, as_array(rc["var"]), as_array(rc["kurt"]), n_r)
+    if "cell" in py_sum:
+        rc, pc = r_sum["cell"], py_sum["cell"]
+        comp.t2_z_mean = z_mean(pc["mean"], pc["var"], n_p, as_array(rc["mean"]), as_array(rc["var"]), n_r)
+        comp.t2_z_var = z_logvar(pc["var"], pc["kurt"], n_p, as_array(rc["var"]), as_array(rc["kurt"]), n_r)
+    if "coef" not in py_sum:
+        return comp
     rb, pb = r_sum["coef"], py_sum["coef"]
     comp.t3_z_mean = z_mean(pb["mean"], pb["var"], n_p, as_array(rb["mean"]), as_array(rb["var"]), n_r)
     comp.t3_z_var = z_logvar(pb["var"], pb["kurt"], n_p, as_array(rb["var"]), as_array(rb["kurt"]), n_r)

@@ -1,6 +1,6 @@
-"""Layer 2: distribution parity of pmm, midastouch, sample and the norm family with R mice.
+"""Layer 2: distribution parity of pmm, midastouch, sample, the norm family and logreg with R mice.
 
-For each method and fixed input (F1 to F4, see tests/reference/r/_l2_common.R)
+For each method and fixed input (F1 to F6, see tests/reference/r/_l2_common.R)
 R called ``mice.impute.<method>`` 20,000 times; here the Python imputer is
 called 3,000 times (midas: 1,500) with one seeded generator. Per missing
 cell we compare the donor counts (T1) and the mean and variance of the
@@ -19,6 +19,16 @@ recipe asks, plus T3 for pmm: R's ``matchindex`` shuffles the donors once per
 call, so the cells of one call share their tie-break, which only the
 coefficient moments can see (a per-cell random tie-break passes T1 and T2
 on F2 but fails T3 with |z| of about 27).
+
+``logreg`` and ``logreg.boot`` draw labels from a fitted model (fixtures of
+the category kind) on binary targets: T1 compares the level counts per
+cell; T3 the mean and variance across calls of each OLS coefficient of the
+0/1 "yes" indicator of the completed target on ``[1, x]``, which sees the
+dependence between the cells of one call that the shared coefficient draw
+(or bootstrap sample) creates. There is no T2 for labels. On F5 half of the
+missing rows lie far out where the labels depend on the poorly determined
+slopes; on F6 the observed rows are separated, so ``logreg`` depends on its
+augmentation (``logreg.boot``, which does not augment, is run on F5 only).
 """
 
 import pytest
@@ -56,7 +66,14 @@ T2_CASES = [
     pytest.param("sample", "F1"),
 ] + NORM_CASES
 
-T3_CASES = T2_CASES[:1] + [pytest.param("pmm", "F2")] + T2_CASES[1:]
+# category kind: T1 on the level counts, T3 on the level indicator
+CATEGORY_CASES = [
+    pytest.param("logreg", "F5"),
+    pytest.param("logreg", "F6"),
+    pytest.param("logreg.boot", "F5"),
+]
+
+T3_CASES = T2_CASES[:1] + [pytest.param("pmm", "F2")] + T2_CASES[1:] + CATEGORY_CASES
 
 
 @pytest.mark.parametrize("method, input_name", T1_CASES)
@@ -69,6 +86,13 @@ def test_t1_donor_counts_match_r(method, input_name):
 def test_t1_decile_bin_counts_match_r(method, input_name):
     comp = cached_comparison(method, input_name)
     assert comp.kind == "continuous"
+    assert comp.t1_ok(), comp.t1_message()
+
+
+@pytest.mark.parametrize("method, input_name", CATEGORY_CASES)
+def test_t1_level_counts_match_r(method, input_name):
+    comp = cached_comparison(method, input_name)
+    assert comp.kind == "category"
     assert comp.t1_ok(), comp.t1_message()
 
 

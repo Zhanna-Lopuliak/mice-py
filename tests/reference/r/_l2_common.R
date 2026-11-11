@@ -3,12 +3,13 @@
 # Layer 2 compares the distribution of imputed values, not the values
 # themselves, because R and NumPy use different random number generators.
 # Each l2_<method>.R script calls one exported mice.impute.<method> function
-# many times on fixed inputs (F1 to F4, defined below) and stores sufficient
+# many times on fixed inputs (F1 to F6, defined below) and stores sufficient
 # statistics per missing cell, plus the moments of the OLS coefficients of
 # the completed y. What is stored per cell depends on the kind of the method
 # (see "Kinds of methods" below): donor counts for a method that imputes
-# observed values, decile bins for one that imputes new numbers; the moments
-# of the imputed value for every numeric target.
+# observed values, decile bins for one that imputes new numbers, level
+# counts for one that draws labels from a fitted model; the moments of the
+# imputed value for every numeric target.
 #
 # The inputs are generated here with set.seed and embedded in every fixture,
 # so the Python tests never need R.
@@ -99,8 +100,80 @@ make_f4 <- function() {
   ))
 }
 
+# Plain logistic regression of a two-level factor on [1, x], without the
+# augmentation of mice's logreg (used to check F5 and F6).
+plain_logit_fit <- function(y, x) {
+  suppressWarnings(glm.fit(cbind(1, x), as.integer(y) - 1L, family = binomial()))
+}
+
+# F5: binary target (levels no, yes) from a logistic model with clearly
+# non-zero slopes, P(yes) = plogis(-0.3 + 1.5 x1 - x2), x1 and x2
+# independent. Half of the missing rows lie far out near the line where that
+# linear predictor is 0 (x2 = 1.5 x1 - 0.3), on both sides of the bulk: their
+# labels depend on the poorly determined slopes, so the shared coefficient
+# draw of logreg makes the cells of one call dependent.
+make_f5 <- function() {
+  set.seed(20255)
+  x_bulk <- cbind(x1 = rnorm(50), x2 = rnorm(50))
+  s <- runif(10, 1, 2) * sample(c(-1, 1), 10, replace = TRUE)
+  x_off <- cbind(x1 = s, x2 = 1.5 * s - 0.3 + rnorm(10, 0, 0.1))
+  x <- rbind(x_bulk, x_off)
+  p <- plogis(-0.3 + 1.5 * x[, 1] - x[, 2])
+  lev <- c("no", "yes")
+  y <- factor(lev[1 + (runif(60) < p)], levels = lev)
+  ry <- rep(c(TRUE, FALSE), c(40, 20))
+  inp <- finish_input("F5", y, ry, x, paste(
+    "40 observed, 20 missing; factor target with levels no, yes,",
+    "P(yes) = plogis(-0.3 + 1.5 x1 - x2); 10 missing rows far out near",
+    "-0.3 + 1.5 x1 - x2 = 0"
+  ))
+  fit <- plain_logit_fit(inp$y[inp$ry], inp$x[inp$ry, ])
+  stopifnot(
+    "each level observed at least 12 times" = all(table(inp$y[inp$ry]) >= 12),
+    "the observed rows are not separated" =
+      fit$converged && all(abs(coef(fit)) < 5)
+  )
+  inp
+}
+
+# F6: binary target (levels no, yes) whose observed rows are perfectly
+# separated by x1: yes exactly where x1 > 0; x2 is noise. Of the missing
+# rows, 8 lie within 0.3 of the boundary and the others spread out, with
+# rows on both sides. Without augmentation the logistic fit of the observed
+# rows diverges; the augmentation of logreg decides the result.
+make_f6 <- function() {
+  set.seed(20256)
+  x1 <- c(rnorm(40), runif(8, -0.3, 0.3), rnorm(12))
+  x <- cbind(x1 = x1, x2 = rnorm(60))
+  lev <- c("no", "yes")
+  y <- factor(lev[1 + (x1 > 0)], levels = lev)
+  ry <- rep(c(TRUE, FALSE), c(40, 20))
+  inp <- finish_input("F6", y, ry, x, paste(
+    "40 observed, 20 missing; factor target with levels no, yes,",
+    "observed rows separated by x1 (yes where x1 > 0), x2 noise;",
+    "8 missing rows within 0.3 of the boundary"
+  ))
+  x1_obs <- inp$x[inp$ry, "x1"]
+  yes_obs <- inp$y[inp$ry] == "yes"
+  x1_mis <- inp$x[!inp$ry, "x1"]
+  fit <- plain_logit_fit(inp$y[inp$ry], inp$x[inp$ry, ])
+  stopifnot(
+    "each level observed at least 12 times" = all(table(inp$y[inp$ry]) >= 12),
+    "the observed rows are separated by x1" =
+      max(x1_obs[!yes_obs]) < min(x1_obs[yes_obs]),
+    "missing rows on both sides of the boundary" =
+      sum(x1_mis > 0) >= 5 && sum(x1_mis < 0) >= 5,
+    "the plain logistic fit diverges" =
+      !fit$converged || max(abs(coef(fit))) > 10
+  )
+  inp
+}
+
 l2_inputs <- function() {
-  list(F1 = make_f1(), F2 = make_f2(), F3 = make_f3(), F4 = make_f4())
+  list(
+    F1 = make_f1(), F2 = make_f2(), F3 = make_f3(), F4 = make_f4(),
+    F5 = make_f5(), F6 = make_f6()
+  )
 }
 
 # The sorted distinct observed values (numeric target) or the levels
@@ -223,19 +296,49 @@ summarise_values <- function(vals, inp) {
   )
 }
 
+# Category kind: the level counts per cell (`counts`, as for a donor method
+# on a factor target), and the moments of the OLS coefficients of the 0/1
+# indicator of each level but the first, in the completed target, on
+# [1, x], one fit per call (`coef`, named "<level>:<term>", level by level).
+# idx: n_calls x n_mis matrix of level indices, as run_calls() returns.
+summarise_labels <- function(idx, inp) {
+  stopifnot("the category kind needs a factor target" = is.factor(inp$y))
+  lev <- levels(inp$y)
+  x1 <- cbind(1, inp$x)
+  coef <- do.call(rbind, lapply(seq_along(lev)[-1], function(l) {
+    ind <- matrix(as.numeric(inp$y == lev[l]), nrow(x1), nrow(idx))
+    ind[!inp$ry, ] <- t(idx == l)
+    solve(crossprod(x1), crossprod(x1, ind))
+  }))
+  coef_moments <- moments(t(coef))
+  terms <- c("(Intercept)", colnames(inp$x))
+  coef_moments$names <- I(paste0(rep(lev[-1], each = length(terms)), ":", terms))
+  list(
+    n_calls = nrow(idx),
+    counts = donor_counts(idx, length(lev)),
+    coef = coef_moments
+  )
+}
+
 # ---------------------------------------------------------------------------
 # Kinds of methods
 # ---------------------------------------------------------------------------
 
 # How the imputations of a method are collected (`run`, returning one row
 # per call) and summarised (`summarise`, returning the statistics stored per
-# input). A new kind, for example "category" for methods that draw labels
-# from a fitted model (label counts per cell), is one more entry here with
-# its own pair of functions; tests/test_parity/_l2_harness.py dispatches on
-# the same names.
+# input). A new kind is one more entry here with its own pair of functions;
+# tests/test_parity/_l2_harness.py dispatches on the same names.
+#
+# - donor: the imputations are observed values or levels;
+# - continuous: they are new numbers;
+# - category: they are labels drawn from a fitted model (factor target). The
+#   labels are collected as for a donor method; the summary adds the
+#   coefficient moments of the level indicators, which see the dependence
+#   between the cells of one call that a shared parameter draw creates.
 L2_KINDS <- list(
   donor = list(run = run_calls, summarise = summarise_calls),
-  continuous = list(run = run_values, summarise = summarise_values)
+  continuous = list(run = run_values, summarise = summarise_values),
+  category = list(run = run_calls, summarise = summarise_labels)
 )
 
 # Fixture name of a method: R's name with dots replaced by underscores, so

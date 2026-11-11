@@ -18,6 +18,23 @@ Each mutant is written so that it is valid once the library is fixed:
   with 3,000 calls: smallest T1 p about 1e-206, largest |z| about 43 (T2) and
   100 (T3). On F4, where every missing row lies in the bulk of the observed
   ones, only T3 flags it clearly (|z| about 17; T2 about 5.5, T1 p 0.002).
+* ``logreg`` without augmentation: ``imputation.logreg.augment`` patched to
+  return its input with weights 1, compared with R's ``logreg`` on F6, whose
+  observed rows are separated. The fit then diverges and its huge covariance
+  scatters the coefficient draw, so the labels far from the boundary are
+  close to a coin flip instead of nearly certain: T1 (level counts) and T3
+  (coefficients of the level indicator) must each flag it. Measured with
+  1,500 calls (fewer than the 3,000 of the parity test, because every
+  diverging fit runs to the iteration limit): T1 p 0 (below the smallest
+  double) in most cells, largest |z| about 66 (T3). On F5, which is not
+  separated, it is not flagged (T1 p 8e-5, T3 |z| 4.9 with 3,000 calls).
+* ``logreg`` without the coefficient draw: ``imputation.logreg._coefficient_draw``
+  patched to return the fitted coefficients, compared with R's ``logreg``
+  on F5. The imputations of one call no longer share a drawn slope, so the
+  coefficients of the level indicator vary less across calls (T3: largest
+  |z| about 50, on the log-variance). F5 puts missing rows far from the
+  observed ones, where the draw also moves the label probabilities towards
+  1/2, so T1 flags it too (smallest p about 1e-20). Both must flag it.
 """
 
 import functools
@@ -103,6 +120,67 @@ def test_norm_without_parameter_draw_is_flagged(statistic):
     assert comp.kind == "continuous"
     passed = {"T1": comp.t1_ok, "T2": comp.t2_ok, "T3": comp.t3_ok}[statistic]()
     message = {"T1": comp.t1_message, "T2": comp.t2_message, "T3": comp.t3_message}
+    assert not passed, f"{statistic} does not flag the mutant: " + message[statistic]()
+
+
+@functools.cache
+def logreg_without_augmentation_comparison():
+    """logreg on F6 with imputation.logreg.augment returning its input, weights 1."""
+    import imputation.logreg as logreg_module
+
+    calls = []
+
+    def no_augmentation(y, id_obs, x, id_mis, *args, **kwargs):
+        calls.append(1)
+        y = np.asarray(y, dtype=np.intp).ravel()
+        return logreg_module.Augmented(
+            y=y,
+            id_obs=np.asarray(id_obs, dtype=bool),
+            x=np.asarray(x, dtype=float),
+            id_mis=np.asarray(id_mis, dtype=bool),
+            weights=np.ones(len(y)),
+        )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(logreg_module, "augment", no_augmentation)
+        inp, r_sum, py_sum = run_python("logreg", "F6", n_calls=1500)
+    return compare(r_sum, py_sum, inp), len(calls)
+
+
+@pytest.mark.parametrize("statistic", ["T1", "T3"])
+def test_logreg_without_augmentation_is_flagged(statistic):
+    comp, n_calls = logreg_without_augmentation_comparison()
+    assert n_calls > 0, "mutant not applied: logreg no longer calls imputation.logreg.augment"
+    assert comp.kind == "category"
+    passed = {"T1": comp.t1_ok, "T3": comp.t3_ok}[statistic]()
+    message = {"T1": comp.t1_message, "T3": comp.t3_message}
+    assert not passed, f"{statistic} does not flag the mutant: " + message[statistic]()
+
+
+@functools.cache
+def logreg_without_coefficient_draw_comparison():
+    """logreg on F5 with imputation.logreg._coefficient_draw returning the fitted coefficients."""
+    import imputation.logreg as logreg_module
+
+    calls = []
+
+    def fitted_coefficients(fit, rng):
+        calls.append(1)
+        return np.where(fit.aliased, 0.0, fit.coef)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(logreg_module, "_coefficient_draw", fitted_coefficients)
+        inp, r_sum, py_sum = run_python("logreg", "F5")
+    return compare(r_sum, py_sum, inp), len(calls)
+
+
+@pytest.mark.parametrize("statistic", ["T1", "T3"])
+def test_logreg_without_coefficient_draw_is_flagged(statistic):
+    comp, n_calls = logreg_without_coefficient_draw_comparison()
+    assert n_calls > 0, "mutant not applied: logreg no longer calls imputation.logreg._coefficient_draw"
+    assert comp.kind == "category"
+    passed = {"T1": comp.t1_ok, "T3": comp.t3_ok}[statistic]()
+    message = {"T1": comp.t1_message, "T3": comp.t3_message}
     assert not passed, f"{statistic} does not flag the mutant: " + message[statistic]()
 
 

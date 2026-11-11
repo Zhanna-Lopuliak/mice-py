@@ -127,7 +127,7 @@ get wrong:
 Each `l2_<method>` fixture comes from `l2_method_fixture()` in
 `r/_l2_common.R`: one `set.seed` per input, then many calls of
 `mice.impute.<method>(y, ry, x)` on fixed inputs with 40 observed and 20
-missing values (F1 to F4, defined in that file and stored in the fixture).
+missing values (F1 to F6, defined in that file and stored in the fixture).
 Per input it holds the input, the seed, `n_calls` and statistics whose form
 depends on the kind of the method (`kind` at the top of the fixture; a
 fixture without it is of the donor kind):
@@ -142,6 +142,36 @@ fixture without it is of the donor kind):
   (`quantile(type = 7)`) and the number of R's draws in each of the ten bins
   `[edge j-1, edge j)` as `findInterval()` counts them. The raw draws are not
   stored.
+- **category** (the imputations are labels drawn from a fitted model, for a
+  factor target): `counts`, the number of times each level was drawn per
+  missing cell (as for a donor method on a factor target), and `coef`: per
+  call, the 0/1 indicator of each level but the first in the completed
+  target is regressed on `[1, x]` by OLS, and the mean, variance and
+  kurtosis of every coefficient over the calls are stored with its name
+  `<level>:<term>` (for example `yes:x1`). The coefficients see the
+  dependence between the cells of one call that a shared parameter draw or
+  bootstrap sample creates; there are no moments per cell. The donor
+  fixtures with a factor target (F3) keep the donor kind and only `counts`.
+
+The inputs F5 and F6 have a binary factor target with the levels `no` and
+`yes` (lowercase ASCII, so their sort order does not depend on the locale)
+and two numeric predictors `x1`, `x2`, independent standard normal in the
+observed rows:
+
+- **F5**: `P(yes) = plogis(-0.3 + 1.5 x1 - x2)`. Ten of the missing rows lie
+  in the bulk; the other ten lie far out near the line where that linear
+  predictor is 0 (`|x1|` between 1 and 2, on both sides), where the labels
+  depend on the poorly determined slopes. The script asserts that each level
+  is observed at least 12 times and that the plain logistic fit of the
+  observed rows (`glm.fit`, no augmentation) converges with coefficients
+  below 5 in absolute value, so the observed rows are not separated.
+- **F6**: `yes` exactly where `x1 > 0`, so the observed rows are perfectly
+  separated by `x1`; `x2` is noise. Eight of the missing rows lie within 0.3
+  of the boundary, the others spread out. The script asserts the separation
+  (after rounding), at least 12 observations per level, at least 5 missing
+  rows on each side, and that the plain logistic fit of the observed rows
+  diverges (not converged or a coefficient above 10). Only `logreg`, which
+  augments the data, is run on it.
 
 | Fixture | Kind | Inputs | R calls per input |
 |---|---|---|---|
@@ -153,6 +183,8 @@ fixture without it is of the donor kind):
 | `l2_norm` | continuous | F1, F4 | 20,000 |
 | `l2_norm_nob` | continuous | F1 | 20,000 |
 | `l2_norm_boot` | continuous | F1 | 20,000 |
+| `l2_logreg` | category | F5, F6 | 20,000 |
+| `l2_logreg_boot` | category | F5 | 20,000 |
 
 `l2_chain` (200 full `mice()` chains with pmm) and `l3_mini_s4` (scenario S4
 of the simulation study with pmm, midastouch and norm, 20,000 replications)
