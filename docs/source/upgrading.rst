@@ -187,6 +187,10 @@ Logging and plots
   ``file_logging=True`` for a log file.
 - ``plot_chain_stats`` shows the standard deviation of the imputed values,
   not the variance, as R does. ``MICE.chain_var`` still holds variances.
+- By default ``stripplot``, ``bwplot`` and ``densityplot`` plot the numeric
+  columns with missing values, as R's plots do; 0.1 took every incomplete
+  column. Name a categorical column in ``columns`` to see it in
+  ``stripplot``.
 - In a notebook, a plot call on the last line of a cell shows the figure
   twice (once drawn, once as the returned value); end the line with ``;``.
 

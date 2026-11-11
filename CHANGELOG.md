@@ -133,7 +133,12 @@ after that record was written.
   20 inches a side and wrap after four panels; `bwplot` draws outliers;
   `densityplot` marks values without variance with a dashed line; `xyplot`
   with `merge_imputations=True` overlays all imputations, and its panels share
-  their axes.
+  their axes. By default `stripplot`, `bwplot` and `densityplot` plot the
+  numeric columns with missing values, as R's plots take the variables that
+  are not factors (0.1 took every incomplete column, and `bwplot` and
+  `densityplot` failed on a categorical one); `bwplot`, `densityplot` and
+  `densityplot_split` raise `ValueError` for a categorical column passed
+  explicitly.
 - Logging: every module logs to a logger named after it (`imputation.MICE`,
   `plotting.diagnostics`, ...); records propagate to the root logger (0.1
   stopped them at the `imputation` logger). `configure_logging` and

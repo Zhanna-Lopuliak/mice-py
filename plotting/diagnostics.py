@@ -69,11 +69,57 @@ def _imputation_grid(n_panels: int, **subplot_kws: Any) -> tuple[Figure, list[Ax
     return _panel_grid(n_panels, n_rows, n_cols, **subplot_kws)
 
 
-def _columns_to_plot(missing_pattern: pd.DataFrame, columns: Sequence[Hashable] | None) -> list[Hashable]:
-    """The requested columns (default: all) that have at least one missing value."""
+def _is_numeric(values: pd.Series) -> bool:
+    """
+    Whether a column can be plotted as numbers.
+
+    Numeric and boolean columns can, and so can object columns that hold
+    only booleans (mice-py imputes them as booleans). Categorical, string
+    and other object columns are R's factors, which R's plots leave out.
+    """
+    dtype = values.dtype
+    if isinstance(dtype, pd.CategoricalDtype):
+        return False
+    if pd.api.types.is_numeric_dtype(dtype):
+        return True
+    return pd.api.types.is_object_dtype(dtype) and pd.api.types.infer_dtype(values, skipna=True) == "boolean"
+
+
+def _check_numeric(data: pd.DataFrame, column: Hashable, plot: str) -> None:
+    """Raise ValueError when ``column`` of ``data`` cannot be plotted as numbers."""
+    if column in data.columns and not _is_numeric(data[column]):
+        raise ValueError(
+            f"{plot} needs a numeric variable; column {column!r} is not numeric (dtype {data[column].dtype})"
+        )
+
+
+def _columns_to_plot(
+    imputed_datasets: Sequence[pd.DataFrame],
+    missing_pattern: pd.DataFrame,
+    columns: Sequence[Hashable] | None,
+    numeric_plot: str | None = None,
+) -> list[Hashable]:
+    """
+    The columns to plot: the requested ones that have at least one missing value.
+
+    By default the numeric columns with missing values, as R's plots take
+    the variables that are not factors. ``numeric_plot`` names a plot that
+    can draw numeric columns only: a requested column that is not numeric
+    then raises ValueError. Warns when no column is left to plot.
+    """
     if columns is None:
-        columns = missing_pattern.columns[missing_pattern.eq(0).any()]
-    return [col for col in columns if col in missing_pattern.columns and missing_pattern[col].eq(0).any()]
+        incomplete = missing_pattern.columns[missing_pattern.eq(0).any()]
+        selected = [col for col in incomplete if _is_numeric(imputed_datasets[0][col])]
+        if not selected:
+            warnings.warn("No numeric columns with missing values to plot", UserWarning, stacklevel=3)
+        return selected
+    if numeric_plot is not None:
+        for col in columns:
+            _check_numeric(imputed_datasets[0], col, numeric_plot)
+    selected = [col for col in columns if col in missing_pattern.columns and missing_pattern[col].eq(0).any()]
+    if not selected:
+        warnings.warn("No columns with missing values to plot", UserWarning, stacklevel=3)
+    return selected
 
 
 def _density(ax: Axes, values: Any, color: str, label: str | None = None, **line_kws: Any) -> Any:
@@ -117,7 +163,10 @@ def stripplot(
     missing_pattern : pd.DataFrame
         DataFrame indicating missing values (0 where missing, 1 where observed)
     columns : list of str, optional
-        List of column names to plot. If None, plots all columns with missing values.
+        List of column names to plot. If None, plots the numeric columns with
+        missing values, as R's ``stripplot`` takes the variables that are not
+        factors. A categorical column can be named here; its levels are drawn
+        on the y-axis.
     merge_imputations : bool, default False
         If True, shows two columns: one with only observed values and another with observed and imputed values overlaid.
         If False, shows separate plots for each imputation.
@@ -132,12 +181,12 @@ def stripplot(
     Returns
     -------
     matplotlib.figure.Figure or None
-        The figure, or None (with a warning) when no column has missing values.
+        The figure, or None (with a warning) when no column to plot has
+        missing values.
     """
-    columns = _columns_to_plot(missing_pattern, columns)
+    columns = _columns_to_plot(imputed_datasets, missing_pattern, columns)
 
     if not columns:
-        warnings.warn("No columns with missing values to plot", UserWarning, stacklevel=2)
         return None
 
     # One panel per column, at most four per row
@@ -272,7 +321,9 @@ def bwplot(
     missing_pattern : pd.DataFrame
         DataFrame indicating missing values (0 where missing, 1 where observed)
     columns : list of str, optional
-        List of column names to plot. If None, plots all columns with missing values.
+        List of numeric column names to plot. If None, plots the numeric
+        columns with missing values, as R's ``bwplot`` takes the variables
+        that are not factors.
     merge_imputations : bool, default False
         If True, combines all imputed values into a single boxplot. If False,
         shows separate boxplots for each imputation.
@@ -287,12 +338,17 @@ def bwplot(
     Returns
     -------
     matplotlib.figure.Figure or None
-        The figure, or None (with a warning) when no column has missing values.
+        The figure, or None (with a warning) when no column to plot has
+        missing values.
+
+    Raises
+    ------
+    ValueError
+        If a column in `columns` is not numeric.
     """
-    columns = _columns_to_plot(missing_pattern, columns)
+    columns = _columns_to_plot(imputed_datasets, missing_pattern, columns, numeric_plot="bwplot")
 
     if not columns:
-        warnings.warn("No columns with missing values to plot", UserWarning, stacklevel=2)
         return None
 
     # One panel per column, at most four per row
@@ -449,7 +505,9 @@ def densityplot(
     missing_pattern : pd.DataFrame
         DataFrame indicating missing values (0 where missing, 1 where observed)
     columns : list of str, optional
-        List of column names to plot. If None, plots all columns with missing values.
+        List of numeric column names to plot. If None, plots the numeric
+        columns with missing values, as R's ``densityplot`` takes the
+        variables that are not factors.
     observed_color : str, default 'blue'
         Color for observed values
     imputed_color : str, default 'red'
@@ -461,12 +519,17 @@ def densityplot(
     Returns
     -------
     matplotlib.figure.Figure or None
-        The figure, or None (with a warning) when no column has missing values.
+        The figure, or None (with a warning) when no column to plot has
+        missing values.
+
+    Raises
+    ------
+    ValueError
+        If a column in `columns` is not numeric.
     """
-    columns = _columns_to_plot(missing_pattern, columns)
+    columns = _columns_to_plot(imputed_datasets, missing_pattern, columns, numeric_plot="densityplot")
 
     if not columns:
-        warnings.warn("No columns with missing values to plot", UserWarning, stacklevel=2)
         return None
 
     # One panel per column, at most four per row
@@ -525,7 +588,7 @@ def densityplot_split(
     missing_pattern : pd.DataFrame
         DataFrame indicating missing values (0 where missing, 1 where observed)
     column : str
-        Name of the column to plot
+        Name of the numeric column to plot
     observed_color : str, default 'blue'
         Color for observed values
     imputed_color : str, default 'red'
@@ -539,10 +602,17 @@ def densityplot_split(
     matplotlib.figure.Figure or None
         The figure, or None (with a warning) when the column is not in
         ``missing_pattern`` or has no missing values.
+
+    Raises
+    ------
+    ValueError
+        If `column` is not numeric.
     """
     if column not in missing_pattern.columns:
         warnings.warn(f"Column {column} not found in the data", UserWarning, stacklevel=2)
         return None
+
+    _check_numeric(imputed_datasets[0], column, "densityplot_split")
 
     if not missing_pattern[column].eq(0).any():
         warnings.warn(f"No missing values in column {column}", UserWarning, stacklevel=2)
@@ -738,7 +808,9 @@ def plot_chain_stats(
         Same structure as `chain_mean` but for the variance of the imputed
         values (``MICE.chain_var``). The plot shows its square root.
     columns : list of str, optional
-        Columns to plot. If None, plots all keys present in `chain_mean`.
+        Columns to plot. If None, plots all keys present in `chain_mean`
+        (for ``MICE.chain_mean``, the imputed numeric columns). A column
+        without statistics is skipped with a warning.
     figsize : tuple, default (10, 5)
         Base size of a single row (width, height). The final figure will be
         scaled according to the number of rows, up to a height of 20 inches
@@ -749,7 +821,7 @@ def plot_chain_stats(
     Returns
     -------
     matplotlib.figure.Figure or None
-        The figure, or None (with a logged warning) when there is nothing to plot.
+        The figure, or None (with a warning) when there is nothing to plot.
     """
     logger.info("Generating chain statistics plots.")
 
@@ -757,20 +829,22 @@ def plot_chain_stats(
     if columns is None:
         columns = list(chain_mean.keys())
 
-    if not columns:
-        logger.warning("No columns specified or found to plot.")
-        return None
-
-    # Filter columns to only those that exist in both chain_mean and chain_var
+    # Filter columns to only those that exist in both chain_mean and chain_var;
+    # MICE records them for the imputed numeric columns only
     valid_columns = []
     for col in columns:
         if col not in chain_mean or col not in chain_var:
-            logger.warning(f"Statistics for column '{col}' not found in both chain_mean and chain_var. Skipping.")
+            warnings.warn(
+                f"No chain statistics for column '{col}' in both chain_mean and chain_var "
+                "(MICE records them for the imputed numeric columns only); skipping it",
+                UserWarning,
+                stacklevel=2,
+            )
             continue
         valid_columns.append(col)
 
     if not valid_columns:
-        logger.warning("No valid columns found to plot.")
+        warnings.warn("No chain statistics to plot", UserWarning, stacklevel=2)
         return None
 
     n_rows = len(valid_columns)

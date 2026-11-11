@@ -57,8 +57,9 @@ was missing** in the original data:
 
 Further arguments:
 
-- ``columns``: the columns to plot; by default every column with missing
-  values. (``densityplot_split`` and ``xyplot`` take single columns.)
+- ``columns``: the columns to plot; by default every numeric column with
+  missing values, as R's plots take the variables that are not factors.
+  (``densityplot_split`` and ``xyplot`` take single columns.)
 - ``merge_imputations`` (``stripplot``, ``bwplot``, ``xyplot``): one panel
   for all imputations instead of one per imputation.
 - ``observed_color``, ``imputed_color``: default blue and red, as in R.
@@ -66,9 +67,9 @@ Further arguments:
   directories) and close it, instead of showing it.
 
 Every function returns its matplotlib ``Figure``, so it can be changed or
-saved again. When there is nothing to plot (no column with missing values,
-an unknown column) the function warns and returns ``None``. Figures are at
-most 20 inches a side; per-variable panels wrap after four.
+saved again. When there is nothing to plot (no numeric column with missing
+values, an unknown column) the function warns and returns ``None``.
+Figures are at most 20 inches a side; per-variable panels wrap after four.
 
 In a Jupyter notebook the figure is shown when it is drawn, and the returned
 ``Figure`` is shown a second time if the call is the last line of a cell; end
@@ -99,8 +100,8 @@ Observed and imputed values
 
    stripplot(datasets, observed, save_path="plots/strip.png")
    stripplot(datasets, observed, merge_imputations=True, save_path="plots/strip_merged.png")
-   bwplot(datasets, observed, columns=["bmi", "chl"], save_path="plots/box.png")
-   densityplot(datasets, observed, columns=["bmi", "chl"], save_path="plots/density.png")
+   bwplot(datasets, observed, save_path="plots/box.png")
+   densityplot(datasets, observed, save_path="plots/density.png")
    densityplot_split(datasets, observed, column="chl", save_path="plots/density_chl.png")
 
 The imputed values (red) should be plausible values of the variable. They
@@ -108,9 +109,10 @@ need not have the same distribution as the observed values (blue): under MAR
 the missing values can differ systematically from the observed ones. Large
 differences are worth explaining, though.
 
-``bwplot``, ``densityplot`` and ``densityplot_split`` need numeric columns.
-By default they take every column with missing values and raise
-``TypeError`` on a categorical one, such as ``sex`` here; pass ``columns``.
+By default ``stripplot``, ``bwplot`` and ``densityplot`` plot the numeric
+columns with missing values, here ``bmi`` and ``chl`` but not ``sex``.
+``bwplot``, ``densityplot`` and ``densityplot_split`` need numeric columns
+and raise ``ValueError`` for a categorical one passed explicitly;
 ``stripplot`` and ``xyplot`` also draw categorical columns. In
 ``densityplot``, a set of imputed values without variance (for example a
 single imputed cell) is drawn as a dashed vertical line.

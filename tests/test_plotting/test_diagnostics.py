@@ -112,7 +112,7 @@ class TestStripplot:
         no_missing_pattern = missing_pattern.copy()
         no_missing_pattern[:] = 1
 
-        with pytest.warns(UserWarning, match="No columns with missing values"):
+        with pytest.warns(UserWarning, match="No numeric columns with missing values"):
             result = stripplot(imputed_datasets=imputed_datasets, missing_pattern=no_missing_pattern)
         assert result is None
         plt.close("all")
@@ -325,6 +325,91 @@ class TestXyplot:
         plt.close("all")
 
 
+def _mixed_inputs():
+    """
+    Completed datasets and pattern with incomplete numeric, string and categorical columns.
+
+    ``age`` is numeric and complete, ``bmi`` numeric and incomplete, ``sex``
+    a string (object) column and ``grp`` a Categorical, both incomplete.
+    """
+    rng = np.random.default_rng(5)
+    n = 40
+    pattern = pd.DataFrame(
+        {
+            "age": np.ones(n, dtype=int),
+            "bmi": (rng.random(n) > 0.25).astype(int),
+            "sex": (rng.random(n) > 0.2).astype(int),
+            "grp": (rng.random(n) > 0.2).astype(int),
+        }
+    )
+    pattern.loc[0, ["bmi", "sex", "grp"]] = 0
+    datasets = [
+        pd.DataFrame(
+            {
+                "age": rng.normal(50, 15, n),
+                "bmi": rng.normal(25, 5, n),
+                "sex": rng.choice(["f", "m"], n),
+                "grp": pd.Categorical(rng.choice(["a", "b", "c"], n)),
+            }
+        )
+        for _ in range(N_IMPUTATIONS)
+    ]
+    return datasets, pattern
+
+
+class TestNonNumericColumns:
+    """By default the plots take the incomplete numeric columns, as R's take the non-factor variables."""
+
+    @pytest.mark.parametrize("plot", [stripplot, bwplot, densityplot])
+    def test_default_takes_incomplete_numeric_columns(self, plot):
+        datasets, pattern = _mixed_inputs()
+        fig = plot(datasets, pattern)
+        assert [ax.get_title() for ax in fig.axes] == ["bmi"]
+        plt.close("all")
+
+    @pytest.mark.parametrize("plot", [stripplot, bwplot, densityplot])
+    def test_default_without_incomplete_numeric_column_warns(self, plot):
+        datasets, pattern = _mixed_inputs()
+        pattern["bmi"] = 1
+        with pytest.warns(UserWarning, match="No numeric columns with missing values"):
+            assert plot(datasets, pattern) is None
+
+    @pytest.mark.parametrize("plot", [bwplot, densityplot])
+    @pytest.mark.parametrize("column", ["sex", "grp"])
+    def test_named_non_numeric_column_raises(self, plot, column):
+        datasets, pattern = _mixed_inputs()
+        with pytest.raises(ValueError, match=f"{plot.__name__} needs a numeric variable; column '{column}'"):
+            plot(datasets, pattern, columns=["bmi", column])
+        assert plt.get_fignums() == []
+
+    @pytest.mark.parametrize("column", ["sex", "grp"])
+    def test_densityplot_split_non_numeric_column_raises(self, column):
+        datasets, pattern = _mixed_inputs()
+        with pytest.raises(ValueError, match=f"densityplot_split needs a numeric variable; column '{column}'"):
+            densityplot_split(datasets, pattern, column)
+        assert plt.get_fignums() == []
+
+    def test_stripplot_draws_named_categorical_columns(self):
+        """stripplot can draw categorical values, so a named categorical column is plotted."""
+        datasets, pattern = _mixed_inputs()
+        fig = stripplot(datasets, pattern, columns=["sex", "grp"])
+        assert [ax.get_title() for ax in fig.axes] == ["sex", "grp"]
+        assert sorted(t.get_text() for t in fig.axes[0].get_yticklabels()) == ["f", "m"]
+        assert sorted(t.get_text() for t in fig.axes[1].get_yticklabels()) == ["a", "b", "c"]
+        plt.close("all")
+
+    def test_boolean_columns_are_plotted(self):
+        """Booleans, also in an object column, are not factors: they are plotted by default."""
+        datasets, pattern = _mixed_inputs()
+        pattern["flag"] = pattern["bmi"]
+        rng = np.random.default_rng(6)
+        for df in datasets:
+            df["flag"] = pd.Series(rng.random(len(df)) < 0.5, dtype=object)
+        fig = densityplot(datasets, pattern)
+        assert [ax.get_title() for ax in fig.axes] == ["bmi", "flag"]
+        plt.close("all")
+
+
 class TestPlotChainStats:
     """Test chain statistics plotting."""
 
@@ -364,25 +449,42 @@ class TestPlotChainStats:
         plt.close("all")
 
     def test_plot_chain_stats_no_columns(self):
-        """Test chain statistics plotting with no columns."""
+        """Nothing to plot: a UserWarning and None, as the other plot functions."""
         chain_mean = {}
         chain_var = {}
         plt.close("all")
 
-        result = plot_chain_stats(chain_mean=chain_mean, chain_var=chain_var)
+        with pytest.warns(UserWarning, match="No chain statistics to plot"):
+            result = plot_chain_stats(chain_mean=chain_mean, chain_var=chain_var)
         assert result is None
         assert plt.get_fignums() == []
         plt.close("all")
 
     def test_plot_chain_stats_missing_column(self):
-        """Test chain statistics plotting with missing column data."""
+        """A column missing from chain_var is skipped with a warning; then nothing is left to plot."""
         chain_mean = {"bmi": np.random.default_rng(3).normal(size=(10, 3))}
         chain_var = {}
         plt.close("all")
 
-        result = plot_chain_stats(chain_mean=chain_mean, chain_var=chain_var, columns=["bmi"])
+        with pytest.warns(UserWarning) as record:
+            result = plot_chain_stats(chain_mean=chain_mean, chain_var=chain_var, columns=["bmi"])
+        messages = [str(w.message) for w in record]
+        assert len(messages) == 2
+        assert messages[0].startswith("No chain statistics for column 'bmi'")
+        assert messages[1] == "No chain statistics to plot"
         assert result is None
         assert plt.get_fignums() == []
+        plt.close("all")
+
+    def test_plot_chain_stats_skips_column_without_statistics(self):
+        """A requested column without statistics (a categorical one, say) is skipped; the others are plotted."""
+        rng = np.random.default_rng(4)
+        chain_mean = {"bmi": rng.normal(size=(5, 2))}
+        chain_var = {"bmi": rng.uniform(size=(5, 2))}
+
+        with pytest.warns(UserWarning, match="No chain statistics for column 'sex'"):
+            fig = plot_chain_stats(chain_mean, chain_var, columns=["bmi", "sex"])
+        assert [ax.get_title() for ax in fig.axes] == ["bmi – Mean", "bmi – SD"]
         plt.close("all")
 
     # 30 rows of panels in 20 inches leave matplotlib's tight_layout no room;
