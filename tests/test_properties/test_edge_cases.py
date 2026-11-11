@@ -25,14 +25,11 @@ from ._helpers import (
 NON_MIDAS = ("pmm", "cart", "rf", "sample")
 
 B2 = "B2: categorical predictors are rejected instead of dummy-coded"
-B5 = "B5: midas crashes when R^2 is 1 or undefined (kappa stays None)"
 C4_EMPTY = "C4: validate_dataframe drops all-empty rows"
 C4_PRINT = "C4: validators print to stdout"
 C6 = "C6: no setup step (imputation.design does not exist)"
-NEW1 = "B6: midas 'probabilities do not sum to 1' when predictor rows tie"
 NEW2 = "B7: rf crashes when the target has no predictors"
 NEW3 = "B8: cart/rf crash on an incomplete boolean column (sklearn 'Unknown label type')"
-NEW4 = "A12: midas returns float-coerced donors (bool target imputed as 0.0/1.0)"
 NEW5 = "B9: pandas 'string' predictors crash cart/rf ('could not convert string to float')"
 
 
@@ -196,7 +193,7 @@ def test_pmm_direct_with_duplicated_columns():
     assert np.isin(out, y[ry]).all()
 
 
-@pytest.mark.parametrize("method", method_params({"midas": NEW1}))
+@pytest.mark.parametrize("method", METHODS)
 def test_incomplete_duplicated_column(method):
     """Two identical incomplete columns. R's setup step (find.collinear) drops the
     copy from imputation and leaves it missing; imputing it is also accepted."""
@@ -208,7 +205,7 @@ def test_incomplete_duplicated_column(method):
     assert_all_invariants(df, before, mice, out, N_IMP, MAXIT, allow_unimputed={"x1_copy"})
 
 
-@pytest.mark.parametrize("method", method_params({"midas": NEW1}))
+@pytest.mark.parametrize("method", METHODS)
 def test_more_predictors_than_observed_rows(method):
     """Six complete predictors, five observed ``y`` values."""
     rng = np.random.default_rng(8)
@@ -230,7 +227,6 @@ def _perfect_fit():
     return y, ~np.isnan(y), x.reshape(-1, 1)
 
 
-@pytest.mark.xfail(strict=True, reason=B5)
 def test_midas_perfect_fit_direct():
     from imputation.midas import midas
 
@@ -240,14 +236,12 @@ def test_midas_perfect_fit_direct():
     assert np.isin(out, y[ry]).all()
 
 
-@pytest.mark.xfail(strict=True, reason=B5)
 def test_midas_perfect_fit_through_impute():
     y, _, x = _perfect_fit()
     df = pd.DataFrame({"y": y, "x": x[:, 0]})
     _check(df, "midas", midas_ridge=0.0)
 
 
-@pytest.mark.xfail(strict=True, reason=B5 + " (planned _donor_probabilities)")
 def test_midas_perfect_fit_uses_kappa_100():
     from imputation.midas import _donor_probabilities
 
@@ -271,10 +265,7 @@ def test_column_with_one_missing_value(method):
     _check(df, method)
 
 
-@pytest.mark.parametrize(
-    "method",
-    method_params({"midas": B5}),
-)
+@pytest.mark.parametrize("method", METHODS)
 def test_column_with_one_observed_value(method):
     """A column with a single observed value is constant: R leaves it unimputed,
     filling it with that value is also accepted (see constant_columns)."""
@@ -283,21 +274,14 @@ def test_column_with_one_observed_value(method):
     _check(df, method)
 
 
-@pytest.mark.parametrize(
-    "method",
-    method_params(
-        {
-            "midas": "B5: zero-diagonal check / R^2 undefined (B6 for other draws)",
-        }
-    ),
-)
+@pytest.mark.parametrize("method", METHODS)
 def test_column_with_two_observed_values(method):
     df = regression_frame(n=30)
     df.loc[2:, "y"] = np.nan
     _check(df, method)
 
 
-@pytest.mark.parametrize("method", method_params({"midas": B5}))
+@pytest.mark.parametrize("method", METHODS)
 def test_constant_incomplete_column(method):
     """All observed values equal: left unimputed (R) or filled with 4.0."""
     df = regression_frame(n=30)
@@ -379,7 +363,6 @@ def test_boolean_target(method):
     _check(_boolean_target_frame(), method)
 
 
-@pytest.mark.xfail(strict=True, reason=NEW4)
 def test_midas_boolean_target_keeps_labels_or_refuses():
     from imputation import MICE
 
@@ -395,6 +378,71 @@ def test_midas_boolean_target_keeps_labels_or_refuses():
     for completed in out:
         imputed = completed["flag"].to_numpy()[mis]
         assert all(isinstance(v, (bool, np.bool_)) for v in imputed), list(imputed)
+
+
+def test_midas_imputes_boolean_target_through_impute():
+    """A12: midas models a boolean target as 0/1 and imputes observed booleans."""
+    from imputation import MICE
+
+    df = _boolean_target_frame()
+    before = df.copy(deep=True)
+    mice = MICE(df)
+    out = mice.impute(
+        n_imputations=N_IMP, maxit=MAXIT, method="midas", predictor_matrix=full_predictor_matrix(df), seed=1
+    )
+    assert_all_invariants(df, before, mice, out, N_IMP, MAXIT)
+    mis = df["flag"].isna().to_numpy()
+    for completed in out:
+        imputed = completed["flag"].to_numpy()[mis]
+        assert all(isinstance(v, (bool, np.bool_)) for v in imputed), list(imputed)
+
+
+@pytest.mark.parametrize("kind", ["object", "numpy"])
+def test_midas_boolean_target_direct(kind):
+    from imputation.midas import midas
+
+    df = _boolean_target_frame()
+    ry = df["flag"].notna().to_numpy()
+    y = df["flag"].to_numpy()
+    if kind == "numpy":
+        y = np.where(ry, y, False).astype(bool)
+    out = midas(y, ry, df[["x1", "x2"]].to_numpy(), rng=np.random.default_rng(0))
+    assert len(out) == (~ry).sum()
+    assert all(isinstance(v, (bool, np.bool_)) for v in out), list(out)
+    if kind == "numpy":
+        assert out.dtype == bool
+
+
+def test_midas_returns_observed_values_of_integer_target():
+    """A12: the imputations are the donors' observed values, not float copies."""
+    from imputation.midas import midas
+
+    rng = np.random.default_rng(5)
+    x = rng.normal(size=(30, 2))
+    y = np.round(10 + 3 * x[:, 0] + rng.normal(size=30)).astype(np.int64)
+    ry = np.ones(30, dtype=bool)
+    ry[[2, 9, 17, 25]] = False
+    out = midas(y, ry, x, rng=np.random.default_rng(0))
+    assert out.dtype == np.int64
+    assert np.isin(out, y[ry]).all()
+
+
+@pytest.mark.parametrize("kind", ["object", "string", "category", "numeric_category"])
+def test_midas_rejects_non_numeric_target_direct(kind):
+    """Like R's midastouch (which fails for factors), midas needs a numeric target."""
+    from imputation.midas import midas
+
+    values = ["u", "v", None, "w", "u", "v", None, "w", "u", "w"]
+    y = {
+        "object": pd.Series(values, dtype=object),
+        "string": pd.Series(values, dtype="string"),
+        "category": pd.Series(values, dtype="category"),
+        "numeric_category": pd.Series([1, 2, None, 3, 1, 2, None, 3, 1, 3], dtype="category"),
+    }[kind]
+    ry = y.notna().to_numpy()
+    x = np.random.default_rng(0).normal(size=(len(y), 2))
+    with pytest.raises(ValueError, match=r"Target y must be numeric for midas"):
+        midas(y, ry, x, rng=np.random.default_rng(0))
 
 
 @pytest.mark.parametrize("method", method_params({"pmm": B2, "midas": B2}))
@@ -490,7 +538,6 @@ def test_string_dtype_predictor(method):
 # B6: midas with tied predictor rows
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason=NEW1)
 def test_midas_tied_predictor_rows_direct():
     """Minimal reproduction: a binary predictor puts several donors at distance 0."""
     from imputation.midas import midas
@@ -503,7 +550,6 @@ def test_midas_tied_predictor_rows_direct():
         assert np.isin(out, y[ry]).all()
 
 
-@pytest.mark.xfail(strict=True, reason=NEW1)
 def test_midas_binary_predictor_through_impute():
     rng = np.random.default_rng(4)
     n = 40
@@ -513,7 +559,6 @@ def test_midas_binary_predictor_through_impute():
     _check(df, "midas")
 
 
-@pytest.mark.xfail(strict=True, reason=NEW1 + " (planned _donor_probabilities)")
 def test_midas_donor_probabilities_are_distributions_with_ties():
     from imputation.midas import _donor_probabilities
 
@@ -526,6 +571,67 @@ def test_midas_donor_probabilities_are_distributions_with_ties():
     assert np.isfinite(probs).all() and (probs >= 0).all()
     np.testing.assert_allclose(probs.sum(axis=0), 1.0)
     assert (probs[omega == 0] == 0).all()  # donors outside the bootstrap sample get no weight
+
+
+def test_midas_integer_binary_predictor_through_impute():
+    """An int 0/1 predictor and two incomplete numeric columns."""
+    rng = np.random.default_rng(12)
+    n = 40
+    group = rng.integers(0, 2, size=n)
+    a = group + rng.normal(size=n)
+    b = 0.5 * a - group + rng.normal(size=n)
+    df = pd.DataFrame({"a": a, "b": b, "group": group})
+    df.loc[[0, 7, 15, 22, 31], "a"] = np.nan
+    df.loc[[3, 7, 18, 26, 35], "b"] = np.nan
+    assert df["group"].dtype == np.int64
+    _check(df, "midas", n_imputations=5, maxit=5)
+
+
+def _three_incomplete_columns_frame(n=40, seed=7):
+    """Three incomplete standard normal columns; no row is entirely missing."""
+    rng = np.random.default_rng(seed)
+    df = pd.DataFrame(rng.normal(size=(n, 3)), columns=["a", "b", "c"])
+    mis = rng.random((n, 3)) < 0.25
+    mis[mis.all(axis=1), 0] = False
+    return df.mask(mis)
+
+
+def test_midas_three_incomplete_numeric_columns():
+    """Imputed predictors are copies of observed values, so a missing row's
+    predictors can equal an observed row's. This crashed before B6 was fixed."""
+    df = _three_incomplete_columns_frame()
+    _check(df, "midas", n_imputations=5, maxit=5, seed=7, visit_sequence="random")
+
+
+# ---------------------------------------------------------------------------
+# midas: kappa through impute
+# ---------------------------------------------------------------------------
+
+def test_midas_kappa_through_impute(monkeypatch):
+    """``midas_kappa`` reaches midas as ``kappa``; without it kappa is estimated."""
+    import imputation.midas as midas_module
+
+    used = []
+    original = midas_module._donor_probabilities
+
+    def recording(*args, **kwargs):
+        probs, kappa = original(*args, **kwargs)
+        used.append(kappa)
+        return probs, kappa
+
+    monkeypatch.setattr(midas_module, "_donor_probabilities", recording)
+    df = regression_frame()
+    _check(df, "midas", midas_kappa=3)
+    assert len(used) == N_IMP * MAXIT
+    assert all(k == 3 for k in used)
+
+    used.clear()
+    _check(df, "midas")
+    assert len(used) == N_IMP * MAXIT
+    assert all(k != 3 for k in used)
+
+    with pytest.raises(TypeError, match="midas_midas_kappa"):
+        impute(df, "midas", midas_midas_kappa=3)
 
 
 # ---------------------------------------------------------------------------

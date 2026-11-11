@@ -15,11 +15,6 @@ MIDAS = load_fixture("l1_midastouch")
 IDS = [c["name"] for c in MIDAS["cases"]]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ImportError,
-    reason="B5: _donor_probabilities not implemented yet (planned with the midas restructure)",
-)
 @pytest.mark.parametrize("case", MIDAS["cases"], ids=IDS)
 def test_midastouch_donor_probabilities_match_r(case):
     from imputation.midas import _donor_probabilities
@@ -34,7 +29,7 @@ def test_midastouch_donor_probabilities_match_r(case):
         ~ry,
         as_array(case["omega"]),
         ridge=MIDAS["ridge"],
-        midas_kappa=case["midas_kappa"],
+        kappa=case["midas_kappa"],
         outout=case["outout"],
     )
     expected = as_array(case["probs"])

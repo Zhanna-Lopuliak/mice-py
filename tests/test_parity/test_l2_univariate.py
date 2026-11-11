@@ -21,24 +21,13 @@ from ._l2_harness import cached_comparison
 pytestmark = pytest.mark.parity
 
 
-def _xfail(reason, raises=None):
-    return pytest.mark.xfail(strict=True, reason=reason, raises=raises)
-
-
-NEW1 = _xfail(
-    "B6: midas crashes when several donors are at distance 0 (tied predictors): "
-    "minmax caps the column sums, so p no longer sums to 1 for rng.choice; "
-    "R's sample() renormalises",
-    raises=ValueError,
-)
-
 T1_CASES = [
     pytest.param("pmm", "F1"),
     pytest.param("pmm", "F2"),
     pytest.param("pmm", "F3"),
     pytest.param("pmm", "F4"),
     pytest.param("midastouch", "F1"),
-    pytest.param("midastouch", "F2", marks=NEW1),
+    pytest.param("midastouch", "F2"),
     pytest.param("midastouch", "F4"),
     pytest.param("sample", "F1"),
     pytest.param("sample", "F3"),

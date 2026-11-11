@@ -184,7 +184,7 @@ class TestMIDASImputation:
         id_obs = ~np.isnan(y)
         x = np.random.randn(8, 2)
         
-        result = midas(y, id_obs, x)
+        result = midas(y, id_obs, x, rng=np.random.default_rng(1))
         assert len(result) == 1
         assert not np.isnan(result[0])
         # Should be one of the observed values (MIDAS samples from donors)
@@ -197,7 +197,7 @@ class TestMIDASImputation:
         id_obs = ~np.isnan(y)
         x = np.random.randn(10, 3)
         
-        result = midas(y, id_obs, x, ridge=1e-4, midas_kappa=3.0)
+        result = midas(y, id_obs, x, ridge=1e-4, kappa=3.0, rng=np.random.default_rng(2))
         assert len(result) == 1
         assert not np.isnan(result[0])
         assert result[0] in y[id_obs]
@@ -209,7 +209,7 @@ class TestMIDASImputation:
         id_obs = ~np.isnan(y)
         x = np.random.randn(10, 2)
         
-        result = midas(y, id_obs, x, outout=False)
+        result = midas(y, id_obs, x, outout=False, rng=np.random.default_rng(3))
         assert len(result) == 1
         assert not np.isnan(result[0])
         assert result[0] in y[id_obs]
@@ -252,7 +252,7 @@ class TestMIDASImputation:
         id_obs = ~np.isnan(y)
         x = np.random.randn(8, 2)
         
-        result = midas(y, id_obs, x)
+        result = midas(y, id_obs, x, rng=np.random.default_rng(4))
         assert len(result) == 2
         assert not np.isnan(result).any()
         for val in result:
