@@ -1,5 +1,8 @@
+"""Imputation by random forests (``rf``), as R mice's ``mice.impute.rf``."""
+
+from __future__ import annotations
+
 import logging
-from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -17,16 +20,16 @@ _MIN_SAMPLES_SPLIT = {"regression": 5, "classification": 2}
 
 
 def rf(
-    y: Union[pd.Series, np.ndarray],
+    y: pd.Series | np.ndarray,
     id_obs: np.ndarray,
-    x: Union[pd.DataFrame, np.ndarray],
-    id_mis: Optional[np.ndarray] = None,
+    x: pd.DataFrame | np.ndarray,
+    id_mis: np.ndarray | None = None,
     n_estimators: int = 10,
-    max_depth: Optional[int] = None,
+    max_depth: int | None = None,
     min_samples_leaf: int = 1,
-    min_samples_split: Optional[int] = None,
-    forest_params: Optional[dict] = None,
-    rng: Optional[np.random.Generator] = None,
+    min_samples_split: int | None = None,
+    forest_params: dict | None = None,
+    rng: np.random.Generator | None = None,
 ) -> np.ndarray:
     """
     Impute missing values using Random Forests with donor sampling.
@@ -36,11 +39,11 @@ def rf(
 
     Parameters
     ----------
-    y : Union[pd.Series, np.ndarray]
+    y : pd.Series or np.ndarray
         Target variable with missing values
     id_obs : np.ndarray
         Boolean mask of observed values in y (True = observed, False = missing)
-    x : Union[pd.DataFrame, np.ndarray]
+    x : pd.DataFrame or np.ndarray
         Predictor variables (should be the current completed columns). A
         DataFrame with categorical, object, string or boolean columns is
         dummy-coded first by :func:`imputation.design.obtain_design`, as MICE

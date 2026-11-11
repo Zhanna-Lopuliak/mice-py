@@ -1,8 +1,12 @@
+"""Checks of the arguments of :class:`imputation.MICE`; they raise ``ValueError`` or ``TypeError`` or warn."""
+
+from __future__ import annotations
+
 import logging
 import numbers
 import re
 import warnings
-from typing import Dict, List, Union
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -20,12 +24,12 @@ from .constants import (
 logger = logging.getLogger(__name__)
 
 
-def _is_integer(value) -> bool:
+def _is_integer(value: Any) -> bool:
     """True for Python and NumPy integers; False for booleans."""
     return isinstance(value, numbers.Integral) and not isinstance(value, (bool, np.bool_))
 
 
-def _is_valid_method(method) -> bool:
+def _is_valid_method(method: Any) -> bool:
     """A supported method, or "" for a column that is not imputed (as in R)."""
     return method == "" or ImputationMethod.is_valid_method(method)
 
@@ -83,25 +87,27 @@ def check_maxit(maxit: int) -> None:
         warnings.warn("maxit is greater than 50, imputations will take a lot of time", UserWarning, stacklevel=3)
 
 
-def check_method(method: Union[str, Dict[str, str]], columns: List[str]) -> Dict[str, str]:
+def check_method(method: str | dict[str, str], columns: list[str]) -> dict[str, str]:
     """
     Check and process the method parameter for MICE imputation.
 
     Parameters
     ----------
-    method : Union[str, Dict[str, str]]
-        Method specification. Can be:
-        - str: use the same method for all columns
-        - Dict[str, str]: dictionary mapping column names to their methods;
-          columns not in it get DEFAULT_METHOD (``"pmm"``)
+    method : str or dict of str to str
+        Method specification:
+
+        - str: use the same method for all columns;
+        - dict: the method of each listed column; columns not in it get
+          DEFAULT_METHOD (``"pmm"``).
+
         A method is one of SUPPORTED_METHODS, or "" for a column that is
         not imputed.
-    columns : List[str]
+    columns : list of str
         List of column names in the data
 
     Returns
     -------
-    Dict[str, str]
+    dict of str to str
         Dictionary mapping each column to its imputation method
 
     Raises
@@ -159,21 +165,22 @@ def check_initial_method(initial_method: str) -> None:
 
 
 def check_visit_sequence(
-    visit_sequence: Union[str, List[str]], columns: List[str], columns_with_missing: List[str] = None
-) -> tuple:
+    visit_sequence: str | list[str], columns: list[str], columns_with_missing: list[str] | None = None
+) -> tuple[list[str] | None, list[str]]:
     """
     Check and process the visit sequence parameter for MICE imputation.
 
     Parameters
     ----------
-    visit_sequence : Union[str, List[str]]
-        Visit sequence specification. Can be:
+    visit_sequence : str or list of str
+        Visit sequence specification:
+
         - str: one of SUPPORTED_VISIT_SEQUENCES ("roman", "arabic",
-          "monotone", "revmonotone", "random")
-        - List[str]: list of column names specifying the order to visit variables
-    columns : List[str]
+          "monotone", "revmonotone", "random");
+        - list of str: column names specifying the order to visit variables.
+    columns : list of str
         List of all column names in the data
-    columns_with_missing : List[str], optional
+    columns_with_missing : list of str, optional
         List of columns that have missing values. If provided, will validate
         that all these columns are included in a custom visit sequence.
 
@@ -238,7 +245,7 @@ def check_visit_sequence(
 
 
 def validate_predictor_matrix(
-    predictor_matrix: pd.DataFrame, data_columns: List[str], data: pd.DataFrame
+    predictor_matrix: pd.DataFrame, data_columns: list[str], data: pd.DataFrame
 ) -> pd.DataFrame:
     """
     Validate predictor matrix for MICE imputation.
@@ -251,7 +258,7 @@ def validate_predictor_matrix(
         A 1 indicates that the column variable is used as predictor for the index variable.
         It may cover a subset of the columns; absent entries count as 0. Every
         incomplete column needs a row; rows of complete columns are unused.
-    data_columns : List[str]
+    data_columns : list of str
         List of column names in the data to validate against
     data : pd.DataFrame
         The data to check for missing values
@@ -310,7 +317,7 @@ def validate_predictor_matrix(
     return predictor_matrix
 
 
-def _is_supported_dtype(dtype) -> bool:
+def _is_supported_dtype(dtype: Any) -> bool:
     """Numeric (not complex), boolean, categorical, object or string."""
     if isinstance(dtype, pd.CategoricalDtype):
         return True
@@ -369,7 +376,7 @@ def validate_columns(data: pd.DataFrame) -> pd.DataFrame:
     return data
 
 
-def validate_dataframe(data) -> pd.DataFrame:
+def validate_dataframe(data: Any) -> pd.DataFrame:
     """
     Check and validate input data for MICE imputation.
 
@@ -428,7 +435,7 @@ def validate_dataframe(data) -> pd.DataFrame:
     return data
 
 
-def validate_formula(formula: str, columns: List[str]) -> None:
+def validate_formula(formula: str, columns: list[str]) -> None:
     """
     Validate that all variables in the formula exist in the dataset columns.
 
@@ -436,7 +443,7 @@ def validate_formula(formula: str, columns: List[str]) -> None:
     ----------
     formula : str
         The formula string to validate
-    columns : List[str]
+    columns : list of str
         List of column names in the dataset
 
     Raises

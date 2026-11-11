@@ -1,5 +1,8 @@
+"""Imputation by classification and regression trees (``cart``), as R mice's ``mice.impute.cart``."""
+
+from __future__ import annotations
+
 import logging
-from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -125,18 +128,18 @@ def _draw_pooled_donors(
 
 
 def cart(
-    y: Union[pd.Series, np.ndarray],
+    y: pd.Series | np.ndarray,
     id_obs: np.ndarray,
-    x: Union[pd.DataFrame, np.ndarray],
-    id_mis: Optional[np.ndarray] = None,
+    x: pd.DataFrame | np.ndarray,
+    id_mis: np.ndarray | None = None,
     min_samples_leaf: int = 5,
     cp: float = 1e-4,
-    min_samples_split: Optional[int] = None,
+    min_samples_split: int | None = None,
     max_depth: int = 30,
     bootstrap: bool = False,
-    ccp_alpha: Optional[float] = None,
-    tree_params: Optional[dict] = None,
-    rng: Optional[np.random.Generator] = None,
+    ccp_alpha: float | None = None,
+    tree_params: dict | None = None,
+    rng: np.random.Generator | None = None,
 ) -> np.ndarray:
     """
     Impute missing values using Classification and Regression Trees (CART).
@@ -146,11 +149,11 @@ def cart(
 
     Parameters
     ----------
-    y : Union[pd.Series, np.ndarray]
+    y : pd.Series or np.ndarray
         Target variable with missing values
     id_obs : np.ndarray
         Boolean mask of observed values in y (True for observed, False for missing)
-    x : Union[pd.DataFrame, np.ndarray]
+    x : pd.DataFrame or np.ndarray
         Predictor variables (must be fully observed). A DataFrame with
         categorical, object, string or boolean columns is dummy-coded first by
         :func:`imputation.design.obtain_design`, as MICE does. Without any

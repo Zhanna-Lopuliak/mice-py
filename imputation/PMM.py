@@ -1,11 +1,29 @@
+"""Predictive mean matching (``pmm``), as R mice's ``mice.impute.pmm``, with ``quantify`` and ``matchindex``."""
+
+from __future__ import annotations
+
+from typing import Any
+
 import numpy as np
 import pandas as pd
+from numpy.typing import ArrayLike
 
 from .design import obtain_design
 from .sampler import norm_draw
 
 
-def pmm(y, id_obs, x, id_mis=None, donors=5, matchtype=1, quantify=True, ridge=1e-5, ls_meth="qr", rng=None):
+def pmm(
+    y: ArrayLike,
+    id_obs: ArrayLike,
+    x: ArrayLike | pd.DataFrame,
+    id_mis: ArrayLike | None = None,
+    donors: int = 5,
+    matchtype: int = 1,
+    quantify: bool = True,
+    ridge: float = 1e-5,
+    ls_meth: str = "qr",
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
     """
     Predictive Mean Matching (PMM) imputation.
 
@@ -81,7 +99,8 @@ def pmm(y, id_obs, x, id_mis=None, donors=5, matchtype=1, quantify=True, ridge=1
     >>> y = np.array([7, np.nan, 9, 10, 11])
     >>> id_obs = ~np.isnan(y)
     >>> x = np.array([[1, 2], [3, 4], [5, 7], [7, 8], [9, 10]])
-    >>> pmm(y=y, id_obs=id_obs, x=x, donors=3)
+    >>> pmm(y=y, id_obs=id_obs, x=x, donors=3, rng=np.random.default_rng(1))
+    array([9.])
     """
     # Validate predictors (x): numeric or dummy-coded, without missing values
     if isinstance(x, pd.DataFrame):
@@ -154,7 +173,7 @@ def pmm(y, id_obs, x, id_mis=None, donors=5, matchtype=1, quantify=True, ridge=1
     return values[id_obs][idx]
 
 
-def quantify(y, id_obs, x):
+def quantify(y: ArrayLike, id_obs: ArrayLike, x: ArrayLike) -> np.ndarray:
     """
     Optimal scaling of a categorical variable, as R mice's ``quantify()``.
 
@@ -208,7 +227,7 @@ def quantify(y, id_obs, x):
 _quantify = quantify
 
 
-def matchindex(d, t, k=5, rng=None):
+def matchindex(d: ArrayLike, t: ArrayLike, k: int = 5, rng: np.random.Generator | None = None) -> np.ndarray:
     """
     Index of a matched donor for every target, as R mice 3.19.0's ``matchindex()``.
 
@@ -287,7 +306,7 @@ def matchindex(d, t, k=5, rng=None):
     return order[np.where(left_last, left_pos, right_pos)]
 
 
-def _is_categorical(y):
+def _is_categorical(y: Any) -> bool:
     """True unless `y` has a numeric, non-boolean dtype."""
     dtype = getattr(y, "dtype", None)
     if dtype is None:
@@ -295,14 +314,14 @@ def _is_categorical(y):
     return not (pd.api.types.is_numeric_dtype(dtype) and not pd.api.types.is_bool_dtype(dtype))
 
 
-def _as_float(y):
+def _as_float(y: Any) -> np.ndarray:
     """`y` as a float array with NaN for missing entries (also for pandas NA)."""
     if isinstance(y, (pd.Series, pd.Index, pd.api.extensions.ExtensionArray)):
         return pd.Series(y).to_numpy(dtype=float, na_value=np.nan)
     return np.asarray(y, dtype=float)
 
 
-def _category_codes(y, id_obs):
+def _category_codes(y: Any, id_obs: np.ndarray) -> np.ndarray:
     """Integer codes 0, 1, ... of the observed categories of `y`.
 
     The order is the order of the categories for a pandas categorical, and
@@ -321,7 +340,7 @@ def _category_codes(y, id_obs):
     return np.asarray(codes)
 
 
-def _column_space(a, tol=1e-7):
+def _column_space(a: np.ndarray, tol: float = 1e-7) -> np.ndarray:
     """Orthonormal basis of the column space of `a` (columns of an SVD)."""
     u, s, _ = np.linalg.svd(a, full_matrices=False)
     rank = int(np.sum(s > tol * s.max(initial=0.0)))

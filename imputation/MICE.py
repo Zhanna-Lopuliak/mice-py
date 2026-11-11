@@ -1,9 +1,12 @@
 """The MICE class: multiple imputation by chained equations, as R's ``mice``."""
 
+from __future__ import annotations
+
 import logging
 import time
 import warnings
-from typing import Dict, List, Optional, Union
+from collections.abc import Hashable, Sequence
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -32,6 +35,9 @@ from .validators import (
     validate_formula,
     validate_predictor_matrix,
 )
+
+if TYPE_CHECKING:
+    from statsmodels.iolib.summary2 import Summary
 
 logger = logging.getLogger(__name__)
 
@@ -136,44 +142,80 @@ def _check_method_params(params):
 
 class MICE:
     """
-    Multiple Imputation by Chained Equations (MICE) class.
+    Multiple imputation by chained equations, as R's ``mice``.
 
-    This class implements the MICE algorithm for handling missing data through
-    multiple imputations using chained equations.
+    Create the object with the incomplete data, then call `impute`. To
+    analyse the completed datasets, call `fit` with a model formula and
+    combine the fits with `pool` (Rubin's rules, as R's ``pool``).
 
     Parameters
     ----------
     data : pd.DataFrame
-        Input data with missing values. Must be a pandas DataFrame.
+        The incomplete data. Anything else is converted with
+        ``pd.DataFrame(data)``. Columns may be numeric, boolean, categorical,
+        object or string.
 
     Attributes
     ----------
     data : pd.DataFrame
-        The validated input data
-    id_obs : Dict[str, np.ndarray]
-        Dictionary mapping column names to indices of observed values
-    id_mis : Dict[str, np.ndarray]
-        Dictionary mapping column names to indices of missing values
+        The validated input data.
+    id_obs : dict of str to pd.Series
+        Per column, a boolean Series that is True where the value is observed.
+    id_mis : dict of str to pd.Series
+        Per column, a boolean Series that is True where the value is missing.
+    imputed_datasets : list of pd.DataFrame
+        The completed datasets of the last call of `impute`.
+    method : dict of str to str
+        The imputation method of each column used by the last `impute`
+        (``""`` for a column that is not imputed).
+    predictor_matrix : pd.DataFrame
+        The predictor matrix used by the last `impute`, after the setup step
+        (square, in data order; rows are targets, columns predictors).
+    visit_sequence : list of str
+        The order in which the last `impute` visited the columns.
+    chain_mean, chain_var : dict of str to np.ndarray
+        For each imputed numeric column, the mean and variance of its imputed
+        values, shape ``(maxit, n_imputations)``.
     logged_events : pd.DataFrame
         What the last call of `impute` changed in the imputation model, with
         R's columns ``it`` (iteration, 0 for the setup step), ``im``
         (imputation), ``dep`` (the target), ``meth`` and ``out``. Empty when
         nothing was logged. See `impute`.
+    model_results : list
+        The fitted models of the last call of `fit`, one per dataset.
+    pooled_result : MICEresult
+        The pooled estimates of the last call of `pool`.
+
+    Examples
+    --------
+    >>> import numpy as np, pandas as pd
+    >>> from imputation import MICE
+    >>> rng = np.random.default_rng(1)
+    >>> df = pd.DataFrame({"x": rng.normal(size=50)})
+    >>> df["y"] = 2 * df["x"] + rng.normal(size=50)
+    >>> df.loc[::5, "y"] = np.nan
+    >>> mice = MICE(df)
+    >>> datasets = mice.impute(n_imputations=5, seed=1)
+    >>> len(datasets), int(datasets[0].isna().sum().sum())
+    (5, 0)
+    >>> _ = mice.fit("y ~ x")
+    >>> table = mice.pool()["table"]  # estimate, df, fmi, intervals, ... per term
     """
 
-    def __init__(self, data):
+    def __init__(self, data: pd.DataFrame) -> None:
         """
         Initialize the MICE object.
 
         Parameters
         ----------
         data : pd.DataFrame
-            Input data with missing values. Must be a pandas DataFrame.
+            The incomplete data.
 
         Raises
         ------
         ValueError
-            If data is not a pandas DataFrame or contains duplicate column names
+            If `data` cannot be converted to a DataFrame or has duplicate
+            column names.
         TypeError
             If a column has a dtype that cannot be imputed (for example
             datetime or complex); the message names the column and the dtype
@@ -189,8 +231,8 @@ class MICE:
         self.data = validate_columns(self.data)
 
         logger.debug(f"Input data shape: {self.data.shape}")
-        self.id_obs = {}
-        self.id_mis = {}
+        self.id_obs: dict[Hashable, pd.Series] = {}
+        self.id_mis: dict[Hashable, pd.Series] = {}
         missing_stats = {}
 
         for col in self.data.columns:
@@ -204,12 +246,12 @@ class MICE:
             logger.debug(f"  {col}: {stats['missing_count']} values ({stats['missing_percentage']:.2f}%) missing")
 
         # For storing analysis model results
-        self.model_results = []
+        self.model_results: list[Any] = []
 
         # Changes to the imputation model made by `impute` (R's loggedEvents)
         self.logged_events = _empty_log()
-        self._log = []
-        self._not_imputed = []
+        self._log: list[tuple[int, int, Hashable, str, str]] = []
+        self._not_imputed: list[Hashable] = []
 
         # Required by statsmodels result wrappers
         self.nobs = self.data.shape[0]
@@ -219,60 +261,60 @@ class MICE:
         self,
         n_imputations: int = 5,
         maxit: int = 5,
-        predictor_matrix: Optional[pd.DataFrame] = None,
+        predictor_matrix: pd.DataFrame | None = None,
         initial: str = DEFAULT_INITIAL_METHOD,
-        method: Optional[Union[str, Dict[str, str]]] = None,
-        visit_sequence: Union[str, List[str]] = DEFAULT_VISIT_SEQUENCE,
-        seed: Optional[Union[int, List[int]]] = None,
-        **kwargs,
-    ) -> None:
+        method: str | dict[str, str] | None = None,
+        visit_sequence: str | list[str] = DEFAULT_VISIT_SEQUENCE,
+        seed: int | Sequence[int] | None = None,
+        **kwargs: Any,
+    ) -> list[pd.DataFrame]:
         """
         Perform multiple imputation by chained equations.
 
         Parameters
         ----------
         n_imputations : int, default=5
-            Number of imputations to perform
-
+            Number of imputations (R's ``m``), a positive integer.
         maxit : int, default=5
-            Maximum number of iterations for each imputation cycle.
-            Must be a positive integer.
-
+            Number of iterations of each chain, a positive integer.
         predictor_matrix : pd.DataFrame, optional
-            Binary matrix indicating which variables should be used as predictors
-            for each target variable. Should have column names as both index and columns.
-            A 1 indicates that the column variable is used as predictor for the index variable.
-            If None, every other column predicts every incomplete column (all
-            ones with a zero diagonal), as in R. The setup step described in
-            the Notes then removes constant and collinear predictors.
+            0/1 matrix with column labels as index (targets) and columns
+            (predictors); a 1 means that the column is used as a predictor of
+            the row. It may cover only some columns (missing entries count as
+            0), but every incomplete column needs a row. If None, every other
+            column predicts every incomplete column (all ones with a zero
+            diagonal), as in R. The setup step described in the Notes then
+            removes constant and collinear predictors.
+        initial : {"sample", "meanobs"}, default="sample"
+            Initial imputation: random draws from the observed values (as in
+            R), or the observed value closest to the mean of a numeric column
+            and the most frequent observed value of any other column.
+        method : str or dict of str to str, optional
+            Imputation method: ``"pmm"``, ``"midas"``, ``"cart"``, ``"rf"``,
+            ``"sample"``, or ``""`` for a column that is not imputed.
 
-        initial : str, default=DEFAULT_INITIAL_METHOD
-            Initial imputation method. Must be one of SUPPORTED_INITIAL_METHODS.
-
-        method : Union[str, Dict[str, str]], optional
-            Imputation method(s) to use:
-            - str: use the same method for all columns
-            - Dict[str, str]: dictionary mapping column names to their methods;
-              columns not in it get ``"pmm"``
+            - str: the same method for all columns;
+            - dict: the method of each listed column; columns not in it get
+              ``"pmm"``;
             - None: ``"pmm"`` for every incomplete column, whatever its type
               (R uses ``pmm`` for numeric columns and logreg, polyreg or polr
-              for factors, which this package does not have)
-            Must be one of SUPPORTED_METHODS, or ``""`` for a column that is
-            not imputed. As in R, a complete column always gets ``""``. A
-            column with method ``""`` keeps its missing values; where it is
-            used as a predictor, the rows in which it is missing are left out
-            of the imputation model and are not imputed.
+              for factors, which this package does not have).
 
-        visit_sequence : Union[str, List[str]], default="roman"
-            Sequence in which variables should be visited during imputation.
-            Only incomplete columns that are imputed are visited.
-            - "roman": data order (R's default)
-            - "arabic": reverse data order
-            - "monotone": increasing number of missing values, ties in data order
-            - "revmonotone": the reverse of "monotone"
-            - "random": a random order, drawn once per call from `seed`
-            - List[str]: list of column names specifying the order to visit variables
+            As in R, a complete column always gets ``""``. A column with
+            method ``""`` keeps its missing values; where it is used as a
+            predictor, the rows in which it is missing are left out of the
+            imputation model and are not imputed.
+        visit_sequence : str or list of str, default="roman"
+            Order in which the columns are visited in each iteration. Only
+            incomplete columns that are imputed are visited.
 
+            - "roman": data order (R's default);
+            - "arabic": reverse data order;
+            - "monotone": increasing number of missing values, ties in data order;
+            - "revmonotone": the reverse of "monotone";
+            - "random": a random order, drawn once per call from `seed`;
+            - a list of column labels: that order. It must contain every
+              column that is imputed; other columns in it are skipped.
         seed : int, sequence of int, or None, default=None
             Seed for the random number generators. It seeds one
             ``np.random.SeedSequence``, from which independent streams are
@@ -281,14 +323,11 @@ class MICE:
             ``n_imputations`` is. The same seed gives identical results;
             ``None`` draws fresh entropy from the operating system.
 
-        **kwargs : dict
-            Additional keyword arguments. An argument not listed here raises
-            ``TypeError``.
-
-            Parameters for specific imputation methods can be passed with the method
-            name and an underscore as prefix, e.g., `pmm_donors=5` to pass
-            `donors=5` to the `pmm` imputer. The parameter must exist in that
-            imputer's signature.
+        **kwargs
+            Parameters of the imputation methods, with the method name and an
+            underscore as prefix: ``pmm_donors=3`` passes ``donors=3`` to
+            `imputation.PMM.pmm`. The parameter must exist in that imputer's
+            signature; any other keyword argument raises ``TypeError``.
 
             - `output_dir`: deprecated and ignored; passing it issues a
               ``DeprecationWarning``.
@@ -307,11 +346,25 @@ class MICE:
         list of pd.DataFrame
             The `n_imputations` completed datasets.
 
+        Raises
+        ------
+        ValueError
+            For an invalid argument (number of imputations or iterations,
+            method, initial method, visit sequence, predictor matrix), or when
+            a method cannot impute a column (for example ``"midas"`` on a
+            categorical column, or a column without observed value in the
+            rows usable for its model).
+        TypeError
+            For an unknown keyword argument.
+
         Warns
         -----
         UserWarning
             When the imputation model was changed (see Notes), with the
-            number of logged events, as R's "Number of logged events".
+            number of logged events, as R's "Number of logged events"; also
+            for more than 100 imputations or 50 iterations.
+        DeprecationWarning
+            For the deprecated keyword arguments listed above.
 
         Notes
         -----
@@ -558,7 +611,13 @@ class MICE:
             logger.info("Not imputed because constant or collinear: %s", self._not_imputed)
         return pd.DataFrame(pred, index=predictor_matrix.index, columns=predictor_matrix.columns)
 
-    def fit(self, formula: str, model=None, model_kwargs: Optional[Dict] = None, **fit_kwargs):
+    def fit(
+        self,
+        formula: str,
+        model: Callable[..., Any] | None = None,
+        model_kwargs: dict[str, Any] | None = None,
+        **fit_kwargs: Any,
+    ) -> list[Any]:
         """
         Fit a statistical model to each imputed dataset using the specified formula.
 
@@ -598,12 +657,14 @@ class MICE:
 
         Examples
         --------
-        >>> mice_obj = MICE(data)
-        >>> mice_obj.impute(n_imputations=5)
-        >>> mice_obj.fit('outcome ~ predictor1 + predictor2')
-        >>> mice_obj.fit('event ~ age + dose', model=smf.logit, disp=False)
+        >>> import statsmodels.api as sm
+        >>> import statsmodels.formula.api as smf
+        >>> mice_obj = MICE(data)  # doctest: +SKIP
+        >>> mice_obj.impute(n_imputations=5)  # doctest: +SKIP
+        >>> mice_obj.fit('outcome ~ predictor1 + predictor2')  # doctest: +SKIP
+        >>> mice_obj.fit('event ~ age + dose', model=smf.logit, disp=False)  # doctest: +SKIP
         >>> mice_obj.fit('count ~ age', model=smf.glm,
-        ...              model_kwargs={'family': sm.families.Poisson()})
+        ...              model_kwargs={'family': sm.families.Poisson()})  # doctest: +SKIP
         """
         logger.info(f"Starting analysis with formula: {formula}")
 
@@ -652,7 +713,7 @@ class MICE:
         logger.debug(f"Model results stored in self.model_results with {len(self.model_results)} entries")
         return self.model_results
 
-    def pool(self, summ: bool = False):
+    def pool(self, summ: bool = False) -> dict[str, Any] | Summary:
         """
         Pool parameter estimates from fitted models using Rubin's rules.
 
@@ -664,7 +725,8 @@ class MICE:
         Parameters
         ----------
         summ : bool, default=False
-            If True, returns a summary of the pooled results
+            If True, return the statsmodels summary of the pooled result
+            instead of the dict.
 
         Returns
         -------
@@ -683,11 +745,17 @@ class MICE:
         Raises
         ------
         ValueError
-            If no model results are available from analysis
+            If `fit` has not been called.
+
+        Warns
+        -----
+        UserWarning
+            With a single imputation, where nothing can be pooled.
 
         Notes
         -----
         Rubin's pooling rules combine, per parameter:
+
         - Point estimates: average across imputations
         - Within-imputation variance (ubar): average of individual model variances
         - Between-imputation variance (b): variance of point estimates across imputations

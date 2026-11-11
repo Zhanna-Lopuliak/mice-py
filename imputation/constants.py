@@ -1,19 +1,28 @@
+"""Names of the supported imputation methods, initial imputations and visit sequences."""
+
+from __future__ import annotations
+
 from enum import Enum
-from typing import List
 
 
 class ImputationMethod(Enum):
     """
     Enumeration of supported imputation methods for MICE.
 
-    Attributes:
-        PMM: Predictive Mean Matching
-        MIDAS: Multiple Imputation with Distant Average Substitution, R's
-            ``midastouch`` (predictive mean matching with distance-based donor
-            weights)
-        CART: Classification and Regression Trees
-        SAMPLE: Random sampling from observed values
-        RF: Random Forest
+    Attributes
+    ----------
+    PMM
+        Predictive mean matching, R's ``pmm``.
+    MIDAS
+        Multiple Imputation with Distant Average Substitution, R's
+        ``midastouch`` (predictive mean matching with distance-based donor
+        weights).
+    CART
+        Classification and regression trees, R's ``cart``.
+    SAMPLE
+        Random draws from the observed values, R's ``sample``.
+    RF
+        Random forest, R's ``rf``.
     """
 
     PMM = "pmm"
@@ -23,12 +32,14 @@ class ImputationMethod(Enum):
     RF = "rf"
 
     @classmethod
-    def get_all_methods(cls) -> List[str]:
+    def get_all_methods(cls) -> list[str]:
         """
         Get all supported method names as a list of strings.
 
-        Returns:
-            List[str]: List of all supported method names
+        Returns
+        -------
+        list of str
+            List of all supported method names
         """
         return [method.value for method in cls]
 
@@ -37,11 +48,15 @@ class ImputationMethod(Enum):
         """
         Check if a method string is valid.
 
-        Args:
-            method (str): Method name to validate
+        Parameters
+        ----------
+        method : str
+            Method name to validate
 
-        Returns:
-            bool: True if method is valid, False otherwise
+        Returns
+        -------
+        bool
+            True if method is valid, False otherwise
         """
         return method in cls.get_all_methods()
 
@@ -50,8 +65,10 @@ class ImputationMethod(Enum):
         """
         Get the default imputation method.
 
-        Returns:
-            str: Default method name, ``"pmm"`` as in R's ``mice`` for numeric
+        Returns
+        -------
+        str
+            Default method name, ``"pmm"`` as in R's ``mice`` for numeric
             columns. R uses logreg, polyreg and polr for factors; this
             package has none of those and uses pmm for every column type.
         """
@@ -62,22 +79,27 @@ class InitialMethod(Enum):
     """
     Enumeration of supported initial imputation methods for MICE.
 
-    Attributes:
-        SAMPLE: Random sampling from observed values
-        MEANOBS: Use the observed value closest to the mean of a numeric
-            column, and the most frequent observed value of any other column
+    Attributes
+    ----------
+    SAMPLE
+        Random draws from the observed values (R's default).
+    MEANOBS
+        The observed value closest to the mean of a numeric column, and the
+        most frequent observed value of any other column (not in R).
     """
 
     SAMPLE = "sample"
     MEANOBS = "meanobs"
 
     @classmethod
-    def get_all_methods(cls) -> List[str]:
+    def get_all_methods(cls) -> list[str]:
         """
         Get all supported initial method names as a list of strings.
 
-        Returns:
-            List[str]: List of all supported initial method names
+        Returns
+        -------
+        list of str
+            List of all supported initial method names
         """
         return [method.value for method in cls]
 
@@ -86,11 +108,15 @@ class InitialMethod(Enum):
         """
         Check if an initial method string is valid.
 
-        Args:
-            method (str): Initial method name to validate
+        Parameters
+        ----------
+        method : str
+            Initial method name to validate
 
-        Returns:
-            bool: True if method is valid, False otherwise
+        Returns
+        -------
+        bool
+            True if method is valid, False otherwise
         """
         return method in cls.get_all_methods()
 
@@ -99,8 +125,10 @@ class InitialMethod(Enum):
         """
         Get the default initial imputation method.
 
-        Returns:
-            str: Default initial method name
+        Returns
+        -------
+        str
+            Default initial method name
         """
         return cls.SAMPLE.value
 
@@ -112,12 +140,18 @@ class VisitSequence(Enum):
     The keywords of R's ``mice``, plus ``random``. Only incomplete columns
     that are imputed are visited.
 
-    Attributes:
-        ROMAN: Columns in data order (R's default)
-        ARABIC: Columns in reverse data order
-        MONOTONE: Columns by increasing number of missing values; ties in data order
-        REVMONOTONE: The reverse of MONOTONE
-        RANDOM: A random order, drawn once per call of ``impute``
+    Attributes
+    ----------
+    ROMAN
+        Columns in data order (R's default).
+    ARABIC
+        Columns in reverse data order.
+    MONOTONE
+        Columns by increasing number of missing values; ties in data order.
+    REVMONOTONE
+        The reverse of MONOTONE.
+    RANDOM
+        A random order, drawn once per call of ``impute``.
     """
 
     ROMAN = "roman"
@@ -127,12 +161,14 @@ class VisitSequence(Enum):
     RANDOM = "random"
 
     @classmethod
-    def get_all_sequences(cls) -> List[str]:
+    def get_all_sequences(cls) -> list[str]:
         """
         Get all supported visit sequence names as a list of strings.
 
-        Returns:
-            List[str]: List of all supported visit sequence names
+        Returns
+        -------
+        list of str
+            List of all supported visit sequence names
         """
         return [sequence.value for sequence in cls]
 
@@ -141,11 +177,15 @@ class VisitSequence(Enum):
         """
         Check if a visit sequence string is valid.
 
-        Args:
-            sequence (str): Visit sequence name to validate
+        Parameters
+        ----------
+        sequence : str
+            Visit sequence name to validate
 
-        Returns:
-            bool: True if sequence is valid, False otherwise
+        Returns
+        -------
+        bool
+            True if sequence is valid, False otherwise
         """
         return sequence in cls.get_all_sequences()
 
@@ -154,8 +194,10 @@ class VisitSequence(Enum):
         """
         Get the default visit sequence.
 
-        Returns:
-            str: Default visit sequence name (``"roman"``, as in R)
+        Returns
+        -------
+        str
+            Default visit sequence name (``"roman"``, as in R)
         """
         return cls.ROMAN.value
 

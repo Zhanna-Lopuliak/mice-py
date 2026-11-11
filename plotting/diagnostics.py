@@ -1,11 +1,21 @@
+"""Diagnostic plots of imputed datasets and of the convergence of the chains, after R mice's plots."""
+
+from __future__ import annotations
+
 import logging
 import math
+import os
 import warnings
+from collections.abc import Hashable, Mapping, Sequence
+from typing import Any, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
+from numpy.typing import ArrayLike
 
 from .utils import _save_or_show
 
@@ -19,14 +29,14 @@ _MAX_FIGURE_INCHES = 20.0
 _MAX_PANEL_COLUMNS = 4
 
 
-def _figure_size(n_rows, n_cols):
+def _figure_size(n_rows: int, n_cols: int) -> tuple[float, float]:
     """Figure size for a grid of square panels, scaled down to fit _MAX_FIGURE_INCHES."""
     width, height = _PANEL_INCHES * n_cols, _PANEL_INCHES * n_rows
     scale = min(1.0, _MAX_FIGURE_INCHES / width, _MAX_FIGURE_INCHES / height)
     return (width * scale, height * scale)
 
 
-def _panel_grid(n_panels, n_rows, n_cols, **subplot_kws):
+def _panel_grid(n_panels: int, n_rows: int, n_cols: int, **subplot_kws: Any) -> tuple[Figure, list[Axes]]:
     """
     Create a grid of panels and remove the slots beyond ``n_panels``.
 
@@ -43,13 +53,13 @@ def _panel_grid(n_panels, n_rows, n_cols, **subplot_kws):
     return fig, axes[:n_panels]
 
 
-def _variable_grid(n_panels, **subplot_kws):
+def _variable_grid(n_panels: int, **subplot_kws: Any) -> tuple[Figure, list[Axes]]:
     """One panel per variable, in rows of at most _MAX_PANEL_COLUMNS panels."""
     n_cols = min(n_panels, _MAX_PANEL_COLUMNS)
     return _panel_grid(n_panels, math.ceil(n_panels / n_cols), n_cols, **subplot_kws)
 
 
-def _imputation_grid(n_panels, **subplot_kws):
+def _imputation_grid(n_panels: int, **subplot_kws: Any) -> tuple[Figure, list[Axes]]:
     """One panel for the observed data and one per imputation."""
     if n_panels <= 3:
         n_rows, n_cols = 1, n_panels
@@ -59,14 +69,14 @@ def _imputation_grid(n_panels, **subplot_kws):
     return _panel_grid(n_panels, n_rows, n_cols, **subplot_kws)
 
 
-def _columns_to_plot(missing_pattern, columns):
+def _columns_to_plot(missing_pattern: pd.DataFrame, columns: Sequence[Hashable] | None) -> list[Hashable]:
     """The requested columns (default: all) that have at least one missing value."""
     if columns is None:
         columns = missing_pattern.columns[missing_pattern.eq(0).any()]
     return [col for col in columns if col in missing_pattern.columns and missing_pattern[col].eq(0).any()]
 
 
-def _density(ax, values, color, label=None, **line_kws):
+def _density(ax: Axes, values: Any, color: str, label: str | None = None, **line_kws: Any) -> Any:
     """
     Kernel density of ``values`` on ``ax``.
 
@@ -86,24 +96,25 @@ def _density(ax, values, color, label=None, **line_kws):
 
 
 def stripplot(
-    imputed_datasets,
-    missing_pattern,
-    columns=None,
-    merge_imputations=False,
-    observed_color="blue",
-    imputed_color="red",
-    save_path=None,
-):
+    imputed_datasets: Sequence[pd.DataFrame],
+    missing_pattern: pd.DataFrame,
+    columns: Sequence[Hashable] | None = None,
+    merge_imputations: bool = False,
+    observed_color: str = "blue",
+    imputed_color: str = "red",
+    save_path: str | os.PathLike[str] | None = None,
+) -> Figure | None:
     """
-    Create stripplots for imputed data showing observed and imputed values.
-    First plots observed data, then for each imputation shows both observed and imputed values
-    in different colors.
+    Strip plots of the observed and imputed values, as R mice's ``stripplot``.
+
+    Per column, the first strip shows the observed values; then, for each
+    imputation, the observed and the imputed values in different colours.
 
     Parameters
     ----------
-    imputed_datasets : list of pandas.DataFrame
+    imputed_datasets : sequence of pd.DataFrame
         List of DataFrames containing imputed values
-    missing_pattern : pandas.DataFrame
+    missing_pattern : pd.DataFrame
         DataFrame indicating missing values (0 where missing, 1 where observed)
     columns : list of str, optional
         List of column names to plot. If None, plots all columns with missing values.
@@ -114,8 +125,9 @@ def stripplot(
         Color for observed values
     imputed_color : str, default 'red'
         Color for imputed values
-    save_path : str, optional
-        If provided, save the plot to this path and close it, instead of displaying it
+    save_path : str or path, optional
+        If given, save the figure there (creating missing directories) and
+        close it, instead of showing it.
 
     Returns
     -------
@@ -236,27 +248,28 @@ def stripplot(
 
 
 def bwplot(
-    imputed_datasets,
-    missing_pattern,
-    columns=None,
-    merge_imputations=False,
-    observed_color="blue",
-    imputed_color="red",
-    save_path=None,
-):
+    imputed_datasets: Sequence[pd.DataFrame],
+    missing_pattern: pd.DataFrame,
+    columns: Sequence[Hashable] | None = None,
+    merge_imputations: bool = False,
+    observed_color: str = "blue",
+    imputed_color: str = "red",
+    save_path: str | os.PathLike[str] | None = None,
+) -> Figure | None:
     """
-    Create box-and-whisker plots for imputed data showing observed and imputed values.
-    First plots observed data, then for each imputation shows only imputed values
-    in different colors.
+    Box-and-whisker plots of the observed and imputed values, as R mice's ``bwplot``.
+
+    Per column, the first box shows the observed values, then one box per
+    imputation shows its imputed values only.
 
     As in R's ``bwplot.mids``, values beyond the whiskers (1.5 times the
     interquartile range from the box) are drawn as outliers.
 
     Parameters
     ----------
-    imputed_datasets : list of pandas.DataFrame
+    imputed_datasets : sequence of pd.DataFrame
         List of DataFrames containing imputed values
-    missing_pattern : pandas.DataFrame
+    missing_pattern : pd.DataFrame
         DataFrame indicating missing values (0 where missing, 1 where observed)
     columns : list of str, optional
         List of column names to plot. If None, plots all columns with missing values.
@@ -267,8 +280,9 @@ def bwplot(
         Color for observed values
     imputed_color : str, default 'red'
         Color for imputed values
-    save_path : str, optional
-        If provided, save the plot to this path and close it, instead of displaying it
+    save_path : str or path, optional
+        If given, save the figure there (creating missing directories) and
+        close it, instead of showing it.
 
     Returns
     -------
@@ -412,20 +426,27 @@ def bwplot(
 
 
 def densityplot(
-    imputed_datasets, missing_pattern, columns=None, observed_color="blue", imputed_color="red", save_path=None
-):
+    imputed_datasets: Sequence[pd.DataFrame],
+    missing_pattern: pd.DataFrame,
+    columns: Sequence[Hashable] | None = None,
+    observed_color: str = "blue",
+    imputed_color: str = "red",
+    save_path: str | os.PathLike[str] | None = None,
+) -> Figure | None:
     """
-    Create density plots (KDE) for observed and imputed data.
-    Shows the distribution of observed data in blue and imputed data in red.
+    Kernel density plots of the observed and imputed values, as R mice's ``densityplot``.
+
+    Per column, one panel with the density of the observed values and one
+    density of the imputed values per imputation.
 
     Values without variance (for example a single imputed cell) have no
     kernel density; they are drawn as a dashed vertical line at the value.
 
     Parameters
     ----------
-    imputed_datasets : list of pandas.DataFrame
+    imputed_datasets : sequence of pd.DataFrame
         List of DataFrames containing imputed values
-    missing_pattern : pandas.DataFrame
+    missing_pattern : pd.DataFrame
         DataFrame indicating missing values (0 where missing, 1 where observed)
     columns : list of str, optional
         List of column names to plot. If None, plots all columns with missing values.
@@ -433,8 +454,9 @@ def densityplot(
         Color for observed values
     imputed_color : str, default 'red'
         Color for imputed values
-    save_path : str, optional
-        If provided, save the plot to this path and close it, instead of displaying it
+    save_path : str or path, optional
+        If given, save the figure there (creating missing directories) and
+        close it, instead of showing it.
 
     Returns
     -------
@@ -483,18 +505,24 @@ def densityplot(
 
 
 def densityplot_split(
-    imputed_datasets, missing_pattern, column, observed_color="blue", imputed_color="red", save_path=None
-):
+    imputed_datasets: Sequence[pd.DataFrame],
+    missing_pattern: pd.DataFrame,
+    column: Hashable,
+    observed_color: str = "blue",
+    imputed_color: str = "red",
+    save_path: str | os.PathLike[str] | None = None,
+) -> Figure | None:
     """
-    Create separate density plots (KDE) for observed data and each imputed dataset.
-    Shows the distribution of observed data in blue and imputed data in red,
-    with each imputation in a separate subplot. All panels share their axes.
+    Kernel density plots of one column, one panel for the observed values and one per imputation.
+
+    The observed values are drawn in `observed_color`, the imputed values
+    of each imputation in `imputed_color`. All panels share their axes.
 
     Parameters
     ----------
-    imputed_datasets : list of pandas.DataFrame
+    imputed_datasets : sequence of pd.DataFrame
         List of DataFrames containing imputed values
-    missing_pattern : pandas.DataFrame
+    missing_pattern : pd.DataFrame
         DataFrame indicating missing values (0 where missing, 1 where observed)
     column : str
         Name of the column to plot
@@ -502,8 +530,9 @@ def densityplot_split(
         Color for observed values
     imputed_color : str, default 'red'
         Color for imputed values
-    save_path : str, optional
-        If provided, save the plot to this path and close it, instead of displaying it
+    save_path : str or path, optional
+        If given, save the figure there (creating missing directories) and
+        close it, instead of showing it.
 
     Returns
     -------
@@ -551,15 +580,15 @@ def densityplot_split(
 
 
 def xyplot(
-    imputed_datasets,
-    missing_pattern,
-    x,
-    y,
-    merge_imputations=False,
-    observed_color="blue",
-    imputed_color="red",
-    save_path=None,
-):
+    imputed_datasets: Sequence[pd.DataFrame],
+    missing_pattern: pd.DataFrame,
+    x: str,
+    y: str,
+    merge_imputations: bool = False,
+    observed_color: str = "blue",
+    imputed_color: str = "red",
+    save_path: str | os.PathLike[str] | None = None,
+) -> Figure | None:
     """
     Create scatter plots of two columns, showing observed and imputed values.
 
@@ -578,9 +607,9 @@ def xyplot(
 
     Parameters
     ----------
-    imputed_datasets : list of pandas.DataFrame
+    imputed_datasets : sequence of pd.DataFrame
         List of DataFrames containing imputed values
-    missing_pattern : pandas.DataFrame
+    missing_pattern : pd.DataFrame
         DataFrame indicating missing values (0 where missing, 1 where observed)
     x : str
         Name of the column to plot on x-axis
@@ -595,8 +624,9 @@ def xyplot(
         Color for observed values
     imputed_color : str, default 'red'
         Color for imputed values
-    save_path : str, optional
-        If provided, save the plot to this path and close it, instead of displaying it
+    save_path : str or path, optional
+        If given, save the figure there (creating missing directories) and
+        close it, instead of showing it.
 
     Returns
     -------
@@ -685,7 +715,13 @@ def xyplot(
     return _save_or_show(fig, save_path)
 
 
-def plot_chain_stats(chain_mean, chain_var, columns=None, figsize=(10, 5), save_path=None):
+def plot_chain_stats(
+    chain_mean: Mapping[Hashable, ArrayLike],
+    chain_var: Mapping[Hashable, ArrayLike],
+    columns: Sequence[Hashable] | None = None,
+    figsize: tuple[float, float] = (10, 5),
+    save_path: str | os.PathLike[str] | None = None,
+) -> Figure | None:
     """
     Plot per-iteration chain means and standard deviations for the given columns.
 
@@ -694,7 +730,7 @@ def plot_chain_stats(chain_mean, chain_var, columns=None, figsize=(10, 5), save_
 
     Parameters
     ----------
-    chain_mean : Dict[str, np.ndarray]
+    chain_mean : dict of str to np.ndarray
         Dictionary where each key is a column name and each value is a 2-D
         array of shape (n_iter, n_imputations) containing the means of the
         newly imputed values.
@@ -753,7 +789,7 @@ def plot_chain_stats(chain_mean, chain_var, columns=None, figsize=(10, 5), save_
         x = np.arange(1, n_iter + 1)
 
         # Plot means
-        ax_mean = axes[row_idx, 0]
+        ax_mean = cast(Axes, axes[row_idx, 0])
         for chain_idx in range(mean_mat.shape[1]):
             ax_mean.plot(
                 x,
@@ -770,7 +806,7 @@ def plot_chain_stats(chain_mean, chain_var, columns=None, figsize=(10, 5), save_
             ax_mean.legend(loc="best")
 
         # Plot standard deviations
-        ax_sd = axes[row_idx, 1]
+        ax_sd = cast(Axes, axes[row_idx, 1])
         for chain_idx in range(sd_mat.shape[1]):
             ax_sd.plot(
                 x, sd_mat[:, chain_idx], marker="o", alpha=0.7, label=f"Chain {chain_idx + 1}", color=palette[chain_idx]

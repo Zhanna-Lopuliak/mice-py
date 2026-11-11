@@ -3,7 +3,12 @@
 Separated into its own module so it can be reused and keeps `MICE.py` lighter.
 """
 
+from __future__ import annotations
+
+from typing import Any, NoReturn
+
 import numpy as np
+from numpy.typing import ArrayLike
 from scipy import stats
 from statsmodels.base.model import LikelihoodModelResults
 from statsmodels.iolib import summary2
@@ -35,7 +40,15 @@ class MICEresult(LikelihoodModelResults):
         stored as ``df_resid``; inference does not use it directly.
     """
 
-    def __init__(self, model, params, normalized_cov_params, scale=1.0, df=None, dfcom=np.inf):
+    def __init__(
+        self,
+        model: Any,
+        params: ArrayLike,
+        normalized_cov_params: ArrayLike,
+        scale: float = 1.0,
+        df: ArrayLike | None = None,
+        dfcom: float = np.inf,
+    ) -> None:
         super().__init__(model, params, normalized_cov_params, scale=scale)
         # Fixed here so that cov_params() does not change with `scale`
         self.cov_params_default = np.asarray(normalized_cov_params, dtype=float) * scale
@@ -47,15 +60,25 @@ class MICEresult(LikelihoodModelResults):
         self.df_resid = self.dfcom
 
     @property
-    def pvalues(self):
+    def pvalues(self) -> np.ndarray:
         """Two-sided p-values from the t distribution with each parameter's df."""
         # R floors the df at 0.001 for the p-value.
         return 2.0 * stats.t.sf(np.abs(self.tvalues), np.maximum(self.df, 0.001))
 
-    def conf_int(self, alpha=0.05, cols=None):
+    def conf_int(self, alpha: float = 0.05, cols: ArrayLike | None = None) -> np.ndarray:
         """Confidence intervals from the t distribution with each parameter's df.
 
-        Returns an array with one row per parameter: lower and upper limit.
+        Parameters
+        ----------
+        alpha : float, default 0.05
+            One minus the confidence level.
+        cols : array-like of int, optional
+            Positions of the parameters to return; all if None.
+
+        Returns
+        -------
+        np.ndarray
+            One row per parameter: lower and upper limit.
         """
         bse = np.asarray(self.bse)
         params = np.asarray(self.params)
@@ -64,7 +87,7 @@ class MICEresult(LikelihoodModelResults):
         ci = np.column_stack([lower, upper])
         return ci if cols is None else ci[np.asarray(cols)]
 
-    def _no_joint_tests(self, *args, **kwargs):
+    def _no_joint_tests(self, *args: Any, **kwargs: Any) -> NoReturn:
         raise NotImplementedError(
             "Tests of linear combinations of pooled estimates need their own "
             "pooling rule (for example D1 in R mice), which is not implemented. "
@@ -74,8 +97,23 @@ class MICEresult(LikelihoodModelResults):
 
     t_test = f_test = wald_test = _no_joint_tests
 
-    def summary(self, title: str = None, alpha: float = 0.05):  # type: ignore[override]
-        """Return a statsmodels summary object with df and FMI columns."""
+    def summary(self, title: str | None = None, alpha: float = 0.05) -> summary2.Summary:
+        """Summary table of the pooled estimates, with df and FMI columns.
+
+        Parameters
+        ----------
+        title : str, optional
+            Title of the table.
+        alpha : float, default 0.05
+            One minus the confidence level of the intervals.
+
+        Returns
+        -------
+        statsmodels.iolib.summary2.Summary
+            Estimates, standard errors, t statistics, p-values, intervals,
+            Barnard-Rubin degrees of freedom and fractions of missing
+            information.
+        """
         smry = summary2.Summary()
         float_fmt = "%8.3f"
 

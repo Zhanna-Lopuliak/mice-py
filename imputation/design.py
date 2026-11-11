@@ -21,9 +21,11 @@ The functions only compute; they neither log nor warn.
 from __future__ import annotations
 
 from collections.abc import Hashable, Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd
+from numpy.typing import ArrayLike
 from scipy import linalg
 
 __all__ = ["obtain_design", "remove_lindep", "find_collinear", "quickpred"]
@@ -88,7 +90,7 @@ def _codes(series: pd.Series, levels: list) -> np.ndarray:
     return pd.Categorical(series, categories=levels).codes
 
 
-def _as_numeric(values) -> np.ndarray:
+def _as_numeric(values: Any) -> np.ndarray:
     """A column as float, with categories replaced by their level codes.
 
     This is what R's ``as.numeric`` does to a factor and ``data.matrix`` to
@@ -101,7 +103,7 @@ def _as_numeric(values) -> np.ndarray:
     kind = _column_kind(series)
     if kind == "numeric":
         return series.to_numpy(dtype=float, na_value=np.nan)
-    codes = _codes(series, _levels(series, kind)).astype(float)
+    codes: np.ndarray = _codes(series, _levels(series, kind)).astype(float)
     codes[codes < 0] = np.nan
     return codes
 
@@ -281,7 +283,9 @@ def _correlation_matrix(x: np.ndarray) -> np.ndarray:
     return corr
 
 
-def _remove_lindep(x, y, ry, eps: float = 1e-4, maxcor: float = 0.99) -> tuple[np.ndarray, str | None]:
+def _remove_lindep(
+    x: ArrayLike | pd.DataFrame, y: ArrayLike, ry: ArrayLike, eps: float = 1e-4, maxcor: float = 0.99
+) -> tuple[np.ndarray, str | None]:
     """:func:`remove_lindep` plus the event R would add to its log.
 
     Returns ``(keep, event)``. ``event`` is the ``out`` text that
@@ -359,7 +363,9 @@ def _remove_lindep(x, y, ry, eps: float = 1e-4, maxcor: float = 0.99) -> tuple[n
     return keep, event
 
 
-def remove_lindep(x, y, ry, eps: float = 1e-4, maxcor: float = 0.99) -> np.ndarray:
+def remove_lindep(
+    x: ArrayLike | pd.DataFrame, y: ArrayLike, ry: ArrayLike, eps: float = 1e-4, maxcor: float = 0.99
+) -> np.ndarray:
     """Columns of a design matrix to keep in one imputation model.
 
     Reproduces ``mice:::remove.lindep`` of R mice 3.19.0, which ``mice``
@@ -560,7 +566,7 @@ def _correlation_columns_with(a: np.ndarray, b: np.ndarray, method: str) -> np.n
     return np.clip(out, -1.0, 1.0)
 
 
-def _column_labels(names, columns: list, argument: str) -> list:
+def _column_labels(names: Any, columns: list, argument: str) -> list:
     """``include`` / ``exclude`` as a list of column labels; unknown labels raise."""
     if names is None:
         return []
@@ -575,10 +581,10 @@ def _column_labels(names, columns: list, argument: str) -> list:
 
 def quickpred(
     data: pd.DataFrame,
-    mincor=0.1,
-    minpuc=0.0,
-    include=None,
-    exclude=None,
+    mincor: float | ArrayLike = 0.1,
+    minpuc: float | ArrayLike = 0.0,
+    include: Hashable | Sequence[Hashable] | None = None,
+    exclude: Hashable | Sequence[Hashable] | None = None,
     method: str = "pearson",
 ) -> pd.DataFrame:
     """Select predictors by simple statistics, as R's ``quickpred``.
@@ -646,7 +652,7 @@ def quickpred(
     Examples
     --------
     >>> import imputation
-    >>> pred = imputation.quickpred(data, mincor=0.3, include=["age"])
+    >>> pred = imputation.quickpred(data, mincor=0.3, include=["age"])  # doctest: +SKIP
     >>> imputation.MICE(data).impute(predictor_matrix=pred)  # doctest: +SKIP
     """
     if not isinstance(data, pd.DataFrame):

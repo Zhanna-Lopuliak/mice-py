@@ -8,6 +8,9 @@ an imputation method to the concrete callable that implements that method, and
 from __future__ import annotations
 
 import inspect
+from typing import Callable
+
+import numpy as np
 
 from .cart import cart
 from .constants import ImputationMethod
@@ -23,7 +26,7 @@ from .sample import sample
 # ---------------------------------------------------------------------------
 
 # Map of method-name -> imputer function
-_IMPUTER_MAP = {
+_IMPUTER_MAP: dict[str, Callable[..., np.ndarray]] = {
     ImputationMethod.PMM.value: pmm,
     ImputationMethod.MIDAS.value: midas,
     ImputationMethod.CART.value: cart,
@@ -35,7 +38,7 @@ _IMPUTER_MAP = {
 _SUPPLIED_BY_MICE = ("y", "id_obs", "x", "id_mis", "rng")
 
 
-def get_imputer_func(method_name: str):
+def get_imputer_func(method_name: str) -> Callable[..., np.ndarray]:
     """Return the imputer callable for *method_name*.
 
     Parameters
@@ -63,7 +66,7 @@ def get_imputer_func(method_name: str):
     return _IMPUTER_MAP[method_name]
 
 
-def get_imputer_params(method_name: str):
+def get_imputer_params(method_name: str) -> list[str]:
     """Return the names of the parameters a user may set for *method_name*.
 
     These are the parameters of the imputer's signature except the ones MICE

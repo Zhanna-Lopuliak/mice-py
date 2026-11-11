@@ -1,6 +1,12 @@
+"""Least squares and the Bayesian coefficient draw behind ``pmm``, as R mice's ``estimice`` and ``.norm.draw``."""
+
+from __future__ import annotations
+
 import logging
+from typing import Any
 
 import numpy as np
+from numpy.typing import ArrayLike
 from scipy.linalg import lapack
 
 logger = logging.getLogger(__name__)
@@ -17,7 +23,7 @@ _COLLINEAR_MESSAGE = (
 )
 
 
-def sym(x):
+def sym(x: np.ndarray) -> np.ndarray:
     """
     Ensures the input square matrix is symmetric by averaging it with its transpose.
 
@@ -35,7 +41,15 @@ def sym(x):
     return (x + x.T) / 2
 
 
-def norm_draw(y, ry, x, rank_adjust=True, rng=None, ls_meth="qr", ridge=1e-5):
+def norm_draw(
+    y: np.ndarray,
+    ry: np.ndarray,
+    x: np.ndarray,
+    rank_adjust: bool = True,
+    rng: np.random.Generator | None = None,
+    ls_meth: str = "qr",
+    ridge: float = 1e-5,
+) -> dict[str, Any]:
     """
     Bayesian linear regression draw of regression coefficients and residual variance,
     based on the least squares parameters from `estimice()`.
@@ -97,8 +111,11 @@ def norm_draw(y, ry, x, rank_adjust=True, rng=None, ls_meth="qr", ridge=1e-5):
     >>> y = np.array([1.0, 2.0, np.nan, 4.0])
     >>> ry = ~np.isnan(y)
     >>> x = np.array([[1, 0], [1, 1], [1, 2], [1, 3]])
-    >>> result = norm_draw(y, ry, x, ls_meth='qr')
-    >>> print(result['beta'])
+    >>> result = norm_draw(y, ry, x, ls_meth='qr', rng=np.random.default_rng(1))
+    >>> result['coef']
+    array([1., 1.])
+    >>> result['beta'].shape  # one draw around coef
+    (2,)
     """
     if rng is None:
         rng = np.random.default_rng()
@@ -117,7 +134,7 @@ def norm_draw(y, ry, x, rank_adjust=True, rng=None, ls_meth="qr", ridge=1e-5):
     return parm
 
 
-def estimice(x, y, ls_meth="qr", ridge=1e-5):
+def estimice(x: ArrayLike, y: ArrayLike, ls_meth: str = "qr", ridge: float = 1e-5) -> dict[str, Any]:
     """
     Computes least squares estimates, residuals, variance-covariance matrix,
     and degrees of freedom using different methods: ridge regression, QR decomposition, or Singular Value Decomposition.
@@ -232,7 +249,7 @@ def estimice(x, y, ls_meth="qr", ridge=1e-5):
     raise ValueError(f"unknown ls_meth {ls_meth!r}; use 'qr', 'ridge' or 'svd'")
 
 
-def _aliased_columns(x, tol=ALIAS_TOL):
+def _aliased_columns(x: np.ndarray, tol: float = ALIAS_TOL) -> np.ndarray:
     """Mark the columns of `x` that are linear combinations of earlier columns.
 
     The columns are processed from left to right with Householder
@@ -272,7 +289,7 @@ def _aliased_columns(x, tol=ALIAS_TOL):
     return aliased
 
 
-def _inverse(a):
+def _inverse(a: np.ndarray) -> np.ndarray | None:
     """Inverse of `a`, or None where R's ``solve(a)`` would stop.
 
     R refuses a matrix that is exactly singular or whose reciprocal condition
@@ -288,13 +305,13 @@ def _inverse(a):
     return inv if info == 0 else None
 
 
-def _ridge_penalty(xtx, ridge):
+def _ridge_penalty(xtx: np.ndarray, ridge: float) -> np.ndarray:
     """Diagonal ridge penalty ``ridge * diag(xtx)``; a zero diagonal entry gets ``ridge``."""
     d = np.diag(xtx)
     return ridge * np.where(d > 0, d, 1.0)
 
 
-def _inverse_or_ridge(xtx, ridge):
+def _inverse_or_ridge(xtx: np.ndarray, ridge: float) -> np.ndarray:
     """Inverse of `xtx`; if it is singular to working precision, the inverse
     of ``xtx + diag(ridge * diag(xtx))`` (R's fallback), with a warning.
 

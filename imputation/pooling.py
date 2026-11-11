@@ -6,13 +6,18 @@ from multiple imputed datasets using Rubin's rules, without requiring coupling
 to any specific imputation framework.
 """
 
+from __future__ import annotations
+
 import logging
+import os
 import warnings
+from collections.abc import Hashable, Sequence
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import pandas as pd
+from numpy.typing import ArrayLike
 from scipy import stats
 
 logger = logging.getLogger(__name__)
@@ -39,7 +44,7 @@ POOL_TABLE_COLUMNS = [
 ]
 
 
-def barnard_rubin(m, b, t, dfcom=np.inf):
+def barnard_rubin(m: ArrayLike, b: ArrayLike, t: ArrayLike, dfcom: ArrayLike = np.inf) -> float | np.ndarray:
     """
     Barnard-Rubin degrees of freedom of a pooled scalar estimate.
 
@@ -83,9 +88,9 @@ def _pool_table(
     m: int,
     qbar: np.ndarray,
     ubar: np.ndarray,
-    b: np.ndarray,
+    b: np.ndarray | None,
     dfcom: float,
-    param_names: Optional[List[str]] = None,
+    param_names: Sequence[Hashable] | None = None,
     alpha: float = 0.05,
 ) -> pd.DataFrame:
     """Build the pooled table from the per-term summaries of Rubin's rules.
@@ -143,10 +148,10 @@ def _pool_table(
 
 
 def pool_estimates(
-    estimates,
-    variances,
+    estimates: ArrayLike,
+    variances: ArrayLike,
     dfcom: float = np.inf,
-    param_names: Optional[List[str]] = None,
+    param_names: Sequence[Hashable] | None = None,
     alpha: float = 0.05,
 ) -> pd.DataFrame:
     """
@@ -233,7 +238,7 @@ def pool_estimates(
     return _pool_table(m, est.mean(axis=0), var.mean(axis=0), b, dfcom, param_names, alpha)
 
 
-def _residual_df(fit_result) -> float:
+def _residual_df(fit_result: Any) -> float:
     """Residual degrees of freedom of a fitted model, as R's ``get.dfcom``.
 
     Uses ``df_resid`` when the result has it, else ``max(nobs - p, 1)``,
@@ -265,7 +270,7 @@ class PoolingResult:
         Between-imputation variance (b)
     frac_miss_info : np.ndarray
         Fraction of missing information for each parameter, R's ``fmi``
-    param_names : List[str]
+    param_names : list of str
         Names of the pooled parameters
     n_imputations : int
         Number of imputations used
@@ -279,7 +284,7 @@ class PoolingResult:
     within_variance: np.ndarray
     between_variance: np.ndarray
     frac_miss_info: np.ndarray
-    param_names: List[str]
+    param_names: list[str]
     n_imputations: int
     sample_size: int
 
@@ -359,13 +364,13 @@ class PoolingResult:
         return self.__str__()
 
 
-def validate_imputed_datasets(datasets: List[pd.DataFrame]) -> None:
+def validate_imputed_datasets(datasets: list[pd.DataFrame]) -> None:
     """
     Validate that the input datasets are suitable for pooling.
 
     Parameters
     ----------
-    datasets : List[pd.DataFrame]
+    datasets : list of pd.DataFrame
         List of imputed datasets to validate
 
     Raises
@@ -404,7 +409,7 @@ def validate_imputed_datasets(datasets: List[pd.DataFrame]) -> None:
 
 def apply_rubins_rules(
     estimates: np.ndarray, variances: np.ndarray
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Apply Rubin's rules to combine estimates and variances across imputations.
 
@@ -453,7 +458,7 @@ def apply_rubins_rules(
 
 
 def pool_descriptive_statistics(
-    datasets: List[pd.DataFrame], include_numeric: bool = True, include_categorical: bool = True
+    datasets: list[pd.DataFrame], include_numeric: bool = True, include_categorical: bool = True
 ) -> PoolingResult:
     """
     Pool descriptive statistics across multiple imputed datasets using Rubin's rules.
@@ -465,7 +470,7 @@ def pool_descriptive_statistics(
 
     Parameters
     ----------
-    datasets : List[pd.DataFrame]
+    datasets : list of pd.DataFrame
         List of complete imputed datasets. All datasets must have the same
         shape and column names.
     include_numeric : bool, default=True
@@ -510,9 +515,9 @@ def pool_descriptive_statistics(
     logger.debug(f"Found {len(numeric_cols)} numeric and {len(categorical_cols)} categorical columns")
 
     # Build parameter vectors per imputed dataset
-    param_names: List[str] = []
-    estimates_list: List[List[float]] = [[] for _ in range(m)]
-    variances_list: List[List[float]] = [[] for _ in range(m)]
+    param_names: list[str] = []
+    estimates_list: list[list[float]] = [[] for _ in range(m)]
+    variances_list: list[list[float]] = [[] for _ in range(m)]
 
     # 1) Numeric columns: mean and its within-imputation variance
     for col in numeric_cols:
@@ -534,7 +539,7 @@ def pool_descriptive_statistics(
 
         # Create ordered, unique levels while preserving first occurrence order
         seen = set()
-        levels: List[object] = []
+        levels: list[object] = []
         for lvl in all_levels:
             if lvl not in seen:
                 seen.add(lvl)
@@ -581,13 +586,15 @@ def pool_descriptive_statistics(
     )
 
 
-def pool_from_files(file_paths: List[str], read_kwargs: Optional[Dict] = None, **pooling_kwargs) -> PoolingResult:
+def pool_from_files(
+    file_paths: Sequence[str | os.PathLike[str]], read_kwargs: dict[str, Any] | None = None, **pooling_kwargs: Any
+) -> PoolingResult:
     """
     Pool descriptive statistics from datasets stored in files.
 
     Parameters
     ----------
-    file_paths : List[str]
+    file_paths : sequence of str or path
         List of file paths to imputed datasets
     read_kwargs : dict, optional
         Keyword arguments to pass to pd.read_csv()
@@ -617,15 +624,17 @@ def pool_from_files(file_paths: List[str], read_kwargs: Optional[Dict] = None, *
     return pool_descriptive_statistics(datasets, **pooling_kwargs)
 
 
-def pool_subset(datasets: List[pd.DataFrame], columns: Optional[List[str]] = None, **pooling_kwargs) -> PoolingResult:
+def pool_subset(
+    datasets: list[pd.DataFrame], columns: list[Hashable] | None = None, **pooling_kwargs: Any
+) -> PoolingResult:
     """
     Pool descriptive statistics for a subset of columns.
 
     Parameters
     ----------
-    datasets : List[pd.DataFrame]
+    datasets : list of pd.DataFrame
         List of complete imputed datasets
-    columns : List[str], optional
+    columns : list of str, optional
         List of column names to include in pooling. If None, uses all columns.
     **pooling_kwargs
         Additional arguments to pass to pool_descriptive_statistics()

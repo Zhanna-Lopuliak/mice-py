@@ -98,6 +98,12 @@ warn_unused_ignores = true
 warn_redundant_casts = true
 show_error_codes = true
 
+[[tool.mypy.overrides]]
+# No type information ships with these; pandas-stubs and scipy-stubs exist
+# but check far more strictly than this configuration intends
+module = ["pandas.*", "scipy.*", "sklearn.*", "statsmodels.*", "seaborn.*"]
+ignore_missing_imports = true
+
 
 [tool.pytest.ini_options]
 minversion = "6.0"

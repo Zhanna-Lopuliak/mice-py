@@ -1,12 +1,19 @@
+"""Multiple imputation with distant average substitution (``midas``), as R mice's ``mice.impute.midastouch``."""
+
+from __future__ import annotations
+
+from typing import Any
+
 import numpy as np
 import pandas as pd
+from numpy.typing import ArrayLike
 
 from .design import obtain_design
 
 
-def bootfunc_plain(n, rng=None):
+def bootfunc_plain(n: int, rng: np.random.Generator | None = None) -> np.ndarray:
     """
-    Generates bootstrap weights for n observations using simple random sampling with replacement.
+    Bootstrap weights of `n` observations, as R mice's ``bootfunc.plain``.
 
     This function simulates a nonparametric bootstrap by randomly drawing `n` integers
     from the range 1 to n (inclusive), with replacement. It returns the count of how many times
@@ -34,7 +41,25 @@ def bootfunc_plain(n, rng=None):
     return table
 
 
-def minmax(x, domin=True, domax=True):
+def minmax(x: ArrayLike, domin: bool = True, domax: bool = True) -> np.ndarray:
+    """
+    Keep values between ``sqrt(eps)`` and ``sqrt(max float)``, as R mice's ``minmax``.
+
+    Parameters
+    ----------
+    x : array-like
+        Values.
+    domin : bool, default True
+        Cap the values at ``sqrt(np.finfo(float).max)`` from above. (The
+        names are R's; ``domin`` applies ``min``.)
+    domax : bool, default True
+        Raise the values to at least ``sqrt(np.finfo(float).eps)``.
+
+    Returns
+    -------
+    np.ndarray
+        The bounded values.
+    """
     maxx = np.sqrt(np.finfo(float).max)
     minx = np.sqrt(np.finfo(float).eps)
     if domin:
@@ -44,7 +69,16 @@ def minmax(x, domin=True, domax=True):
     return x
 
 
-def midas(y, id_obs, x, id_mis=None, ridge=1e-5, kappa=None, outout=True, rng=None):
+def midas(
+    y: ArrayLike,
+    id_obs: ArrayLike,
+    x: ArrayLike | pd.DataFrame,
+    id_mis: ArrayLike | None = None,
+    ridge: float = 1e-5,
+    kappa: float | None = None,
+    outout: bool = True,
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
     """
     MIDAS Imputation: Multiple Imputation with Distant Average Substitution.
 
@@ -143,7 +177,16 @@ def midas(y, id_obs, x, id_mis=None, ridge=1e-5, kappa=None, outout=True, rng=No
     return np.asarray(y)[id_obs][index]
 
 
-def _donor_probabilities(y, id_obs, x, id_mis, omega, ridge=1e-5, kappa=None, outout=True):
+def _donor_probabilities(
+    y: ArrayLike,
+    id_obs: ArrayLike,
+    x: ArrayLike | pd.DataFrame,
+    id_mis: ArrayLike,
+    omega: ArrayLike,
+    ridge: float = 1e-5,
+    kappa: float | None = None,
+    outout: bool = True,
+) -> tuple[np.ndarray, float]:
     """
     Donor probabilities of midas for given bootstrap weights.
 
@@ -240,7 +283,7 @@ def _donor_probabilities(y, id_obs, x, id_mis, omega, ridge=1e-5, kappa=None, ou
     return probs, kappa
 
 
-def _kappa(r2):
+def _kappa(r2: float) -> float:
     """kappa from the weighted R² of the bootstrap fit, as R computes it.
 
     ``min((50 r2 / (1 - r2))^(3/8), 100)``: 100 for a perfect fit, and 3 (the
@@ -255,7 +298,7 @@ def _kappa(r2):
     return min(ratio ** (3 / 8), 100.0)
 
 
-def _draw_donors(probs, rng):
+def _draw_donors(probs: np.ndarray, rng: np.random.Generator) -> np.ndarray:
     """One donor index per column of `probs`, drawn with those probabilities.
 
     Each column is normalised by its sum and compared with one uniform number,
@@ -269,7 +312,7 @@ def _draw_donors(probs, rng):
     return np.sum(cdf <= u, axis=0)
 
 
-def _predictor_matrix(x):
+def _predictor_matrix(x: Any) -> np.ndarray:
     """`x` as a float array of shape (n_samples, n_features); it must be complete.
 
     A DataFrame with non-numeric columns is dummy-coded by
@@ -296,7 +339,7 @@ def _predictor_matrix(x):
     return x
 
 
-def _numeric_target(y, id_obs):
+def _numeric_target(y: Any, id_obs: np.ndarray) -> np.ndarray:
     """The observed values of `y` as floats; a boolean target becomes 0/1.
 
     midas predicts the target by linear regression, so like R's midastouch it

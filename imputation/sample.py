@@ -1,15 +1,17 @@
-from typing import Optional, Union
+"""Imputation by random draws from the observed values (``sample``), as R mice's ``mice.impute.sample``."""
+
+from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
 
 def sample(
-    y: Union[pd.Series, np.ndarray],
+    y: pd.Series | np.ndarray,
     id_obs: np.ndarray,
-    x: Union[pd.DataFrame, np.ndarray],
-    id_mis: Optional[np.ndarray] = None,
-    rng: Optional[np.random.Generator] = None,
+    x: pd.DataFrame | np.ndarray,
+    id_mis: np.ndarray | None = None,
+    rng: np.random.Generator | None = None,
 ) -> np.ndarray:
     """
     Impute missing values by random sampling from observed values.
@@ -19,11 +21,11 @@ def sample(
 
     Parameters
     ----------
-    y : Union[pd.Series, np.ndarray]
+    y : pd.Series or np.ndarray
         Target variable with missing values
     id_obs : np.ndarray
         Boolean mask of observed values in y (True for observed, False for missing)
-    x : Union[pd.DataFrame, np.ndarray]
+    x : pd.DataFrame or np.ndarray
         Predictor variables (not used in this method, but kept for consistency)
     id_mis : np.ndarray, optional
         Boolean mask of missing values to impute. If None, uses ~id_obs
@@ -67,7 +69,7 @@ def sample(
     # Handle edge cases (matching R implementation)
     if len(y_obs) < 1:
         # If no observed values, handle based on data type
-        n_mis = np.sum(id_mis)
+        n_mis = int(np.sum(id_mis))
         if hasattr(y, "dtype") and y.dtype == "object":
             # For categorical/string data, we can't generate meaningful values
             # Return None values that will need to be handled by the caller
