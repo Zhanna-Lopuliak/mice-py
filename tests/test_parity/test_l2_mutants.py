@@ -73,11 +73,6 @@ def test_deterministic_ties_are_flagged_by_t1(monkeypatch):
     assert not comp.t1_ok(), "T1 does not flag deterministic ties: " + comp.t1_message()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=TypeError,
-    reason="A6: cart has no bootstrap/cp arguments yet",
-)
 def test_bootstrapped_cart_is_flagged_by_donor_sets():
     inp, r_sum, py_sum = run_python(
         "cart", "F1", bootstrap=True, cp=1e-4, min_samples_leaf=5

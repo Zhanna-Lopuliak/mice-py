@@ -145,6 +145,89 @@ class TestCARTImputation:
         assert len(result) == 1
         assert not np.isnan(result[0])
 
+    @staticmethod
+    def _recording(monkeypatch, name):
+        """Replace a tree class of imputation.cart by one that records its
+        parameters and the data it is fitted on."""
+        import imputation.cart
+
+        seen = {}
+        base = getattr(imputation.cart, name)
+
+        class Recording(base):
+            def fit(self, X, y, *args, **kwargs):
+                seen.update(params=self.get_params(), X=np.array(X), y=np.array(y))
+                fitted = super().fit(X, y, *args, **kwargs)
+                seen["tree"] = self
+                return fitted
+
+        monkeypatch.setattr(imputation.cart, name, Recording)
+        return seen
+
+    @staticmethod
+    def _problem(n=60, seed=0):
+        rng = np.random.default_rng(seed)
+        x = rng.normal(size=(n, 2))
+        y = x[:, 0] + rng.normal(scale=0.5, size=n)
+        id_obs = np.ones(n, dtype=bool)
+        id_obs[::5] = False
+        y[~id_obs] = np.nan
+        return y, id_obs, x
+
+    def test_cart_numeric_tree_follows_rpart_defaults(self, monkeypatch):
+        """minsplit = 3 * minbucket, maxdepth 30, cp relative to the population
+        variance of y (rpart's root risk per observation), no bootstrap."""
+        seen = self._recording(monkeypatch, "DecisionTreeRegressor")
+        y, id_obs, x = self._problem()
+        cart(y, id_obs, x, rng=np.random.default_rng(1))
+        params = seen["params"]
+        assert (params["min_samples_leaf"], params["min_samples_split"], params["max_depth"]) == (5, 15, 30)
+        assert params["ccp_alpha"] == pytest.approx(1e-4 * np.var(y[id_obs]), rel=1e-12)
+        np.testing.assert_array_equal(seen["X"], x[id_obs])
+        np.testing.assert_array_equal(seen["y"], y[id_obs])
+
+    def test_cart_settings_can_be_changed(self, monkeypatch):
+        seen = self._recording(monkeypatch, "DecisionTreeRegressor")
+        y, id_obs, x = self._problem()
+        cart(y, id_obs, x, min_samples_leaf=2, cp=0.01, max_depth=4, rng=np.random.default_rng(1))
+        params = seen["params"]
+        assert (params["min_samples_leaf"], params["min_samples_split"], params["max_depth"]) == (2, 6, 4)
+        assert params["ccp_alpha"] == pytest.approx(0.01 * np.var(y[id_obs]), rel=1e-12)
+        cart(y, id_obs, x, min_samples_split=9, ccp_alpha=0.25, rng=np.random.default_rng(1))
+        assert (seen["params"]["min_samples_split"], seen["params"]["ccp_alpha"]) == (9, 0.25)
+
+    def test_cart_categorical_tree_is_not_pruned_unless_asked(self, monkeypatch):
+        seen = self._recording(monkeypatch, "DecisionTreeClassifier")
+        y, id_obs, x = self._problem()
+        labels = np.where(np.isnan(y), None, np.where(y > 0, "hi", "lo")).astype(object)
+        cart(labels, id_obs, x, rng=np.random.default_rng(1))
+        assert seen["params"]["ccp_alpha"] == 0.0
+        assert (seen["params"]["min_samples_split"], seen["params"]["max_depth"]) == (15, 30)
+        cart(labels, id_obs, x, ccp_alpha=0.01, rng=np.random.default_rng(1))
+        assert seen["params"]["ccp_alpha"] == 0.01
+
+    def test_cart_donors_are_the_observed_values_in_the_leaf(self, monkeypatch):
+        seen = self._recording(monkeypatch, "DecisionTreeRegressor")
+        y, id_obs, x = self._problem()
+        rng = np.random.default_rng(3)
+        for _ in range(20):
+            out = cart(y, id_obs, x, rng=rng)
+            tree = seen["tree"]
+            leaf_obs, leaf_mis = tree.apply(x[id_obs]), tree.apply(x[~id_obs])
+            for value, leaf in zip(out, leaf_mis):
+                assert value in y[id_obs][leaf_obs == leaf]
+
+    def test_cart_bootstrap_resamples_the_observed_rows(self, monkeypatch):
+        """bootstrap=True (mice-py 0.1): the tree is fitted on a bootstrap
+        sample; the donors are still observed values."""
+        seen = self._recording(monkeypatch, "DecisionTreeRegressor")
+        y, id_obs, x = self._problem()
+        out = cart(y, id_obs, x, bootstrap=True, rng=np.random.default_rng(1))
+        assert seen["X"].shape == x[id_obs].shape
+        assert len(np.unique(seen["y"])) < id_obs.sum()
+        assert set(seen["y"]) <= set(y[id_obs])
+        assert np.isin(out, y[id_obs]).all()
+
 
 class TestRFImputation:
     """Test Random Forest imputation method."""

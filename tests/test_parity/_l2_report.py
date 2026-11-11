@@ -26,7 +26,7 @@ ROWS = [
     ("cart", "F2", {}),
     ("cart", "F3", {}),
     ("cart", "F4", {}),
-    ("cart", "F1", {"bootstrap": False, "cp": 1e-4, "min_samples_leaf": 5}),
+    ("cart", "F1", {"bootstrap": True}),
     ("rf", "F1", {}),
     ("rf", "F2", {}),
     ("rf", "F3", {}),

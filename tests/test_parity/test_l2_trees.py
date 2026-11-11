@@ -1,18 +1,17 @@
 """Layer 2 for the tree methods cart and rf.
 
-R builds its trees with rpart and ranger, Python with scikit-learn, so the
-draws cannot be compared as strictly as for pmm. What is tested instead:
+R builds its trees with rpart and ranger, Python with scikit-learn. What is
+tested:
 
 * CART, numeric target: rpart's tree is deterministic and only the draw
-  within the leaf is random. With the planned arguments
-  ``cart(..., bootstrap=False, cp=1e-4, min_samples_leaf=5)`` the set of
-  donors reachable for each missing cell must equal the set R reached in
-  2,000 calls. (A scratch experiment fitting scikit-learn's tree with
-  ``min_samples_split=15, min_samples_leaf=5, max_depth=30,
-  ccp_alpha=1e-4 * var(y_obs)`` reproduced rpart's leaves exactly on F1, F2
-  and F4.)
+  within the leaf is random. With R's settings, which are cart's defaults
+  (``bootstrap=False, cp=1e-4, min_samples_leaf=5``, hence
+  ``min_samples_split=15, max_depth=30, ccp_alpha=1e-4 * var(y_obs)``), the
+  set of donors reachable for each missing cell must equal the set R reached
+  in 2,000 calls. Because the leaves are the same, the strict tests T1, T2
+  and T3 of test_l2_univariate apply as well.
 * RF: the draw rule (pool the donors of all trees, then draw one) on the
-  planned helper ``imputation.rf._draw_pooled_donors``.
+  helper ``imputation.rf._draw_pooled_donors``.
 * CART and RF with a factor target, and RF with a numeric target: imputations
   are observed values or levels; numeric: per-cell mean within 0.25 R
   standard deviations (of that cell) of R's mean and pooled variance ratio
@@ -23,6 +22,7 @@ import numpy as np
 import pytest
 
 from ._l2_harness import (
+    cached_comparison,
     cached_run,
     donor_set_mismatches,
     run_python,
@@ -32,28 +32,32 @@ from ._l2_harness import (
 
 pytestmark = pytest.mark.parity
 
-CART_PLANNED = {"bootstrap": False, "cp": 1e-4, "min_samples_leaf": 5}
+# R's settings for mice.impute.cart; also the defaults of cart
+CART_R_SETTINGS = {"bootstrap": False, "cp": 1e-4, "min_samples_leaf": 5}
 
-A6_CART_ARGS = pytest.mark.xfail(
-    strict=True,
-    raises=TypeError,
-    reason="A6: cart has no bootstrap/cp arguments yet; it bootstraps and uses ccp_alpha=1e-4",
-)
 A6_RF = pytest.mark.xfail(
     strict=True,
     reason="A6: rf draws one donor per tree and uses scikit-learn defaults, not ranger's",
 )
 
 
-@pytest.mark.parametrize(
-    "input_name",
-    [pytest.param(name, marks=A6_CART_ARGS) for name in ("F1", "F2", "F4")],
-)
+@pytest.mark.parametrize("input_name", ["F1", "F2", "F4"])
 def test_cart_numeric_donor_sets_equal_rpart_leaves(input_name):
-    inp, r_sum, py_sum = run_python("cart", input_name, **CART_PLANNED)
+    inp, r_sum, py_sum = run_python("cart", input_name, **CART_R_SETTINGS)
     assert py_sum["n_not_donor"] == 0, "imputations must be observed values"
     bad = donor_set_mismatches(r_sum, py_sum)
     assert not bad, "donor sets differ from rpart's: " + "; ".join(bad[:5])
+
+
+@pytest.mark.parametrize("input_name", ["F1", "F2", "F4"])
+@pytest.mark.parametrize("statistic", ["T1", "T2", "T3"])
+def test_cart_numeric_target_strict(input_name, statistic):
+    """cart with its defaults: donor counts (T1), cell moments (T2) and
+    coefficient moments (T3) against R, with the thresholds of pmm."""
+    comp = cached_comparison("cart", input_name)
+    passed = {"T1": comp.t1_ok, "T2": comp.t2_ok, "T3": comp.t3_ok}[statistic]()
+    message = {"T1": comp.t1_message, "T2": comp.t2_message, "T3": comp.t3_message}[statistic]
+    assert passed, message()
 
 
 def test_cart_factor_target_level_proportions_close_to_r():

@@ -137,13 +137,18 @@ def test_formerly_implicit_parameters_reach_the_backend(monkeypatch):
     monkeypatch.setattr(imputation.rf, "RandomForestRegressor", RecordingForest)
     df = numeric_frame(n=30)
     impute(df, "pmm", n_imputations=1, maxit=1, pmm_ls_meth="ridge")
-    impute(df, "cart", n_imputations=1, maxit=1, cart_tree_params={"max_depth": 3})
+    # max_depth is an argument of cart now, so it cannot go through tree_params
+    impute(
+        df, "cart", n_imputations=1, maxit=1,
+        cart_max_depth=3, cart_tree_params={"max_leaf_nodes": 7},
+    )
     impute(
         df, "rf", n_imputations=1, maxit=1,
         rf_max_depth=4, rf_min_samples_leaf=2, rf_forest_params={"max_features": 0.5},
     )
     assert seen["ls_meth"] == "ridge"
     assert seen["tree"]["max_depth"] == 3
+    assert seen["tree"]["max_leaf_nodes"] == 7
     assert (seen["forest"]["max_depth"], seen["forest"]["min_samples_leaf"]) == (4, 2)
     assert seen["forest"]["max_features"] == 0.5
 
@@ -153,6 +158,8 @@ def test_formerly_implicit_parameters_reach_the_backend(monkeypatch):
     [
         ("cart", "tree_params", "random_state"),
         ("cart", "tree_params", "ccp_alpha"),
+        ("cart", "tree_params", "max_depth"),
+        ("cart", "tree_params", "min_samples_split"),
         ("rf", "forest_params", "random_state"),
         ("rf", "forest_params", "n_estimators"),
     ],

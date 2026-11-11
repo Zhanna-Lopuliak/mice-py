@@ -711,3 +711,55 @@ def test_find_collinear_reports_one_of_a_duplicated_pair():
     found = set(find_collinear(df))
     assert len(found & {"x1", "x1_copy"}) == 1
     assert not found & {"x2", "y"}
+
+
+# ---------------------------------------------------------------------------
+# B11: tree methods without any observed target value
+# ---------------------------------------------------------------------------
+
+TREE_METHODS = ("cart",)
+
+
+@pytest.mark.parametrize("method", TREE_METHODS)
+@pytest.mark.parametrize("kind", ["numeric", "categorical"])
+def test_tree_method_without_observed_target_raises_value_error(method, kind):
+    from imputation.utils import get_imputer_func
+
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=(10, 2))
+    y = np.full(10, np.nan) if kind == "numeric" else np.full(10, None, dtype=object)
+    with pytest.raises(ValueError, match="no observed value"):
+        get_imputer_func(method)(y, np.zeros(10, dtype=bool), x, rng=rng)
+
+
+@pytest.mark.parametrize("method", TREE_METHODS)
+def test_tree_method_without_usable_observed_row_through_impute(method):
+    """``x`` has method "" and is missing wherever ``y`` is observed, so no row
+    with an observed ``y`` has a complete design."""
+    n = 20
+    i = np.arange(n, dtype=float)
+    df = pd.DataFrame({"y": np.sin(i), "x": np.cos(i), "z": np.sin(2 * i)})
+    df.loc[: n // 2 - 1, "y"] = np.nan
+    df.loc[n // 2 :, "x"] = np.nan
+    pm = full_predictor_matrix(df)
+    with pytest.raises(ValueError, match="no observed value"):
+        impute(df, {"y": method, "x": ""}, n_imputations=1, maxit=1, predictor_matrix=pm)
+
+
+@pytest.mark.parametrize("method", TREE_METHODS)
+@pytest.mark.parametrize("kind", ["numeric", "categorical"])
+def test_tree_method_with_one_observed_target_value_imputes_it(method, kind):
+    from imputation.utils import get_imputer_func
+
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=(10, 2))
+    if kind == "numeric":
+        y = np.full(10, np.nan)
+        y[3] = 2.5
+    else:
+        y = np.full(10, None, dtype=object)
+        y[3] = "a"
+    ry = np.zeros(10, dtype=bool)
+    ry[3] = True
+    out = get_imputer_func(method)(y, ry, x, rng=rng)
+    assert list(out) == [y[3]] * 9
