@@ -17,7 +17,8 @@ IDS = [c["name"] for c in MIDAS["cases"]]
 
 @pytest.mark.xfail(
     strict=True,
-    reason="A5: _donor_probabilities not implemented; midas draws its bootstrap from np.random",
+    raises=ImportError,
+    reason="B5: _donor_probabilities not implemented yet (planned with the midas restructure)",
 )
 @pytest.mark.parametrize("case", MIDAS["cases"], ids=IDS)
 def test_midastouch_donor_probabilities_match_r(case):

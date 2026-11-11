@@ -1,5 +1,5 @@
 import numpy as np
-def bootfunc_plain(n):
+def bootfunc_plain(n, rng=None):
     """
         Generates bootstrap weights for n observations using simple random sampling with replacement.
 
@@ -12,14 +12,18 @@ def bootfunc_plain(n):
         ----------
         n : int
             The number of observations to sample and also the length of the resulting weight vector.
+        rng : np.random.Generator, optional
+            Random number generator for reproducibility. If None, a fresh generator is used.
 
         Returns
         -------
         weights : ndarray of shape (n,)
             An array of integers indicating how often each index (1-based) was selected in the bootstrap sample.
         """
+    if rng is None:
+        rng = np.random.default_rng()
     #random n int with size n from 1:n
-    random = np.random.choice(n, size=n, replace=True)+1
+    random = rng.choice(n, size=n, replace=True)+1
     #returns histogram of drawn ints
     table, _ = np.histogram(random, bins=np.arange(1, n + 2))
     return table
@@ -35,7 +39,7 @@ def compute_beta(x, m):
     A = x[:m**2].reshape((m, m))
     b = x[m**2:]
     return np.linalg.solve(A, b)
-def midas(y, id_obs, x, id_mis=None, ridge=1e-5, midas_kappa=None, outout=True, **kwargs):
+def midas(y, id_obs, x, id_mis=None, ridge=1e-5, midas_kappa=None, outout=True, rng=None, **kwargs):
     """
         MIDAS Imputation: Multiple Imputation with Distant Average Substitution.
 
@@ -72,6 +76,10 @@ def midas(y, id_obs, x, id_mis=None, ridge=1e-5, midas_kappa=None, outout=True, 
             If True, uses leave-one-out regression for each donor (slow but MI-proper).
             If False, a single model is estimated for all donors and recipients.
             WARNING: Setting `outout=False` may produce biased estimates and is not fully supported.
+
+        rng : np.random.Generator, optional
+            Random number generator for the bootstrap weights and the donor draw.
+            If None, a fresh generator is used.
 
         **kwargs : dict
             Additional arguments (not used in this method).
@@ -127,6 +135,8 @@ def midas(y, id_obs, x, id_mis=None, ridge=1e-5, midas_kappa=None, outout=True, 
 
     if id_mis is None:
         id_mis = ~id_obs
+    if rng is None:
+        rng = np.random.default_rng()
     #machine epsilon
     sminx = np.finfo(float).eps ** (1 / 4)
 
@@ -140,7 +150,7 @@ def midas(y, id_obs, x, id_mis=None, ridge=1e-5, midas_kappa=None, outout=True, 
     xobs = x[id_obs, :]
     xmis = x[id_mis, :]
     #P Step
-    omega = bootfunc_plain(nobs)
+    omega = bootfunc_plain(nobs, rng)
 
     CX = omega.reshape(-1, 1) * xobs
     XCX = xobs.T @ CX
@@ -210,7 +220,7 @@ def midas(y, id_obs, x, id_mis=None, ridge=1e-5, midas_kappa=None, outout=True, 
     probs = probs.T
 
     index = np.array([
-        np.random.choice(nobs, size=1, replace=False, p=probs[:, j])[0]
+        rng.choice(nobs, size=1, replace=False, p=probs[:, j])[0]
         for j in range(probs.shape[1])
     ])
 

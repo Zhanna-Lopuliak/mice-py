@@ -138,6 +138,7 @@ class MICE:
         initial: str = DEFAULT_INITIAL_METHOD,
         method: Optional[Union[str, Dict[str, str]]] = None,
         visit_sequence: Union[str, List[str]] = "monotone",
+        seed: Optional[Union[int, List[int]]] = None,
         **kwargs
     ) -> None:
         """
@@ -172,7 +173,15 @@ class MICE:
             Sequence in which variables should be visited during imputation:
             - str: "monotone" for monotone missing data pattern
             - List[str]: list of column names specifying the order to visit variables
-            
+
+        seed : int, sequence of int, or None, default=None
+            Seed for the random number generators. It seeds one
+            ``np.random.SeedSequence``, from which independent streams are
+            spawned: one for the random visit sequence and one per chain.
+            Chain ``k`` always receives the same stream, whatever
+            ``n_imputations`` is. The same seed gives identical results;
+            ``None`` draws fresh entropy from the operating system.
+
         **kwargs : dict
             Additional keyword arguments.
             - `output_dir` (str, optional): Directory to save outputs for this run.
@@ -199,6 +208,13 @@ class MICE:
         check_n_imputations(n_imputations)
         check_maxit(maxit)
         check_initial_method(initial)
+
+        # One seed sequence per call, split into independent streams: the
+        # first for the random visit sequence, then one per chain. Chain k
+        # always gets child k + 1, so its stream does not depend on n_imputations.
+        seed_sequence = np.random.SeedSequence(seed)
+        visit_stream = seed_sequence.spawn(1)[0]
+        chain_streams = seed_sequence.spawn(n_imputations)
         
         if predictor_matrix is None:
             min_cor = kwargs.pop('min_cor', 0.1)
@@ -247,7 +263,7 @@ class MICE:
         self.initial = initial
         self.imputation_params = kwargs
 
-        self._set_visit_sequence(visit_sequence)
+        self._set_visit_sequence(visit_sequence, np.random.default_rng(visit_stream))
         logger.debug(f"Visit sequence set to: {self.visit_sequence}")
 
         # Prepare chain statistics containers 
@@ -270,7 +286,8 @@ class MICE:
         for chain_idx in range(self.n_imputations):
             chain_start_time = time.time()
             logger.info(f"Starting imputation chain {chain_idx + 1}/{self.n_imputations}")
-            self.imputed_datasets.append(self._impute_once(chain_idx))
+            chain_rng = np.random.default_rng(chain_streams[chain_idx])
+            self.imputed_datasets.append(self._impute_once(chain_idx, chain_rng))
             chain_end_time = time.time()
             chain_duration = chain_end_time - chain_start_time
             individual_times.append(chain_duration)
@@ -613,10 +630,18 @@ class MICE:
         
         return comprehensive_result
     
-    def _impute_once(self, chain_idx: int):
+    def _impute_once(self, chain_idx: int, rng: np.random.Generator):
         """
         Perform one complete imputation cycle.
-        
+
+        Parameters
+        ----------
+        chain_idx : int
+            Index of the chain
+        rng : np.random.Generator
+            Random number generator of this chain; its state advances through
+            the initial imputation and all iterations
+
         Returns
         -------
         pd.DataFrame
@@ -626,9 +651,6 @@ class MICE:
         current_data = self.data.copy(deep=True)
         
         logger.debug("Performing initial imputation")
-        # Create ONE RNG for this entire chain (matching R behavior)
-        # The RNG state will advance through all iterations
-        rng = np.random.default_rng(42 + chain_idx)
         self._initial_imputation(current_data, rng)
 
         for iter_idx in range(self.maxit):
@@ -727,26 +749,6 @@ class MICE:
         logger.debug(f"Iteration {iter_idx + 1} completed in {iteration_time:.2f} seconds")
         return updated_data
   
-    # def _initial_imputation(self, data):
-    #     """
-    #     Initialize missing values based on the initial method.
-        
-    #     Parameters
-    #     ----------
-    #     data : pd.DataFrame
-    #         Data to initialize missing values in
-    #     """
-    #     if self.initial == InitialMethod.SAMPLE.value:
-    #         for col in data.columns:
-    #             if data[col].isna().any():
-    #                 observed_values = data.loc[self.id_obs[col], col].values
-    #                 # data.loc[self.id_mis[col], col] = np.random.choice(observed_values, size=self.id_mis[col].sum())
-    #                 seed = 42
-    #                 rng = np.random.default_rng(seed)  # independent generator
-    #                 data.loc[self.id_mis[col], col] = rng.choice(
-    #                     observed_values,
-    #                     size=self.id_mis[col].sum()
-    # )
     def _initial_imputation(self, data, rng=None):
         """
         Initialize missing values based on the initial method.
@@ -772,7 +774,7 @@ class MICE:
                     closest_value = data.loc[closest_idx, col]
                     data.loc[self.id_mis[col], col] = closest_value
 
-    def _set_visit_sequence(self, visit_sequence):
+    def _set_visit_sequence(self, visit_sequence, rng=None):
         """
         Set the visit sequence for imputation based on the input parameter.
         
@@ -784,6 +786,8 @@ class MICE:
             - List[str]: list of column names specifying the order to visit variables
                         Must include all columns with missing values. Columns without
                         missing values will be ignored with a warning.
+        rng : np.random.Generator, optional
+            Draws the "random" sequence. If None, a fresh generator is used.
         """
         columns_with_missing = [col for col in self.data.columns if self.data[col].isna().any()]
         
@@ -805,8 +809,8 @@ class MICE:
         else:
             # For string sequences, generate based on type
             if visit_sequence == VisitSequence.RANDOM.value:
-                # Use seeded RNG for reproducible random visit sequence
-                rng = np.random.default_rng(42)
+                if rng is None:
+                    rng = np.random.default_rng()
                 self.visit_sequence = list(rng.permutation(columns_with_missing))
             elif visit_sequence == VisitSequence.MONOTONE.value:
                 nmis = np.array([self.id_mis[col].sum() for col in columns_with_missing])

@@ -8,7 +8,6 @@ summarises the draws the same way and computes the T1/T2/T3 statistics of
 ``_l2_stats``.
 """
 
-import contextlib
 import functools
 from dataclasses import dataclass
 
@@ -82,17 +81,6 @@ def python_seed(method, input_name):
     return int(r_results(method)[input_name]["seed"]) + PY_SEED_OFFSET
 
 
-@contextlib.contextmanager
-def seeded_global_numpy(seed):
-    """Seed NumPy's legacy global generator and restore its state afterwards."""
-    state = np.random.get_state()
-    np.random.seed(seed)
-    try:
-        yield
-    finally:
-        np.random.set_state(state)
-
-
 def imputer(method):
     """The Python function behind a mice method name (imported lazily)."""
     if method == "pmm":
@@ -130,28 +118,24 @@ def donor_index(values, inp):
     return np.where(dv[pos] == vals, pos, -1)
 
 
-def draw(func, inp, n_calls, seed, seed_global=False, **kwargs):
+def draw(func, inp, n_calls, seed, **kwargs):
     """Call ``func(y, ry, x, rng=rng, **kwargs)`` ``n_calls`` times.
 
-    One ``np.random.default_rng(seed)`` is passed to every call. With
-    ``seed_global=True`` NumPy's global generator is also seeded for the
-    duration (needed while midas ignores ``rng``, finding A5).
+    One ``np.random.default_rng(seed)`` is passed to every call.
 
     Returns an ``n_calls x n_mis`` integer matrix of donor indices (-1 where an
     imputation is not an observed value or level).
     """
     rng = np.random.default_rng(seed)
     idx = np.empty((n_calls, inp.n_mis), dtype=int)
-    ctx = seeded_global_numpy(seed) if seed_global else contextlib.nullcontext()
-    with ctx:
-        for i in range(n_calls):
-            out = func(inp.y.copy(), inp.ry.copy(), inp.x.copy(), rng=rng, **kwargs)
-            out = np.asarray(out).ravel()
-            if out.shape != (inp.n_mis,):
-                raise AssertionError(
-                    f"imputer returned shape {out.shape}, expected ({inp.n_mis},)"
-                )
-            idx[i] = donor_index(out, inp)
+    for i in range(n_calls):
+        out = func(inp.y.copy(), inp.ry.copy(), inp.x.copy(), rng=rng, **kwargs)
+        out = np.asarray(out).ravel()
+        if out.shape != (inp.n_mis,):
+            raise AssertionError(
+                f"imputer returned shape {out.shape}, expected ({inp.n_mis},)"
+            )
+        idx[i] = donor_index(out, inp)
     return idx
 
 
@@ -281,9 +265,6 @@ def run_python(method, input_name, func=None, n_calls=None, **kwargs):
         inp,
         N_CALLS[method] if n_calls is None else n_calls,
         python_seed(method, input_name),
-        # midas ignores `rng` today (finding A5): seed NumPy's global
-        # generator as well so the test stays deterministic until then
-        seed_global=(method == "midastouch"),
         **kwargs,
     )
     return inp, r_sum, summarise(idx, inp)

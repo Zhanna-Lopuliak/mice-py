@@ -102,14 +102,7 @@ def reference():
 
 @pytest.fixture(scope="module")
 def python_results():
-    # midas draws from the global NumPy generator (finding A5); seed it for a
-    # deterministic test and restore it afterwards.
-    state = np.random.get_state()
-    np.random.seed(SEED)
-    try:
-        return {method: _simulate(method) for method in METHODS}
-    finally:
-        np.random.set_state(state)
+    return {method: _simulate(method) for method in METHODS}
 
 
 def _reference(reference, method, quantity):

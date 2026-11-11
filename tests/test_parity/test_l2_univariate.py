@@ -36,7 +36,7 @@ B1 = _xfail(
 )
 NEW1 = _xfail(
     "B6: midas crashes when several donors are at distance 0 (tied predictors): "
-    "minmax caps the column sums, so p no longer sums to 1 for np.random.choice; "
+    "minmax caps the column sums, so p no longer sums to 1 for rng.choice; "
     "R's sample() renormalises",
     raises=ValueError,
 )
