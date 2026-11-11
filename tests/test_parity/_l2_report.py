@@ -6,8 +6,10 @@ Run from the repository root:
 
 For each method and input: smallest T1 p-value over cells, largest |z| of T2
 (cell mean and log-variance) and T3 (coefficient mean and log-variance), and
-for the tree methods the weaker measures used by test_l2_trees. A crash is
-reported with its exception. Pass rules: p >= 1e-7, |z| <= 5.5.
+for the tree methods the weaker measures used by test_l2_trees. T1 compares
+donor counts, or for the norm family (continuous kind) the counts in R's
+decile bins. A crash is reported with its exception. Pass rules: p >= 1e-7,
+|z| <= 5.5.
 """
 
 import warnings
@@ -33,6 +35,10 @@ ROWS = [
     ("rf", "F4", {}),
     ("sample", "F1", {}),
     ("sample", "F3", {}),
+    ("norm", "F1", {}),
+    ("norm", "F4", {}),
+    ("norm.nob", "F1", {}),
+    ("norm.boot", "F1", {}),
 ]
 
 
@@ -52,7 +58,9 @@ def main():
             continue
         comp = H.compare(r_sum, py_sum, inp)
         other = []
-        if py_sum["n_not_donor"]:
+        if py_sum["kind"] != "donor":
+            other.append(f"T1 on {H.KINDS[py_sum['kind']].t1_label}")
+        if py_sum.get("n_not_donor"):
             other.append(f"{py_sum['n_not_donor']} imputations not observed values")
         if method in ("cart", "rf"):
             if inp.is_factor:

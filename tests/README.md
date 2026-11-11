@@ -38,7 +38,7 @@ The parity layers:
 |---|---|---|
 | `test_l1_*.py` | L1, exact parity | deterministic pieces (least squares, coefficient draw, quantify, pmm with one donor, donor matching, setup step, design, quickpred, md.pattern, pooling, midastouch probabilities) against R to a relative tolerance of 1e-8 |
 | `test_l2_*.py` | L2, distribution parity | the imputed values of many calls per method, cell by cell, against R's (chi-square and z tests); `test_l2_mutants.py` checks that the tests catch old defects; `test_l2_stats.py` tests the statistics themselves |
-| `test_l3_mini_simulation.py` | L3, in-suite | a small simulation (scenario S4, pmm and midas, 200 replications) against stored R results |
+| `test_l3_mini_simulation.py` | L3, in-suite | a small simulation (scenario S4, pmm, midas and norm, 200 replications) against stored R results |
 
 The full simulation study (L3) is in `simulations/`. The method and the
 results of all layers are described in the documentation page

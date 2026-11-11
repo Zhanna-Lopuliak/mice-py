@@ -1,4 +1,4 @@
-"""Layer 2: distribution parity of pmm, midastouch and sample with R mice.
+"""Layer 2: distribution parity of pmm, midastouch, sample and the norm family with R mice.
 
 For each method and fixed input (F1 to F4, see tests/reference/r/_l2_common.R)
 R called ``mice.impute.<method>`` 20,000 times; here the Python imputer is
@@ -6,6 +6,13 @@ called 3,000 times (midas: 1,500) with one seeded generator. Per missing
 cell we compare the donor counts (T1) and the mean and variance of the
 imputed value (T2); per OLS coefficient of the completed y on ``[1, x]`` the
 mean and variance across calls (T3). Thresholds are in ``_l2_stats``.
+
+``norm``, ``norm.nob`` and ``norm.boot`` impute new numbers rather than
+observed values (fixtures of the continuous kind): their T1 compares, per
+cell, the counts in the ten bins cut at the deciles of R's 20,000 draws.
+T2 and T3 are the same as for the donor methods. F1 puts half of the missing
+rows where the coefficients are poorly determined, so the parameter draw of
+``norm`` and the bootstrap of ``norm.boot`` matter there.
 
 F2 (one binary predictor, many tied predictions) is tested with T1 as the
 recipe asks, plus T3 for pmm: R's ``matchindex`` shuffles the donors once per
@@ -33,13 +40,21 @@ T1_CASES = [
     pytest.param("sample", "F3"),
 ]
 
+# continuous kind: T1 on R's decile bins, T2 and T3 on each
+NORM_CASES = [
+    pytest.param("norm", "F1"),
+    pytest.param("norm", "F4"),
+    pytest.param("norm.nob", "F1"),
+    pytest.param("norm.boot", "F1"),
+]
+
 T2_CASES = [
     pytest.param("pmm", "F1"),
     pytest.param("pmm", "F4"),
     pytest.param("midastouch", "F1"),
     pytest.param("midastouch", "F4"),
     pytest.param("sample", "F1"),
-]
+] + NORM_CASES
 
 T3_CASES = T2_CASES[:1] + [pytest.param("pmm", "F2")] + T2_CASES[1:]
 
@@ -47,6 +62,13 @@ T3_CASES = T2_CASES[:1] + [pytest.param("pmm", "F2")] + T2_CASES[1:]
 @pytest.mark.parametrize("method, input_name", T1_CASES)
 def test_t1_donor_counts_match_r(method, input_name):
     comp = cached_comparison(method, input_name)
+    assert comp.t1_ok(), comp.t1_message()
+
+
+@pytest.mark.parametrize("method, input_name", NORM_CASES)
+def test_t1_decile_bin_counts_match_r(method, input_name):
+    comp = cached_comparison(method, input_name)
+    assert comp.kind == "continuous"
     assert comp.t1_ok(), comp.t1_message()
 
 

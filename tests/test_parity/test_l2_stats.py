@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 from scipy import stats
 
+from ._l2_harness import decile_bin_counts
 from ._l2_stats import (
     MIN_EXPECTED,
     P_MIN,
@@ -63,6 +64,14 @@ def test_pooling_leaves_every_expected_count_at_least_min_expected():
         if table.shape[1] > 1:
             expected = table.sum(1, keepdims=True) * table.sum(0) / table.sum()
             assert expected.min() >= MIN_EXPECTED
+
+
+def test_decile_bins_are_closed_on_the_left_as_in_findinterval():
+    # R: tabulate(findInterval(c(0.5, 1, 1.5, 2, 3, 9), c(1, 2, 3)) + 1, 4)
+    # is 1 2 1 2: a value equal to an edge belongs to the bin above it
+    vals = np.array([[0.5, 0.0], [1.0, 0.0], [1.5, 0.0], [2.0, 0.0], [3.0, 0.0], [9.0, 5.0]])
+    edges = np.array([[1.0, 2.0, 3.0], [-1.0, 0.0, 1.0]])
+    np.testing.assert_array_equal(decile_bin_counts(vals, edges), [[1, 2, 1, 2], [0, 0, 5, 1]])
 
 
 def test_chi2_matches_scipy_when_nothing_is_pooled():

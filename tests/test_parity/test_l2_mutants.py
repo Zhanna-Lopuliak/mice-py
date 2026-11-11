@@ -10,6 +10,14 @@ Each mutant is written so that it is valid once the library is fixed:
   F2 must flag it.
 * A6: ``cart(..., bootstrap=True)``, the old bootstrapped tree; the donor-set
   test on F1 must flag it.
+* ``norm`` without the parameter draw: ``imputation.norm.norm_nob`` (least
+  squares coefficients, residual sd from the fit) compared with R's ``norm``
+  on F1. Ignoring the parameter uncertainty narrows the imputations in the
+  cells where the coefficients are poorly determined: T1 (decile bins), T2
+  (cell variance) and T3 (coefficient variance) must each flag it. Measured
+  with 3,000 calls: smallest T1 p about 1e-206, largest |z| about 43 (T2) and
+  100 (T3). On F4, where every missing row lies in the bulk of the observed
+  ones, only T3 flags it clearly (|z| about 17; T2 about 5.5, T1 p 0.002).
 """
 
 import functools
@@ -71,6 +79,31 @@ def test_deterministic_ties_are_flagged_by_t1(monkeypatch):
     comp = compare(r_sum, py_sum, inp)
     assert calls, "mutant not applied: pmm does not call imputation.PMM.matchindex"
     assert not comp.t1_ok(), "T1 does not flag deterministic ties: " + comp.t1_message()
+
+
+@functools.cache
+def norm_without_parameter_draw_comparison():
+    """Python norm_nob in place of norm, against R's norm on F1."""
+    from imputation.norm import norm_nob
+
+    calls = []
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return norm_nob(*args, **kwargs)
+
+    inp, r_sum, py_sum = run_python("norm", "F1", func=counting)
+    return compare(r_sum, py_sum, inp), len(calls)
+
+
+@pytest.mark.parametrize("statistic", ["T1", "T2", "T3"])
+def test_norm_without_parameter_draw_is_flagged(statistic):
+    comp, n_calls = norm_without_parameter_draw_comparison()
+    assert n_calls > 0, "mutant not applied: norm_nob was not called"
+    assert comp.kind == "continuous"
+    passed = {"T1": comp.t1_ok, "T2": comp.t2_ok, "T3": comp.t3_ok}[statistic]()
+    message = {"T1": comp.t1_message, "T2": comp.t2_message, "T3": comp.t3_message}
+    assert not passed, f"{statistic} does not flag the mutant: " + message[statistic]()
 
 
 def test_bootstrapped_cart_is_flagged_by_donor_sets():

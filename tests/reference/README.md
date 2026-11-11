@@ -47,6 +47,9 @@ uv run pytest tests/test_parity -m parity                      # all parity test
 | Fixture | `fixtures/l<layer>_<topic>[_<part>].json` | `fixtures/l1_pmm_one_donor.json` |
 | Python test | `tests/test_parity/test_l<layer>_<topic>.py` | `test_l1_pmm.py` |
 
+A topic named after a mice method with dots uses underscores instead:
+`r/l2_norm_nob.R` writes `fixtures/l2_norm_nob.json` for `norm.nob`.
+
 Layers: `l1` exact parity on deterministic pieces, `l2` distribution parity,
 `l3` the in-suite part of the simulation study. Files starting with `_` are
 helpers and are not run by `generate_all.R`.
@@ -116,6 +119,42 @@ get wrong:
 - `vcov()` of a `glm` fitted with the default `epsilon = 1e-8` is about 1e-5
   (relative) away from the inverse information at the MLE. The logistic model
   in `l1_pooling` uses `glm.control(epsilon = 1e-14)`.
+
+## Layer 2 fixtures
+
+Each `l2_<method>` fixture comes from `l2_method_fixture()` in
+`r/_l2_common.R`: one `set.seed` per input, then many calls of
+`mice.impute.<method>(y, ry, x)` on fixed inputs with 40 observed and 20
+missing values (F1 to F4, defined in that file and stored in the fixture).
+Per input it holds the input, the seed, `n_calls` and statistics whose form
+depends on the kind of the method (`kind` at the top of the fixture; a
+fixture without it is of the donor kind):
+
+- **donor** (the imputations are observed values or levels): `counts`, the
+  number of times each observed value (or level) was drawn per missing cell;
+  for a numeric target also `cell` (mean, variance, kurtosis of the imputed
+  value per cell) and `coef` (the same for each OLS coefficient of the
+  completed y on `[1, x]`, one fit per call).
+- **continuous** (the imputations are new numbers): `cell` and `coef` as
+  above, and `bins`: per cell the nine decile edges of R's draws
+  (`quantile(type = 7)`) and the number of R's draws in each of the ten bins
+  `[edge j-1, edge j)` as `findInterval()` counts them. The raw draws are not
+  stored.
+
+| Fixture | Kind | Inputs | R calls per input |
+|---|---|---|---|
+| `l2_pmm` | donor | F1 to F4 | 20,000 |
+| `l2_midastouch` | donor | F1, F2, F4 | 20,000 |
+| `l2_cart` | donor, plus the donors reached in the first 2,000 calls | F1 to F4 | 20,000 |
+| `l2_rf` | donor | F1 to F4 | 5,000 |
+| `l2_sample` | donor | F1, F3 | 20,000 |
+| `l2_norm` | continuous | F1, F4 | 20,000 |
+| `l2_norm_nob` | continuous | F1 | 20,000 |
+| `l2_norm_boot` | continuous | F1 | 20,000 |
+
+`l2_chain` (200 full `mice()` chains with pmm) and `l3_mini_s4` (scenario S4
+of the simulation study with pmm, midastouch and norm, 20,000 replications)
+have their own formats, described at the top of their scripts.
 
 ## Licence
 
