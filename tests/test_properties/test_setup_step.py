@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ._helpers import MAXIT, N_IMP, assert_all_invariants, full_predictor_matrix, impute
+from ._helpers import MAXIT, N_IMP, assert_all_invariants, full_predictor_matrix, impute, register_imputer
 
 LOG_COLUMNS = ["it", "im", "dep", "meth", "out"]
 
@@ -145,6 +145,66 @@ def test_entirely_missing_column_is_kept_not_imputed_and_logged():
     for completed in out:
         assert completed["z"].isna().all()
     assert_all_invariants(df, before, mice, out, 2, 2, allow_unimputed={"z"})
+
+
+# ---------------------------------------------------------------------------
+# events logged by an imputer (R: polr falling back to multinom)
+# ---------------------------------------------------------------------------
+
+
+def _mean_of_observed(y, id_obs, id_mis):
+    return np.full(int(np.sum(id_mis)), np.asarray(y, dtype=float)[id_obs].mean())
+
+
+def _logging_imputer(y, id_obs, x, id_mis=None, rng=None, log_event=None):
+    """Logs one event per call."""
+    log_event(f"{int(np.sum(id_mis))} cells")
+    return _mean_of_observed(y, id_obs, id_mis)
+
+
+def _frame():
+    """``a``, ``b`` and ``c`` incomplete: 12 calls with two chains and two iterations."""
+    from ._helpers import numeric_frame
+
+    return numeric_frame(n=40)
+
+
+def test_imputer_with_log_event_adds_rows_to_logged_events(monkeypatch):
+    register_imputer(monkeypatch, "fake", _logging_imputer)
+    df = _frame()
+    mice, _, messages = _run(df, "fake")
+    n_mis = {col: int(df[col].isna().sum()) for col in ["a", "b", "c"]}
+    # sorted by iteration, then imputation, as R's loggedEvents
+    assert _events(mice) == {
+        "it": [1] * 6 + [2] * 6,
+        "im": [1, 1, 1, 2, 2, 2] * 2,
+        "dep": ["a", "b", "c"] * 4,
+        "meth": ["fake"] * 12,
+        "out": [f"{n_mis[col]} cells" for col in ["a", "b", "c"]] * 4,
+    }
+    assert messages == ["Number of logged events: 12. See MICE.logged_events."]
+
+
+def test_imputer_without_log_event_does_not_get_it(monkeypatch):
+    received = []
+
+    def imputer(y, id_obs, x, id_mis=None, rng=None, **kwargs):
+        received.append(sorted(kwargs))
+        return _mean_of_observed(y, id_obs, id_mis)
+
+    register_imputer(monkeypatch, "fake", imputer)
+    mice, _, messages = _run(_frame(), "fake")
+    assert received == [[]] * 12
+    assert mice.logged_events.empty and not [m for m in messages if "logged events" in m]
+
+
+def test_log_event_is_not_a_user_parameter(monkeypatch):
+    from imputation.utils import get_imputer_params
+
+    register_imputer(monkeypatch, "fake", _logging_imputer)
+    assert get_imputer_params("fake") == []
+    with pytest.raises(TypeError, match="Method 'fake' takes no parameters"):
+        impute(_frame(), "fake", n_imputations=1, maxit=1, fake_log_event=print)
 
 
 # ---------------------------------------------------------------------------

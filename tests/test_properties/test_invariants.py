@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 
 from ._helpers import (
+    DONOR_METHODS,
     MAXIT,
     METHODS,
     N_IMP,
@@ -41,6 +42,7 @@ CASES = [
     for ds in DATASETS
     for m in METHODS
 ]
+DONOR_CASES = [case for case in CASES if case.values[1] in DONOR_METHODS]
 
 
 @functools.cache
@@ -93,9 +95,9 @@ def test_input_not_mutated(dataset, method):
     pd.testing.assert_frame_equal(df, before)
 
 
-@pytest.mark.parametrize("dataset,method", CASES)
+@pytest.mark.parametrize("dataset,method", DONOR_CASES)
 def test_imputed_values_are_observed_values(dataset, method):
-    """All five methods are donor based: imputations are observed values or labels."""
+    """Donor methods impute observed values or labels."""
     df, _, _, out = _run(dataset, method)
     for completed in out:
         assert_imputed_are_observed(df, completed)
@@ -138,7 +140,8 @@ def test_univariate_returns_one_observed_value_per_missing_cell(method, x_as_fra
     x_before = x.copy()
     out = np.asarray(_imputer(method)(y, ry, x, rng=np.random.default_rng(1)))
     assert out.shape == ((~ry).sum(),)
-    assert np.isin(out, y[ry]).all()
+    if method in DONOR_METHODS:
+        assert np.isin(out, y[ry]).all()
     # inputs are not mutated
     np.testing.assert_array_equal(y, y_before)
     np.testing.assert_array_equal(ry, ry_before)
@@ -156,4 +159,5 @@ def test_univariate_imputes_only_the_requested_cells(method):
     id_mis[[3, 22]] = True
     out = np.asarray(_imputer(method)(y, ry, x, id_mis=id_mis, rng=np.random.default_rng(2)))
     assert out.shape == (2,)
-    assert np.isin(out, y[ry]).all()
+    if method in DONOR_METHODS:
+        assert np.isin(out, y[ry]).all()

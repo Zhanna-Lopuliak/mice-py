@@ -13,7 +13,21 @@ import pytest
 
 from .._logged_events import impute_checking_log_warning
 
-METHODS = ("pmm", "cart", "rf", "midas", "sample")
+# The methods by kind. The empty lists are filled by the phases of 0.3 that
+# add the methods: the norm family and mean (phase 2), logreg and
+# logreg.boot (phase 3), polyreg (phase 4) and polr (phase 5).
+# Donor methods impute observed values or labels.
+DONOR_METHODS = ("pmm", "cart", "rf", "midas", "sample")
+# Model-based methods for numeric targets only (phase 2: norm, norm.nob,
+# norm.boot, norm.predict, mean).
+NUMERIC_MODEL_METHODS = ()
+# Model-based methods for categorical targets only (phases 3 to 5: logreg,
+# logreg.boot, polyreg, polr).
+CATEGORICAL_METHODS = ()
+# Methods whose imputations do not depend on the seed; a subset of the
+# others (phase 2: norm.predict, mean).
+DETERMINISTIC_METHODS = ()
+METHODS = DONOR_METHODS + NUMERIC_MODEL_METHODS + CATEGORICAL_METHODS
 
 # Small and quick: the whole folder has to run in about 20 seconds.
 N_IMP = 2
@@ -49,13 +63,27 @@ def is_numeric_column(series):
 def method_spec(method, df):
     """Method argument for ``impute``.
 
-    midas only imputes numeric targets (as R's midastouch), so with midas the
-    non-numeric columns are imputed by ``sample``. Every other method is used
-    for all columns.
+    A method restricted to numeric targets (midas, as R's midastouch, and
+    the ``NUMERIC_MODEL_METHODS``) imputes the numeric columns and
+    ``sample`` the others; a method restricted to categorical targets
+    (``CATEGORICAL_METHODS``) imputes the non-numeric columns and ``pmm`` the
+    numeric ones. Every other method is used for all columns.
     """
-    if method != "midas":
-        return method
-    return {c: ("midas" if is_numeric_column(df[c]) else "sample") for c in df.columns}
+    if method == "midas" or method in NUMERIC_MODEL_METHODS:
+        return {c: (method if is_numeric_column(df[c]) else "sample") for c in df.columns}
+    if method in CATEGORICAL_METHODS:
+        return {c: ("pmm" if is_numeric_column(df[c]) else method) for c in df.columns}
+    return method
+
+
+def register_imputer(monkeypatch, name, imputer):
+    """Make ``imputer`` the method ``name`` of ``impute`` for one test."""
+    import imputation.utils as utils
+    from imputation.constants import ImputationMethod
+
+    monkeypatch.setitem(utils._IMPUTER_MAP, name, imputer)
+    # the supported methods are then the registered ones
+    monkeypatch.setattr(ImputationMethod, "get_all_methods", classmethod(lambda cls: list(utils._IMPUTER_MAP)))
 
 
 def impute(
@@ -270,7 +298,8 @@ def setup_skipped_columns(df):
 def assert_all_invariants(original, before, mice, out, n_imputations, maxit, donor=True, allow_unimputed=()):
     """Item 1 invariants. Columns in ``allow_unimputed`` and the columns R's setup
     step skips (constant or collinear, see ``setup_skipped_columns``) may keep
-    their missing cells; filled cells must still hold observed values."""
+    their missing cells. With ``donor`` (pass ``method in DONOR_METHODS``),
+    filled cells must hold observed values."""
     assert len(out) == n_imputations
     pd.testing.assert_frame_equal(original, before)
     constant = setup_skipped_columns(original) | set(allow_unimputed)

@@ -88,7 +88,10 @@ Adding an imputation method
    signature of the others:
    ``f(y, id_obs, x, id_mis=None, <parameters>, rng=None) -> np.ndarray``.
    It returns the imputations of the cells in ``id_mis`` (all missing cells
-   if ``None``) and draws all random numbers from ``rng``.
+   if ``None``) and draws all random numbers from ``rng``. It may also take
+   a parameter ``log_event``: ``MICE.impute`` then passes a callable that
+   takes one string and records it as a row of ``MICE.logged_events``, with
+   the iteration, imputation, column and method filled in.
 2. Add the name to ``ImputationMethod`` in ``imputation/constants.py`` and
    the function to ``_IMPUTER_MAP`` in ``imputation/utils.py``. Its
    parameters then become ``<name>_<parameter>`` arguments of

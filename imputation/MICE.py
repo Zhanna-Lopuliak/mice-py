@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import functools
+import inspect
 import logging
 import time
 import warnings
@@ -23,7 +25,7 @@ from .constants import (
 from .design import _as_numeric, _column_kind, _remove_lindep, find_collinear, obtain_design, quickpred
 from .mice_result import MICEresult
 from .pooling import _residual_df, pool_estimates
-from .utils import get_imputer_func, get_imputer_params
+from .utils import get_imputer_func, get_imputer_params, method_prefix, split_method_param
 from .validators import (
     check_initial_method,
     check_maxit,
@@ -110,31 +112,42 @@ def _target_values(series: pd.Series):
     return series.to_numpy()
 
 
+def _method_param_names() -> dict[str, list[str]]:
+    """The parameters a user may set for each supported method (see `get_imputer_params`)."""
+    return {method: get_imputer_params(method) for method in ImputationMethod.get_all_methods()}
+
+
 def _check_method_params(params):
     """
-    Check that every name in `params` has the form `<method>_<param>`.
+    Check that every name in `params` has the form `<prefix>_<param>`.
 
-    `<method>` must be a supported method and `<param>` a parameter of its
-    imputer that MICE does not supply itself (see `get_imputer_params`).
+    `<prefix>` must be the name of a supported method with its dots replaced
+    by underscores (see `imputation.utils.method_prefix`) and `<param>` a
+    parameter of its imputer that MICE does not supply itself (see
+    `get_imputer_params`). A name that several methods match goes to the
+    longest prefix with a valid parameter (see
+    `imputation.utils.split_method_param`).
 
     Raises
     ------
     TypeError
         For the first invalid name; the message lists the valid names.
     """
-    valid = {method: get_imputer_params(method) for method in ImputationMethod.get_all_methods()}
+    valid = _method_param_names()
     for key in params:
-        method = next((m for m in valid if key.startswith(f"{m}_")), None)
-        if method is not None and key[len(method) + 1 :] in valid[method]:
+        match = split_method_param(key, valid)
+        if match is not None and match[1] in valid[match[0]]:
             continue
+        method = match[0] if match is not None else None
         if method is not None and not valid[method]:
             hint = f"Method '{method}' takes no parameters."
         elif method is not None:
-            hint = f"Valid parameters for method '{method}': {', '.join(f'{method}_{p}' for p in valid[method])}."
+            prefix = method_prefix(method)
+            hint = f"Valid parameters for method '{method}': {', '.join(f'{prefix}_{p}' for p in valid[method])}."
         else:
             hint = (
                 "Method parameters take the form <method>_<parameter>; valid ones: "
-                f"{', '.join(f'{m}_{p}' for m, names in valid.items() for p in names)}. "
+                f"{', '.join(f'{method_prefix(m)}_{p}' for m, names in valid.items() for p in names)}. "
                 f"Deprecated keyword arguments: {', '.join(_QUICKPRED_ARGUMENTS)}."
             )
         raise TypeError(f"impute() got an unexpected keyword argument '{key}'. {hint}")
@@ -453,15 +466,17 @@ class MICE:
         logger.debug(f"Using imputation methods: {self.method}")
 
         self.imputation_params = kwargs
+        param_names = _method_param_names()
 
         # Warn if user provided method-specific parameters for methods not used
         if self.imputation_params:
-            provided_prefixes = set()
+            provided_methods = set()
             for key in self.imputation_params.keys():
-                if "_" in key:
-                    provided_prefixes.add(key.split("_", 1)[0])
+                match = split_method_param(key, param_names)
+                if match is not None:
+                    provided_methods.add(match[0])
             used_methods = set(self.method.values())
-            unused_provided = provided_prefixes - used_methods
+            unused_provided = provided_methods - used_methods
             if unused_provided:
                 logger.warning(
                     "Method-specific parameters were provided for unused methods: %s. "
@@ -498,12 +513,13 @@ class MICE:
             col: [c for c in columns if c != col and self.predictor_matrix.at[col, c] != 0]
             for col in self.visit_sequence
         }
-        self._method_params = {}
-        for method_name in set(self.method[col] for col in self.visit_sequence):
-            prefix = f"{method_name}_"
-            self._method_params[method_name] = {
-                key[len(prefix) :]: value for key, value in self.imputation_params.items() if key.startswith(prefix)
-            }
+        self._method_params: dict[str, dict[str, Any]] = {
+            method_name: {} for method_name in set(self.method[col] for col in self.visit_sequence)
+        }
+        for key, value in self.imputation_params.items():
+            match = split_method_param(key, param_names)
+            if match is not None and match[0] in self._method_params:
+                self._method_params[match[0]][match[1]] = value
 
         self.imputed_datasets = []
         individual_times = []
@@ -1029,6 +1045,12 @@ class MICE:
             logger.debug(f"Using imputation method '{method_name}' for column '{col}'")
             # Pass rng to all imputation methods for reproducibility
             method_params = dict(self._method_params[method_name], rng=rng)
+            # An imputer whose signature has `log_event` may log events: it
+            # passes R's `out`, the rest of the row is filled in here
+            if "log_event" in inspect.signature(imputer_func).parameters:
+                method_params["log_event"] = functools.partial(
+                    self._log_event, meth=method_name, it=iter_idx + 1, im=chain_idx + 1, dep=col
+                )
             imputed_values = imputer_func(y=y, id_obs=id_obs, id_mis=id_mis, x=x_values, **method_params)
             logger.debug(f"Successfully imputed {len(imputed_values)} values for column '{col}'")
 

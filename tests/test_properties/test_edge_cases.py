@@ -11,6 +11,7 @@ import pytest
 
 from .._logged_events import impute_checking_log_warning
 from ._helpers import (
+    DONOR_METHODS,
     MAXIT,
     METHODS,
     N_IMP,
@@ -29,7 +30,7 @@ NON_MIDAS = ("pmm", "cart", "rf", "sample")
 def _check(df, method, n_imputations=N_IMP, maxit=MAXIT, **kwargs):
     before = df.copy(deep=True)
     mice, out = impute(df, method, n_imputations=n_imputations, maxit=maxit, **kwargs)
-    assert_all_invariants(df, before, mice, out, n_imputations, maxit)
+    assert_all_invariants(df, before, mice, out, n_imputations, maxit, donor=method in DONOR_METHODS)
     return mice, out
 
 
@@ -196,7 +197,9 @@ def test_incomplete_duplicated_column(method):
     df["x1_copy"] = df["x1"]
     before = df.copy(deep=True)
     mice, out = impute(df, method)
-    assert_all_invariants(df, before, mice, out, N_IMP, MAXIT, allow_unimputed={"x1_copy"})
+    assert_all_invariants(
+        df, before, mice, out, N_IMP, MAXIT, donor=method in DONOR_METHODS, allow_unimputed={"x1_copy"}
+    )
 
 
 @pytest.mark.parametrize("method", METHODS)
@@ -532,7 +535,7 @@ def _works_or_names_dtype(df, method, dtype_name, column="zcol"):
         clear = isinstance(exc, (ValueError, TypeError)) and dtype_name in message and column in message
         assert clear, repr(exc)
         return
-    assert_all_invariants(df, before, mice, out, N_IMP, MAXIT)
+    assert_all_invariants(df, before, mice, out, N_IMP, MAXIT, donor=method in DONOR_METHODS)
 
 
 def _nullable_column(dtype, n, rng):
