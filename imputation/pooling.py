@@ -14,14 +14,27 @@ from typing import List, Dict, Optional, Union, Tuple
 from dataclasses import dataclass
 from scipy import stats
 
-logger = logging.getLogger('imputation.pooling')
+logger = logging.getLogger("imputation.pooling")
 
 # Columns of the table returned by `pool_estimates`, in this order. They are
 # those of R's `summary(pool(fit), type = "all", conf.int = TRUE)` with
 # Python names.
 POOL_TABLE_COLUMNS = [
-    'm', 'estimate', 'ubar', 'b', 't', 'dfcom', 'df', 'riv', 'lambda', 'fmi',
-    'std_error', 'statistic', 'p_value', 'conf_low', 'conf_high',
+    "m",
+    "estimate",
+    "ubar",
+    "b",
+    "t",
+    "dfcom",
+    "df",
+    "riv",
+    "lambda",
+    "fmi",
+    "std_error",
+    "statistic",
+    "p_value",
+    "conf_low",
+    "conf_high",
 ]
 
 
@@ -56,11 +69,11 @@ def barnard_rubin(m, b, t, dfcom=np.inf):
     multiple imputation. Biometrika, 86, 948-955.
     """
     m, b, t, dfcom = (np.asarray(a, dtype=float) for a in (m, b, t, dfcom))
-    with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
         lam = (1.0 + 1.0 / m) * b / t
-        dfold = (m - 1.0) / lam ** 2
+        dfold = (m - 1.0) / lam**2
         tmp = (1.0 - lam) * (1.0 + dfcom) * dfcom
-        df_br = (m - 1.0) * tmp / ((dfcom + 3.0) * (m - 1.0) + lam ** 2 * tmp)
+        df_br = (m - 1.0) * tmp / ((dfcom + 3.0) * (m - 1.0) + lam**2 * tmp)
         df = np.where(np.isinf(dfcom), dfold, df_br)
     return df[()] if df.ndim == 0 else df
 
@@ -83,7 +96,7 @@ def _pool_table(
     qbar = np.asarray(qbar, dtype=float)
     ubar = np.asarray(ubar, dtype=float)
     dfcom = float(dfcom)
-    with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
         if m > 1:
             b = np.asarray(b, dtype=float)
             t = ubar + (1.0 + 1.0 / m) * b
@@ -104,24 +117,24 @@ def _pool_table(
         conf_high = qbar + stats.t.ppf(1.0 - alpha / 2.0, df) * std_error
 
     p = qbar.shape[0]
-    index = pd.Index(range(p) if param_names is None else list(param_names), name='term')
+    index = pd.Index(range(p) if param_names is None else list(param_names), name="term")
     return pd.DataFrame(
         {
-            'm': np.full(p, m, dtype=int),
-            'estimate': qbar,
-            'ubar': ubar,
-            'b': b,
-            't': t,
-            'dfcom': np.full(p, dfcom),
-            'df': df,
-            'riv': riv,
-            'lambda': lam,
-            'fmi': fmi,
-            'std_error': std_error,
-            'statistic': statistic,
-            'p_value': p_value,
-            'conf_low': conf_low,
-            'conf_high': conf_high,
+            "m": np.full(p, m, dtype=int),
+            "estimate": qbar,
+            "ubar": ubar,
+            "b": b,
+            "t": t,
+            "dfcom": np.full(p, dfcom),
+            "df": df,
+            "riv": riv,
+            "lambda": lam,
+            "fmi": fmi,
+            "std_error": std_error,
+            "statistic": statistic,
+            "p_value": p_value,
+            "conf_low": conf_low,
+            "conf_high": conf_high,
         },
         index=index,
         columns=POOL_TABLE_COLUMNS,
@@ -225,10 +238,10 @@ def _residual_df(fit_result) -> float:
     Uses ``df_resid`` when the result has it, else ``max(nobs - p, 1)``,
     else infinity.
     """
-    df = getattr(fit_result, 'df_resid', None)
+    df = getattr(fit_result, "df_resid", None)
     if df is not None and np.isfinite(df):
         return float(df)
-    nobs = getattr(fit_result, 'nobs', None)
+    nobs = getattr(fit_result, "nobs", None)
     if nobs is not None and np.isfinite(nobs):
         return float(max(nobs - len(np.atleast_1d(fit_result.params)), 1))
     return np.inf
@@ -238,7 +251,7 @@ def _residual_df(fit_result) -> float:
 class PoolingResult:
     """
     Container for pooled multiple imputation results.
-    
+
     Attributes
     ----------
     estimates : np.ndarray
@@ -259,6 +272,7 @@ class PoolingResult:
         Sample size of each imputed dataset. The complete-data degrees of
         freedom are ``sample_size - 1``.
     """
+
     estimates: np.ndarray
     variances: np.ndarray
     within_variance: np.ndarray
@@ -319,25 +333,27 @@ class PoolingResult:
         """
         tab = self.table(alpha=alpha)
 
-        summary_df = pd.DataFrame({
-            'Parameter': self.param_names,
-            'Estimate': tab['estimate'].to_numpy(),
-            'Std_Error': tab['std_error'].to_numpy(),
-            'DF': tab['df'].to_numpy(),
-            'CI_Lower': tab['conf_low'].to_numpy(),
-            'CI_Upper': tab['conf_high'].to_numpy(),
-            'Within_Var': tab['ubar'].to_numpy(),
-            'Between_Var': tab['b'].to_numpy(),
-            'Total_Var': tab['t'].to_numpy(),
-            'Lambda': tab['lambda'].to_numpy(),
-            'FMI': tab['fmi'].to_numpy(),
-        })
+        summary_df = pd.DataFrame(
+            {
+                "Parameter": self.param_names,
+                "Estimate": tab["estimate"].to_numpy(),
+                "Std_Error": tab["std_error"].to_numpy(),
+                "DF": tab["df"].to_numpy(),
+                "CI_Lower": tab["conf_low"].to_numpy(),
+                "CI_Upper": tab["conf_high"].to_numpy(),
+                "Within_Var": tab["ubar"].to_numpy(),
+                "Between_Var": tab["b"].to_numpy(),
+                "Total_Var": tab["t"].to_numpy(),
+                "Lambda": tab["lambda"].to_numpy(),
+                "FMI": tab["fmi"].to_numpy(),
+            }
+        )
 
         return summary_df
-    
+
     def __str__(self) -> str:
         return f"PoolingResult(n_params={len(self.param_names)}, n_imputations={self.n_imputations})"
-    
+
     def __repr__(self) -> str:
         return self.__str__()
 
@@ -345,12 +361,12 @@ class PoolingResult:
 def validate_imputed_datasets(datasets: List[pd.DataFrame]) -> None:
     """
     Validate that the input datasets are suitable for pooling.
-    
+
     Parameters
     ----------
     datasets : List[pd.DataFrame]
         List of imputed datasets to validate
-        
+
     Raises
     ------
     ValueError
@@ -358,37 +374,35 @@ def validate_imputed_datasets(datasets: List[pd.DataFrame]) -> None:
     """
     if not datasets:
         raise ValueError("No datasets provided for pooling")
-    
+
     if len(datasets) < 1:
         raise ValueError("At least one dataset is required for pooling")
-    
+
     # Check that all datasets are DataFrames
     for i, df in enumerate(datasets):
         if not isinstance(df, pd.DataFrame):
             raise ValueError(f"Dataset {i} is not a pandas DataFrame")
-    
+
     # Check consistent shapes and columns
     first_df = datasets[0]
     n_rows, n_cols = first_df.shape
     columns = first_df.columns
-    
+
     for i, df in enumerate(datasets[1:], 1):
         if df.shape != (n_rows, n_cols):
             raise ValueError(f"Dataset {i} has shape {df.shape}, expected {(n_rows, n_cols)}")
-        
+
         if not df.columns.equals(columns):
             raise ValueError(f"Dataset {i} has different columns than the first dataset")
-    
+
     # Check for missing values (should not exist in imputed datasets)
     for i, df in enumerate(datasets):
         if df.isnull().any().any():
-            logger.warning(f"Dataset {i} contains missing values. "
-                          "Pooling assumes complete datasets.")
+            logger.warning(f"Dataset {i} contains missing values. Pooling assumes complete datasets.")
 
 
 def apply_rubins_rules(
-    estimates: np.ndarray,
-    variances: np.ndarray
+    estimates: np.ndarray, variances: np.ndarray
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Apply Rubin's rules to combine estimates and variances across imputations.
@@ -413,43 +427,41 @@ def apply_rubins_rules(
         information, which in R is ``fmi``, a different quantity.
     """
     m = estimates.shape[0]  # number of imputations
-    
+
     # Pooled estimates (q_bar)
     q_bar = np.nanmean(estimates, axis=0)
-    
+
     # Average within-imputation variance (u_bar)
     u_bar = np.nanmean(variances, axis=0)
-    
+
     # Between-imputation variance (b)
     if m > 1:
         b = np.nansum((estimates - q_bar) ** 2, axis=0) / (m - 1)
     else:
         b = np.zeros_like(q_bar)
-    
+
     # Total variance (t)
     t = u_bar + (1.0 + 1.0 / max(m, 1)) * b
-    
+
     # Fraction of missing information
-    with np.errstate(divide='ignore', invalid='ignore'):
+    with np.errstate(divide="ignore", invalid="ignore"):
         frac_miss_info = ((1.0 + 1.0 / max(m, 1)) * b) / t
         frac_miss_info = np.where(np.isfinite(frac_miss_info), frac_miss_info, np.nan)
-    
+
     return q_bar, t, u_bar, b, frac_miss_info
 
 
 def pool_descriptive_statistics(
-    datasets: List[pd.DataFrame],
-    include_numeric: bool = True,
-    include_categorical: bool = True
+    datasets: List[pd.DataFrame], include_numeric: bool = True, include_categorical: bool = True
 ) -> PoolingResult:
     """
     Pool descriptive statistics across multiple imputed datasets using Rubin's rules.
-    
+
     For numeric columns, pools the sample mean and its variance.
     For categorical columns, pools the per-level proportions and their variances.
     Pooling follows `pool_estimates` with ``dfcom = n - 1``, so intervals use
     the t distribution with Barnard-Rubin degrees of freedom.
-    
+
     Parameters
     ----------
     datasets : List[pd.DataFrame]
@@ -459,48 +471,48 @@ def pool_descriptive_statistics(
         Whether to include numeric columns in pooling
     include_categorical : bool, default=True
         Whether to include categorical columns in pooling
-        
+
     Returns
     -------
     PoolingResult
         Object containing pooled estimates, variances, and diagnostic statistics
-        
+
     Raises
     ------
     ValueError
         If datasets are invalid or no columns are available for pooling
     """
     logger.info(f"Starting pooling of {len(datasets)} imputed datasets")
-    
+
     # Validate inputs
     validate_imputed_datasets(datasets)
-    
+
     m = len(datasets)
     n = datasets[0].shape[0]
-    
+
     logger.debug(f"Number of imputations: {m}, Sample size: {n}")
-    
+
     # Identify column types from the first dataset
     first_df = datasets[0]
     numeric_cols = []
     categorical_cols = []
-    
+
     if include_numeric:
         numeric_cols = first_df.select_dtypes(include=[np.number]).columns.tolist()
-    
+
     if include_categorical:
         categorical_cols = first_df.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
-    
+
     if not numeric_cols and not categorical_cols:
         raise ValueError("No numeric or categorical columns available for pooling.")
-    
+
     logger.debug(f"Found {len(numeric_cols)} numeric and {len(categorical_cols)} categorical columns")
-    
+
     # Build parameter vectors per imputed dataset
     param_names: List[str] = []
     estimates_list: List[List[float]] = [[] for _ in range(m)]
     variances_list: List[List[float]] = [[] for _ in range(m)]
-    
+
     # 1) Numeric columns: mean and its within-imputation variance
     for col in numeric_cols:
         param_names.append(col)
@@ -511,14 +523,14 @@ def pool_descriptive_statistics(
             variance = float(series.var(ddof=1)) / n if n > 0 else np.nan
             estimates_list[j].append(estimate)
             variances_list[j].append(variance)
-    
+
     # 2) Categorical columns: per-level proportions and their within-imputation variance
     for col in categorical_cols:
         # Determine stable set of levels across imputations
         all_levels = []
         for df in datasets:
             all_levels.extend(pd.unique(df[col]))
-        
+
         # Create ordered, unique levels while preserving first occurrence order
         seen = set()
         levels: List[object] = []
@@ -526,7 +538,7 @@ def pool_descriptive_statistics(
             if lvl not in seen:
                 seen.add(lvl)
                 levels.append(lvl)
-        
+
         for lvl in levels:
             lvl_name = f"{col}[{str(lvl)}]"
             param_names.append(lvl_name)
@@ -538,44 +550,40 @@ def pool_descriptive_statistics(
                 variance = p * (1.0 - p) / n if n > 0 else np.nan
                 estimates_list[j].append(p)
                 variances_list[j].append(variance)
-    
+
     # Convert to numpy arrays
     estimates = np.asarray(estimates_list, dtype=float)
     variances = np.asarray(variances_list, dtype=float)
-    
+
     # Apply Rubin's rules; a mean or a proportion has n - 1 complete-data df
     logger.debug("Applying Rubin's rules for pooling")
     table = pool_estimates(estimates, variances, dfcom=n - 1, param_names=param_names)
-    
+
     # Log pooling statistics
     for param_name, row in table.iterrows():
         logger.debug(f"Pooling statistics for '{param_name}':")
         logger.debug(f"  - Pooled estimate: {row['estimate']:.4f}")
         logger.debug(f"  - Total variance: {row['t']:.4f}")
         logger.debug(f"  - Fraction of missing information: {row['fmi']:.4f}")
-    
+
     logger.info("Pooling completed successfully")
-    
+
     return PoolingResult(
-        estimates=table['estimate'].to_numpy(),
-        variances=table['t'].to_numpy(),
-        within_variance=table['ubar'].to_numpy(),
-        between_variance=table['b'].to_numpy(),
-        frac_miss_info=table['fmi'].to_numpy(),
+        estimates=table["estimate"].to_numpy(),
+        variances=table["t"].to_numpy(),
+        within_variance=table["ubar"].to_numpy(),
+        between_variance=table["b"].to_numpy(),
+        frac_miss_info=table["fmi"].to_numpy(),
         param_names=param_names,
         n_imputations=m,
-        sample_size=n
+        sample_size=n,
     )
 
 
-def pool_from_files(
-    file_paths: List[str],
-    read_kwargs: Optional[Dict] = None,
-    **pooling_kwargs
-) -> PoolingResult:
+def pool_from_files(file_paths: List[str], read_kwargs: Optional[Dict] = None, **pooling_kwargs) -> PoolingResult:
     """
     Pool descriptive statistics from datasets stored in files.
-    
+
     Parameters
     ----------
     file_paths : List[str]
@@ -584,7 +592,7 @@ def pool_from_files(
         Keyword arguments to pass to pd.read_csv()
     **pooling_kwargs
         Additional arguments to pass to pool_descriptive_statistics()
-        
+
     Returns
     -------
     PoolingResult
@@ -592,30 +600,26 @@ def pool_from_files(
     """
     if read_kwargs is None:
         read_kwargs = {}
-    
+
     logger.info(f"Loading {len(file_paths)} datasets from files")
-    
+
     datasets = []
     for i, file_path in enumerate(file_paths):
         try:
             df = pd.read_csv(file_path, **read_kwargs)
             datasets.append(df)
-            logger.debug(f"Loaded dataset {i+1}: {file_path} (shape: {df.shape})")
+            logger.debug(f"Loaded dataset {i + 1}: {file_path} (shape: {df.shape})")
         except Exception as e:
             logger.error(f"Failed to load dataset from {file_path}: {e}")
             raise
-    
+
     return pool_descriptive_statistics(datasets, **pooling_kwargs)
 
 
-def pool_subset(
-    datasets: List[pd.DataFrame],
-    columns: Optional[List[str]] = None,
-    **pooling_kwargs
-) -> PoolingResult:
+def pool_subset(datasets: List[pd.DataFrame], columns: Optional[List[str]] = None, **pooling_kwargs) -> PoolingResult:
     """
     Pool descriptive statistics for a subset of columns.
-    
+
     Parameters
     ----------
     datasets : List[pd.DataFrame]
@@ -624,7 +628,7 @@ def pool_subset(
         List of column names to include in pooling. If None, uses all columns.
     **pooling_kwargs
         Additional arguments to pass to pool_descriptive_statistics()
-        
+
     Returns
     -------
     PoolingResult
@@ -636,9 +640,9 @@ def pool_subset(
         missing_cols = [col for col in columns if col not in first_df.columns]
         if missing_cols:
             raise ValueError(f"Columns not found in datasets: {missing_cols}")
-        
+
         # Subset datasets to specified columns
         datasets = [df[columns].copy() for df in datasets]
         logger.info(f"Pooling subset of {len(columns)} columns")
-    
+
     return pool_descriptive_statistics(datasets, **pooling_kwargs)

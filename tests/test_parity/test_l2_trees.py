@@ -39,7 +39,6 @@ pytestmark = pytest.mark.parity
 CART_R_SETTINGS = {"bootstrap": False, "cp": 1e-4, "min_samples_leaf": 5}
 
 
-
 @pytest.mark.parametrize("input_name", ["F1", "F2", "F4"])
 def test_cart_numeric_donor_sets_equal_rpart_leaves(input_name):
     inp, r_sum, py_sum = run_python("cart", input_name, **CART_R_SETTINGS)
@@ -109,9 +108,7 @@ def test_rf_draw_rule_pools_donors_of_all_trees():
     nodes_obs = np.array([[1, 9], [2, 5], [2, 5], [2, 5]])
     nodes_mis = np.tile([1, 5], (4000, 1))
     y_obs = np.array([10.0, 20.0, 30.0, 40.0])
-    draws = np.asarray(
-        _draw_pooled_donors(nodes_obs, nodes_mis, y_obs, np.random.default_rng(2025))
-    )
+    draws = np.asarray(_draw_pooled_donors(nodes_obs, nodes_mis, y_obs, np.random.default_rng(2025)))
     assert draws.shape == (4000,)
     assert set(np.unique(draws)) <= set(y_obs)
     p_hat = np.mean(draws == 10.0)

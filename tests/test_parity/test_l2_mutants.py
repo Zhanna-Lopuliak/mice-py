@@ -74,9 +74,5 @@ def test_deterministic_ties_are_flagged_by_t1(monkeypatch):
 
 
 def test_bootstrapped_cart_is_flagged_by_donor_sets():
-    inp, r_sum, py_sum = run_python(
-        "cart", "F1", bootstrap=True, cp=1e-4, min_samples_leaf=5
-    )
-    assert donor_set_mismatches(r_sum, py_sum), (
-        "the donor-set test does not flag a bootstrapped tree"
-    )
+    inp, r_sum, py_sum = run_python("cart", "F1", bootstrap=True, cp=1e-4, min_samples_leaf=5)
+    assert donor_set_mismatches(r_sum, py_sum), "the donor-set test does not flag a bootstrapped tree"

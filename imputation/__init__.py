@@ -23,53 +23,43 @@ from .logging_config import setup_logging, get_logger, disable_logging, reset_lo
 
 logger = logging.getLogger(__name__)
 
-__all__ = [
-    'MICE', 
-    'quickpred',
-    'setup_logging', 
-    'get_logger',
-    'disable_logging',
-    'reset_logging',
-    'configure_logging'
-]
+__all__ = ["MICE", "quickpred", "setup_logging", "get_logger", "disable_logging", "reset_logging", "configure_logging"]
 
 
 def configure_logging(**kwargs):
     """
     Configure logging for the imputation package.
-    
+
     This is a user-friendly wrapper around setup_logging() that provides
     the same functionality with a more intuitive name.
-    
+
     Parameters
     ----------
     **kwargs
         All arguments are passed to setup_logging(). See setup_logging()
         documentation for full list of parameters.
-        
+
     Returns
     -------
     logging.Logger
         The configured package logger
-        
+
     Examples
     --------
     Basic usage:
     >>> import imputation
     >>> imputation.configure_logging()
-    
+
     Enable debug logging:
     >>> imputation.configure_logging(level='DEBUG')
-    
+
     Custom log directory:
     >>> imputation.configure_logging(log_dir='my_project/logs')
-    
+
     Console only (no file logging):
     >>> imputation.configure_logging(file_logging=False)
-    
+
     Quiet mode (warnings and errors only):
     >>> imputation.configure_logging(console_level='WARNING')
     """
     return setup_logging(**kwargs)
-
-

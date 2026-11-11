@@ -35,7 +35,8 @@ DATASETS = {
 KNOWN = {}
 
 CASES = [
-    pytest.param(ds, m, marks=xfail(KNOWN[(ds, m)]), id=f"{ds}-{m}") if (ds, m) in KNOWN
+    pytest.param(ds, m, marks=xfail(KNOWN[(ds, m)]), id=f"{ds}-{m}")
+    if (ds, m) in KNOWN
     else pytest.param(ds, m, id=f"{ds}-{m}")
     for ds in DATASETS
     for m in METHODS
@@ -109,6 +110,7 @@ def test_chain_statistics_shape_and_finite(dataset, method):
 # ---------------------------------------------------------------------------
 # The univariate imputers, called directly
 # ---------------------------------------------------------------------------
+
 
 def _univariate_problem(seed=7, n=40, x_as_frame=False):
     rng = np.random.default_rng(seed)

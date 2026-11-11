@@ -82,9 +82,7 @@ def _simulate(method):
         rng = np.random.default_rng([SEED, rep, method_index])
         coefs = []
         for _ in range(M):
-            imputed = np.asarray(
-                func(y=x1, id_obs=observed, x=x, id_mis=~observed, rng=rng), dtype=float
-            )
+            imputed = np.asarray(func(y=x1, id_obs=observed, x=x, id_mis=~observed, rng=rng), dtype=float)
             x1c = x1.copy()
             x1c[~observed] = imputed
             coefs.append(_x1_coefficient(x1c, x2, y))

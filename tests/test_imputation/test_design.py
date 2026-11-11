@@ -92,21 +92,18 @@ def test_obtain_design_boolean_with_one_value_still_has_its_column():
 def test_obtain_design_missing_category_is_missing_in_every_column():
     data = pd.DataFrame({"f": pd.Categorical(["a", None, "b", "c"])})
     x = obtain_design(data, ["f"])
-    np.testing.assert_array_equal(
-        x.to_numpy(), [[0.0, 0.0], [np.nan, np.nan], [1.0, 0.0], [0.0, 1.0]]
-    )
+    np.testing.assert_array_equal(x.to_numpy(), [[0.0, 0.0], [np.nan, np.nan], [1.0, 0.0], [0.0, 1.0]])
 
 
 def test_obtain_design_ordered_uses_polynomial_contrasts():
-    data = pd.DataFrame(
-        {"g": pd.Categorical(["a", None, "c", "b"], categories=["a", "b", "c"], ordered=True)}
-    )
+    data = pd.DataFrame({"g": pd.Categorical(["a", None, "c", "b"], categories=["a", "b", "c"], ordered=True)})
     x = obtain_design(data, ["g"])
     assert list(x.columns) == ["g.L", "g.Q"]
     linear = np.array([-1.0, 0.0, 1.0]) / np.sqrt(2.0)
     quadratic = np.array([1.0, -2.0, 1.0]) / np.sqrt(6.0)
-    expected = np.array([[linear[0], quadratic[0]], [np.nan, np.nan],
-                         [linear[2], quadratic[2]], [linear[1], quadratic[1]]])
+    expected = np.array(
+        [[linear[0], quadratic[0]], [np.nan, np.nan], [linear[2], quadratic[2]], [linear[1], quadratic[1]]]
+    )
     np.testing.assert_allclose(x.to_numpy(), expected, rtol=0, atol=1e-15)
 
 
@@ -121,7 +118,8 @@ def test_obtain_design_ordered_names_and_basis_for_six_levels():
     np.testing.assert_allclose(x[:, 0], np.arange(-5.0, 6.0, 2.0) / np.sqrt(70.0), atol=1e-15)
     # contr.poly(6)[, 5] in R, rounded as R prints it
     np.testing.assert_allclose(
-        x[:, 4], [-0.06299408, 0.31497039, -0.62994079, 0.62994079, -0.31497039, 0.06299408],
+        x[:, 4],
+        [-0.06299408, 0.31497039, -0.62994079, 0.62994079, -0.31497039, 0.06299408],
         atol=5e-9,
     )
 
@@ -131,9 +129,7 @@ def test_obtain_design_object_levels_sorted_by_code_point():
     data = pd.DataFrame({"s": pd.Series(["b", "a", "B", "c"], dtype=object)})
     x = obtain_design(data, ["s"])
     assert list(x.columns) == ["sa", "sb", "sc"]
-    np.testing.assert_array_equal(
-        x.to_numpy(), [[0, 1, 0], [1, 0, 0], [0, 0, 0], [0, 0, 1]]
-    )
+    np.testing.assert_array_equal(x.to_numpy(), [[0, 1, 0], [1, 0, 0], [0, 0, 0], [0, 0, 1]])
 
 
 def test_obtain_design_string_dtype_behaves_like_object():
@@ -146,9 +142,7 @@ def test_obtain_design_string_dtype_behaves_like_object():
 
 
 def test_obtain_design_numeric_columns_become_float():
-    data = pd.DataFrame(
-        {"i": pd.Series([1, pd.NA, 3], dtype="Int64"), "n": np.array([4, 5, 6], dtype=np.int32)}
-    )
+    data = pd.DataFrame({"i": pd.Series([1, pd.NA, 3], dtype="Int64"), "n": np.array([4, 5, 6], dtype=np.int32)})
     x = obtain_design(data, ["i", "n"])
     assert all(pd.api.types.is_float_dtype(t) for t in x.dtypes)
     np.testing.assert_array_equal(x.to_numpy(), [[1.0, 4.0], [np.nan, 5.0], [3.0, 6.0]])
@@ -243,9 +237,7 @@ def test_remove_lindep_near_copy_is_dropped_and_named():
 
 def test_remove_lindep_array_and_frame_agree():
     frame = _frame(c=np.full(N, 3.0), x1=X1, x1b=X1 + 1e-4 * X2, x2=X2)
-    np.testing.assert_array_equal(
-        remove_lindep(frame, Y, RY), remove_lindep(frame.to_numpy(), Y, RY)
-    )
+    np.testing.assert_array_equal(remove_lindep(frame, Y, RY), remove_lindep(frame.to_numpy(), Y, RY))
     assert _remove_lindep(frame.to_numpy(), Y, RY)[1] == ""  # R logs "" without names
 
 
@@ -337,9 +329,7 @@ def _quickpred_frame():
     i = np.arange(1, 31)
     a = np.sin(i)
     cg = np.cos(1.7 * i)
-    g = pd.Categorical(
-        np.where(cg > 0.3, "hi", np.where(cg < -0.3, "lo", "mid")), categories=["mid", "lo", "hi"]
-    )
+    g = pd.Categorical(np.where(cg > 0.3, "hi", np.where(cg < -0.3, "lo", "mid")), categories=["mid", "lo", "hi"])
     data = pd.DataFrame(
         {
             "y": a + 0.4 * np.cos(2.3 * i),

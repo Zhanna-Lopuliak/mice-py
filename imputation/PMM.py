@@ -3,77 +3,77 @@ import numpy as np
 from .design import obtain_design
 from .sampler import norm_draw
 
-def pmm(y, id_obs, x, id_mis = None, donors = 5, matchtype = 1,
-                    quantify = True, ridge = 1e-5, ls_meth = "qr", rng = None):
+
+def pmm(y, id_obs, x, id_mis=None, donors=5, matchtype=1, quantify=True, ridge=1e-5, ls_meth="qr", rng=None):
     """
-       Predictive Mean Matching (PMM) imputation.
+    Predictive Mean Matching (PMM) imputation.
 
-       This function imputes missing values in a variable `y` using predictive mean matching.
-       The method is based on Rubin's (1987) Bayesian linear regression and mimics the behavior
-       of the R `mice` package's PMM imputation method.
+    This function imputes missing values in a variable `y` using predictive mean matching.
+    The method is based on Rubin's (1987) Bayesian linear regression and mimics the behavior
+    of the R `mice` package's PMM imputation method.
 
-       Parameters
-       ----------
-       y : array-like (1D), shape (n_samples,)
-           Target variable to be imputed. Numeric, or categorical of any
-           non-numeric dtype (object, category, bool, string).
+    Parameters
+    ----------
+    y : array-like (1D), shape (n_samples,)
+        Target variable to be imputed. Numeric, or categorical of any
+        non-numeric dtype (object, category, bool, string).
 
-       id_obs : array-like of bool, shape (n_samples,)
-           Logical array indicating which elements of `y` are observed (True) or missing (False).
+    id_obs : array-like of bool, shape (n_samples,)
+        Logical array indicating which elements of `y` are observed (True) or missing (False).
 
-       x : array-like (2D) or pd.DataFrame, shape (n_samples, n_features)
-           Predictors without missing values. A numeric array is used as the
-           design matrix. A DataFrame with categorical, object, string or
-           boolean columns is dummy-coded first by
-           :func:`imputation.design.obtain_design`, as MICE does.
+    x : array-like (2D) or pd.DataFrame, shape (n_samples, n_features)
+        Predictors without missing values. A numeric array is used as the
+        design matrix. A DataFrame with categorical, object, string or
+        boolean columns is dummy-coded first by
+        :func:`imputation.design.obtain_design`, as MICE does.
 
-       id_mis : array-like of bool, shape (n_samples,), optional
-           Logical array indicating which values should be imputed.
-           If None, `id_mis` is set to the complement of `id_obs`.
+    id_mis : array-like of bool, shape (n_samples,), optional
+        Logical array indicating which values should be imputed.
+        If None, `id_mis` is set to the complement of `id_obs`.
 
-       donors : int, default=5
-           Number of donors to draw from the observed cases when imputing missing values.
-           Clamped to the range from 1 to the number of observed values.
+    donors : int, default=5
+        Number of donors to draw from the observed cases when imputing missing values.
+        Clamped to the range from 1 to the number of observed values.
 
-       matchtype : int, default=1
-           Type of matching:
-           - 0: Predicted value of y_obs vs predicted value of y_mis
-           - 1: Predicted value of y_obs vs drawn value of y_mis (default)
-           - 2: Drawn value of y_obs vs drawn value of y_mis
+    matchtype : int, default=1
+        Type of matching:
+        - 0: Predicted value of y_obs vs predicted value of y_mis
+        - 1: Predicted value of y_obs vs drawn value of y_mis (default)
+        - 2: Drawn value of y_obs vs drawn value of y_mis
 
-       quantify : bool, default=True
-           If True and `y` is categorical, its categories are replaced by the
-           optimal scaling of `quantify()` before the regression. If False,
-           categories are replaced by integer codes (less accurate).
+    quantify : bool, default=True
+        If True and `y` is categorical, its categories are replaced by the
+        optimal scaling of `quantify()` before the regression. If False,
+        categories are replaced by integer codes (less accurate).
 
-       ridge : float, default=1e-5
-           Ridge regularization parameter used in `norm_draw()` to stabilize estimation.
-           Increase for multicollinear data, decrease to reduce bias.
+    ridge : float, default=1e-5
+        Ridge regularization parameter used in `norm_draw()` to stabilize estimation.
+        Increase for multicollinear data, decrease to reduce bias.
 
-       ls_meth : str, default="qr"
-           Least squares method passed to `norm_draw()`: "qr", "ridge" or "svd".
+    ls_meth : str, default="qr"
+        Least squares method passed to `norm_draw()`: "qr", "ridge" or "svd".
 
-       rng : np.random.Generator, optional
-           Random number generator for reproducibility. If None, a fresh generator is used.
+    rng : np.random.Generator, optional
+        Random number generator for reproducibility. If None, a fresh generator is used.
 
-       Returns
-       -------
-       y_imp : np.ndarray
-           Imputed values for the `id_mis` positions only (as in R):
-           ``y[id_obs][idx]``, so observed values or category labels of `y`.
+    Returns
+    -------
+    y_imp : np.ndarray
+        Imputed values for the `id_mis` positions only (as in R):
+        ``y[id_obs][idx]``, so observed values or category labels of `y`.
 
-       Notes
-       -----
-       Based on:
-       - Rubin, D. B. (1987). *Multiple Imputation for Nonresponse in Surveys*.
-       - Van Buuren, S. & Groothuis-Oudshoorn, K. (2011). `mice` R package.
+    Notes
+    -----
+    Based on:
+    - Rubin, D. B. (1987). *Multiple Imputation for Nonresponse in Surveys*.
+    - Van Buuren, S. & Groothuis-Oudshoorn, K. (2011). `mice` R package.
 
-       Examples
-       --------
-       >>> y = np.array([7, np.nan, 9, 10, 11])
-       >>> id_obs = ~np.isnan(y)
-       >>> x = np.array([[1, 2], [3, 4], [5, 7], [7, 8], [9, 10]])
-       >>> pmm(y=y, id_obs=id_obs, x=x, donors=3)
+    Examples
+    --------
+    >>> y = np.array([7, np.nan, 9, 10, 11])
+    >>> id_obs = ~np.isnan(y)
+    >>> x = np.array([[1, 2], [3, 4], [5, 7], [7, 8], [9, 10]])
+    >>> pmm(y=y, id_obs=id_obs, x=x, donors=3)
     """
     # Validate predictors (x): numeric or dummy-coded, without missing values
     if isinstance(x, pd.DataFrame):
@@ -121,7 +121,7 @@ def pmm(y, id_obs, x, id_mis = None, donors = 5, matchtype = 1,
     # Parameter estimation
     p = norm_draw(ynum, id_obs, x, ridge=ridge, rng=rng, ls_meth=ls_meth)
 
-    #dotproduct x @ parameter = predicted values
+    # dotproduct x @ parameter = predicted values
     if matchtype == 0:
         yhatobs = np.dot(x[id_obs, :], p["coef"])
         yhatmis = np.dot(x[id_mis, :], p["coef"])
@@ -138,6 +138,8 @@ def pmm(y, id_obs, x, id_mis = None, donors = 5, matchtype = 1,
 
     # The observed values (or labels) of the selected donors
     return values[id_obs][idx]
+
+
 def quantify(y, id_obs, x):
     """
     Optimal scaling of a categorical variable, as R mice's ``quantify()``.
@@ -309,4 +311,4 @@ def _column_space(a, tol=1e-7):
     """Orthonormal basis of the column space of `a` (columns of an SVD)."""
     u, s, _ = np.linalg.svd(a, full_matrices=False)
     rank = int(np.sum(s > tol * s.max(initial=0.0)))
-    return u[:, :max(rank, 1)]
+    return u[:, : max(rank, 1)]

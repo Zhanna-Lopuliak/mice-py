@@ -6,32 +6,34 @@ from .design import obtain_design
 
 def bootfunc_plain(n, rng=None):
     """
-        Generates bootstrap weights for n observations using simple random sampling with replacement.
+    Generates bootstrap weights for n observations using simple random sampling with replacement.
 
-        This function simulates a nonparametric bootstrap by randomly drawing `n` integers
-        from the range 1 to n (inclusive), with replacement. It returns the count of how many times
-        each index (1-based) is selected, producing a frequency table that can be used
-        as weights in e.g. MIDAS imputation.
+    This function simulates a nonparametric bootstrap by randomly drawing `n` integers
+    from the range 1 to n (inclusive), with replacement. It returns the count of how many times
+    each index (1-based) is selected, producing a frequency table that can be used
+    as weights in e.g. MIDAS imputation.
 
-        Parameters
-        ----------
-        n : int
-            The number of observations to sample and also the length of the resulting weight vector.
-        rng : np.random.Generator, optional
-            Random number generator for reproducibility. If None, a fresh generator is used.
+    Parameters
+    ----------
+    n : int
+        The number of observations to sample and also the length of the resulting weight vector.
+    rng : np.random.Generator, optional
+        Random number generator for reproducibility. If None, a fresh generator is used.
 
-        Returns
-        -------
-        weights : ndarray of shape (n,)
-            An array of integers indicating how often each index (1-based) was selected in the bootstrap sample.
-        """
+    Returns
+    -------
+    weights : ndarray of shape (n,)
+        An array of integers indicating how often each index (1-based) was selected in the bootstrap sample.
+    """
     if rng is None:
         rng = np.random.default_rng()
-    #random n int with size n from 1:n
-    random = rng.choice(n, size=n, replace=True)+1
-    #returns histogram of drawn ints
+    # random n int with size n from 1:n
+    random = rng.choice(n, size=n, replace=True) + 1
+    # returns histogram of drawn ints
     table, _ = np.histogram(random, bins=np.arange(1, n + 2))
     return table
+
+
 def minmax(x, domin=True, domax=True):
     maxx = np.sqrt(np.finfo(float).max)
     minx = np.sqrt(np.finfo(float).eps)
@@ -40,78 +42,80 @@ def minmax(x, domin=True, domax=True):
     if domax:
         x = np.maximum(x, minx)
     return x
+
+
 def midas(y, id_obs, x, id_mis=None, ridge=1e-5, kappa=None, outout=True, rng=None):
     """
-        MIDAS Imputation: Multiple Imputation with Distant Average Substitution.
+    MIDAS Imputation: Multiple Imputation with Distant Average Substitution.
 
-        This function implements the MIDAS imputation algorithm for continuous variables,
-        as introduced by Gaffert et al. (2018). It is the port of R's
-        ``mice.impute.midastouch``.
+    This function implements the MIDAS imputation algorithm for continuous variables,
+    as introduced by Gaffert et al. (2018). It is the port of R's
+    ``mice.impute.midastouch``.
 
-        It operates by weighting observed donors based on the similarity between predicted values,
-        with optional leave-one-out model estimation for increased fidelity.
+    It operates by weighting observed donors based on the similarity between predicted values,
+    with optional leave-one-out model estimation for increased fidelity.
 
-        Parameters
-        ----------
-        y : array-like of shape (n_samples,)
-            The target variable with missing values to be imputed. Must be numeric or boolean;
-            a boolean target is modelled as 0/1. Categorical and text targets raise ``ValueError``
-            (R's midastouch does not impute factors either).
+    Parameters
+    ----------
+    y : array-like of shape (n_samples,)
+        The target variable with missing values to be imputed. Must be numeric or boolean;
+        a boolean target is modelled as 0/1. Categorical and text targets raise ``ValueError``
+        (R's midastouch does not impute factors either).
 
-        id_obs : array-like of bool of shape (n_samples,)
-            Logical array indicating observed values in `y`. True where `y` is observed, False where missing.
+    id_obs : array-like of bool of shape (n_samples,)
+        Logical array indicating observed values in `y`. True where `y` is observed, False where missing.
 
-        x : array-like or pd.DataFrame of shape (n_samples, n_features)
-            Predictor variables. Must be fully observed. A DataFrame with categorical,
-            object, string or boolean columns is dummy-coded first by
-            :func:`imputation.design.obtain_design`, as MICE does.
+    x : array-like or pd.DataFrame of shape (n_samples, n_features)
+        Predictor variables. Must be fully observed. A DataFrame with categorical,
+        object, string or boolean columns is dummy-coded first by
+        :func:`imputation.design.obtain_design`, as MICE does.
 
-        id_mis : np.ndarray, optional
-            Boolean mask of missing values to impute. If None, uses ~id_obs.
+    id_mis : np.ndarray, optional
+        Boolean mask of missing values to impute. If None, uses ~id_obs.
 
-        ridge : float, default=1e-5
-            Ridge penalty used in regularized regression to stabilize the solution in the presence of multicollinearity.
-            - Set lower (e.g. 1e-6) to reduce bias in noisy data.
-            - Set higher (e.g. 1e-4) if collinearity is suspected.
+    ridge : float, default=1e-5
+        Ridge penalty used in regularized regression to stabilize the solution in the presence of multicollinearity.
+        - Set lower (e.g. 1e-6) to reduce bias in noisy data.
+        - Set higher (e.g. 1e-4) if collinearity is suspected.
 
-        kappa : float or None, default=None
-            Controls the sharpness of donor weighting (R's ``midas.kappa``). If None, it is
-            estimated from the R² of the bootstrap fit as described by Siddique and Belin (2008):
-            100 for a perfect fit, 3 when R² is undefined. Siddique and Belin find 3 sensible.
-            Through :meth:`imputation.MICE.impute` it is passed as ``midas_kappa``.
+    kappa : float or None, default=None
+        Controls the sharpness of donor weighting (R's ``midas.kappa``). If None, it is
+        estimated from the R² of the bootstrap fit as described by Siddique and Belin (2008):
+        100 for a perfect fit, 3 when R² is undefined. Siddique and Belin find 3 sensible.
+        Through :meth:`imputation.MICE.impute` it is passed as ``midas_kappa``.
 
-        outout : bool, default=True
-            If True, uses leave-one-out regression for each donor (MI-proper).
-            If False, a single model is estimated for all donors and recipients.
-            WARNING: Setting `outout=False` gives in-sample predictions for the donors.
+    outout : bool, default=True
+        If True, uses leave-one-out regression for each donor (MI-proper).
+        If False, a single model is estimated for all donors and recipients.
+        WARNING: Setting `outout=False` gives in-sample predictions for the donors.
 
-        rng : np.random.Generator, optional
-            Random number generator for the bootstrap weights and the donor draw.
-            If None, a fresh generator is used.
+    rng : np.random.Generator, optional
+        Random number generator for the bootstrap weights and the donor draw.
+        If None, a fresh generator is used.
 
-        Returns
-        -------
-        y_imp : np.ndarray
-            Imputed values for missing positions only (matching R implementation): the
-            observed values of the drawn donors, ``y[id_obs][index]``, so they keep the
-            type of `y` (integers stay integers, booleans stay booleans).
+    Returns
+    -------
+    y_imp : np.ndarray
+        Imputed values for missing positions only (matching R implementation): the
+        observed values of the drawn donors, ``y[id_obs][index]``, so they keep the
+        type of `y` (integers stay integers, booleans stay booleans).
 
-        Notes
-        -----
-        - Based on: Gaffert, P., Meinfelder, F., & van den Bosch, V. (2018).
-          "Towards an MI-proper Predictive Mean Matching."
-        - Related: Siddique, J. & Belin, T. R. (2008). "Multiple Imputation Using an Iterative Hot-Deck with Distance-Based Donor Selection."
-        - The donor probabilities for given bootstrap weights are computed by
-          :func:`_donor_probabilities`.
+    Notes
+    -----
+    - Based on: Gaffert, P., Meinfelder, F., & van den Bosch, V. (2018).
+      "Towards an MI-proper Predictive Mean Matching."
+    - Related: Siddique, J. & Belin, T. R. (2008). "Multiple Imputation Using an Iterative Hot-Deck with Distance-Based Donor Selection."
+    - The donor probabilities for given bootstrap weights are computed by
+      :func:`_donor_probabilities`.
 
-        Examples
-        --------
-        >>> y = np.array([7, np.nan, 9, 10, 11])
-        >>> id_obs = ~np.isnan(y)
-        >>> x = np.array([[1, 2], [3, 4], [5, 6], [7, 13], [11, 10]])
-        >>> midas(y, id_obs, x, rng=np.random.default_rng(1))
-        array([9.])
-        """
+    Examples
+    --------
+    >>> y = np.array([7, np.nan, 9, 10, 11])
+    >>> id_obs = ~np.isnan(y)
+    >>> x = np.array([[1, 2], [3, 4], [5, 6], [7, 13], [11, 10]])
+    >>> midas(y, id_obs, x, rng=np.random.default_rng(1))
+    array([9.])
+    """
     id_obs = np.asarray(id_obs, dtype=bool)
     id_mis = ~id_obs if id_mis is None else np.asarray(id_mis, dtype=bool)
     if rng is None:
@@ -128,31 +132,31 @@ def midas(y, id_obs, x, id_mis=None, ridge=1e-5, kappa=None, outout=True, rng=No
 
 def _donor_probabilities(y, id_obs, x, id_mis, omega, ridge=1e-5, kappa=None, outout=True):
     """
-        Donor probabilities of midas for given bootstrap weights.
+    Donor probabilities of midas for given bootstrap weights.
 
-        Everything in :func:`midas` that is deterministic once the bootstrap
-        weights are drawn: the weighted ridge fit, kappa, the leave-one-out
-        predictions (``outout=True``) and the conversion of distances into
-        probabilities.
+    Everything in :func:`midas` that is deterministic once the bootstrap
+    weights are drawn: the weighted ridge fit, kappa, the leave-one-out
+    predictions (``outout=True``) and the conversion of distances into
+    probabilities.
 
-        Parameters
-        ----------
-        y, id_obs, x, id_mis, ridge, kappa, outout
-            As in :func:`midas`; `id_mis` is required.
-        omega : array-like of shape (n_obs,)
-            Bootstrap counts of the observed rows, as drawn by :func:`bootfunc_plain`.
+    Parameters
+    ----------
+    y, id_obs, x, id_mis, ridge, kappa, outout
+        As in :func:`midas`; `id_mis` is required.
+    omega : array-like of shape (n_obs,)
+        Bootstrap counts of the observed rows, as drawn by :func:`bootfunc_plain`.
 
-        Returns
-        -------
-        probs : np.ndarray of shape (n_obs, n_mis)
-            Column j holds the probability of each observed row to be the donor of
-            missing cell j, and sums to 1. These are R's ``probs`` just before its
-            final draw. When several donors are at distance 0 (tied predictor rows),
-            R's capped column sums leave columns that sum to more than 1, which R's
-            ``sample()`` rescales; the rescaled probabilities are returned.
-        kappa : float
-            The kappa used: the argument if given, else the estimate.
-        """
+    Returns
+    -------
+    probs : np.ndarray of shape (n_obs, n_mis)
+        Column j holds the probability of each observed row to be the donor of
+        missing cell j, and sums to 1. These are R's ``probs`` just before its
+        final draw. When several donors are at distance 0 (tied predictor rows),
+        R's capped column sums leave columns that sum to more than 1, which R's
+        ``sample()`` rescales; the rescaled probabilities are returned.
+    kappa : float
+        The kappa used: the argument if given, else the estimate.
+    """
     id_obs = np.asarray(id_obs, dtype=bool)
     id_mis = np.asarray(id_mis, dtype=bool)
     x = _predictor_matrix(x)
@@ -183,7 +187,7 @@ def _donor_probabilities(y, id_obs, x, id_mis, omega, ridge=1e-5, kappa=None, ou
         mean_y = (yobs @ omega) / nobs
         eps = yobs - yhat_obs
         with np.errstate(divide="ignore", invalid="ignore"):
-            r2 = 1 - (omega @ eps ** 2) / (omega @ (yobs - mean_y) ** 2)
+            r2 = 1 - (omega @ eps**2) / (omega @ (yobs - mean_y) ** 2)
         kappa = _kappa(float(r2))
 
     if outout:

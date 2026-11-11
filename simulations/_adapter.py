@@ -53,9 +53,7 @@ SEED_SUPPORTED = "seed" in inspect.signature(MICE.impute).parameters
 # Warnings that the adapter itself provokes and that say nothing about the
 # imputation. The library warns when a square predictor matrix has rows for
 # complete columns; R's own predictor matrix has such rows too.
-_BENIGN_WARNINGS = (
-    re.compile(r"Target variables without missing data are being imputed"),
-)
+_BENIGN_WARNINGS = (re.compile(r"Target variables without missing data are being imputed"),)
 
 
 class SharedStreamsWarning(UserWarning):
@@ -149,9 +147,7 @@ def impute(df, method, m, maxit, seed):
             # study parallelises over replications, so joblib inside the
             # library (rf uses n_jobs=-1) runs sequentially; with fixed
             # random_state this does not change any result.
-            with contextlib.redirect_stdout(io.StringIO()), joblib.parallel_config(
-                backend="sequential"
-            ):
+            with contextlib.redirect_stdout(io.StringIO()), joblib.parallel_config(backend="sequential"):
                 datasets = MICE(df.copy()).impute(**kwargs)
         except Exception as exc:  # recorded, not raised: see docstring
             return Outcome(

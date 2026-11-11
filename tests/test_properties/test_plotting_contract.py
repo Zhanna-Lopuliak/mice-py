@@ -73,6 +73,7 @@ def test_import_does_not_change_pandas_options():
 # Every plot function returns a Figure
 # ---------------------------------------------------------------------------
 
+
 def _plot_inputs():
     rng = np.random.default_rng(0)
     n = 30
@@ -86,8 +87,7 @@ def _plot_inputs():
     pattern.loc[0, "b"] = 0
     pattern.loc[1, "c"] = 0
     datasets = [
-        pd.DataFrame({"a": rng.normal(size=n), "b": rng.normal(size=n), "c": rng.normal(size=n)})
-        for _ in range(3)
+        pd.DataFrame({"a": rng.normal(size=n), "b": rng.normal(size=n), "c": rng.normal(size=n)}) for _ in range(3)
     ]
     chain_mean = {"b": rng.normal(size=(4, 3)), "c": rng.normal(size=(4, 3))}
     chain_var = {"b": rng.uniform(0.5, 2, size=(4, 3)), "c": rng.uniform(0.5, 2, size=(4, 3))}
@@ -142,6 +142,7 @@ def test_saving_closes_the_figure(tmp_path):
 # A8
 # ---------------------------------------------------------------------------
 
+
 def test_trace_plot_shows_standard_deviation():
     from plotting.diagnostics import plot_chain_stats
 
@@ -181,8 +182,7 @@ def _xy_inputs():
     y_missing = np.isin(np.arange(n), [3, 6, 7])
     pattern = pd.DataFrame({"x": (~x_missing).astype(int), "y": (~y_missing).astype(int)})
     datasets = [
-        pd.DataFrame({"x": x + 100 * x_missing * (k + 1), "y": y + 100 * y_missing * (k + 1)})
-        for k in range(2)
+        pd.DataFrame({"x": x + 100 * x_missing * (k + 1), "y": y + 100 * y_missing * (k + 1)}) for k in range(2)
     ]
     return datasets, pattern, x_missing, y_missing
 
@@ -191,8 +191,7 @@ def _points(ax, colour):
     """Sorted (x, y) pairs drawn on ``ax`` in ``colour``."""
     rgb = to_rgba(colour)[:3]
     offsets = [
-        c.get_offsets() for c in ax.collections
-        if len(c.get_offsets()) and np.allclose(c.get_facecolor()[0][:3], rgb)
+        c.get_offsets() for c in ax.collections if len(c.get_offsets()) and np.allclose(c.get_facecolor()[0][:3], rgb)
     ]
     return sorted(map(tuple, np.concatenate(offsets).tolist())) if offsets else []
 
@@ -229,8 +228,7 @@ def test_xyplot_merged_overlays_all_panels_as_r():
 
     datasets, pattern, x_missing, y_missing = _xy_inputs()
     plt.close("all")
-    fig = xyplot(datasets, pattern, "x", "y", merge_imputations=True,
-                 observed_color=OBSERVED, imputed_color=IMPUTED)
+    fig = xyplot(datasets, pattern, "x", "y", merge_imputations=True, observed_color=OBSERVED, imputed_color=IMPUTED)
     assert isinstance(fig, Figure)
     (ax,) = fig.axes
     complete = ~x_missing & ~y_missing

@@ -40,6 +40,7 @@ def _events(mice):
 # logged events, compared with R
 # ---------------------------------------------------------------------------
 
+
 def _redundant_columns_frame():
     """``y`` incomplete; ``x3`` is ``x1 + x2`` up to 1e-3 noise, so only the
     eigenvalue step of ``remove_lindep`` catches it; ``const`` is constant;
@@ -150,6 +151,7 @@ def test_entirely_missing_column_is_kept_not_imputed_and_logged():
 # a predictor that is not imputed
 # ---------------------------------------------------------------------------
 
+
 def _empty_method_predictor_frame():
     rng = np.random.default_rng(31)
     n = 60
@@ -183,8 +185,11 @@ def test_predictor_with_empty_method_leaves_its_missing_rows_untouched(method, m
     before = df.copy(deep=True)
     mice = MICE(df)
     out = mice.impute(
-        n_imputations=2, maxit=2, method={"y": method, "z": ""},
-        predictor_matrix=full_predictor_matrix(df), seed=1,
+        n_imputations=2,
+        maxit=2,
+        method={"y": method, "z": ""},
+        predictor_matrix=full_predictor_matrix(df),
+        seed=1,
     )
     pd.testing.assert_frame_equal(df, before)
     both = df["y"].isna() & df["z"].isna()
@@ -205,26 +210,32 @@ def test_predictor_with_empty_method_leaves_its_missing_rows_untouched(method, m
 # mixed frames: dummy-coded predictors, targets keep their type (B2, B8, B9)
 # ---------------------------------------------------------------------------
 
+
 def _mixed_types_frame(n=80, seed=17):
     """Numeric, object, ordered Categorical and boolean columns, all incomplete."""
     rng = np.random.default_rng(seed)
     a = rng.normal(size=n)
     g = np.where(a + rng.normal(scale=0.8, size=n) > 0.4, "hi", np.where(a < -0.4, "lo", "mid"))
-    size = pd.Categorical(
-        rng.choice(["S", "M", "L"], size=n), categories=["S", "M", "L"], ordered=True
-    )
+    size = pd.Categorical(rng.choice(["S", "M", "L"], size=n), categories=["S", "M", "L"], ordered=True)
     flag = a + rng.normal(scale=0.8, size=n) > 0
     b = 0.5 * a + (g == "hi") - flag + rng.normal(scale=0.7, size=n)
-    df = pd.DataFrame({
-        "a": a,
-        "b": b,
-        "g": pd.Series(g, dtype=object),
-        "size": size,
-        "flag": pd.Series(flag, dtype=object),
-        "k": rng.integers(0, 5, size=n),
-    })
-    for col, rows in {"a": [1, 9, 33], "b": [4, 12, 40, 61], "g": [2, 20, 50],
-                      "size": [7, 30, 70], "flag": [3, 15, 44, 77]}.items():
+    df = pd.DataFrame(
+        {
+            "a": a,
+            "b": b,
+            "g": pd.Series(g, dtype=object),
+            "size": size,
+            "flag": pd.Series(flag, dtype=object),
+            "k": rng.integers(0, 5, size=n),
+        }
+    )
+    for col, rows in {
+        "a": [1, 9, 33],
+        "b": [4, 12, 40, 61],
+        "g": [2, 20, 50],
+        "size": [7, 30, 70],
+        "flag": [3, 15, 44, 77],
+    }.items():
         df.loc[rows, col] = np.nan
     return df
 
@@ -275,16 +286,19 @@ def test_categorical_target_reaches_the_imputer_as_categorical(method, monkeypat
 # direct calls of the imputers
 # ---------------------------------------------------------------------------
 
+
 def _direct_problem():
     rng = np.random.default_rng(9)
     n = 50
-    x = pd.DataFrame({
-        "num": rng.normal(size=n),
-        "g": pd.Series(rng.choice(["b", "a", "c"], n), dtype=object),
-        "s": pd.Series(rng.choice(["u", "v"], n), dtype="string"),
-        "size": pd.Categorical(rng.choice(["S", "M", "L"], n), categories=["S", "M", "L"], ordered=True),
-        "flag": rng.random(n) > 0.5,
-    })
+    x = pd.DataFrame(
+        {
+            "num": rng.normal(size=n),
+            "g": pd.Series(rng.choice(["b", "a", "c"], n), dtype=object),
+            "s": pd.Series(rng.choice(["u", "v"], n), dtype="string"),
+            "size": pd.Categorical(rng.choice(["S", "M", "L"], n), categories=["S", "M", "L"], ordered=True),
+            "flag": rng.random(n) > 0.5,
+        }
+    )
     y = x["num"] + (x["g"] == "c") + rng.normal(scale=0.5, size=n)
     y = y.to_numpy()
     ry = np.ones(n, dtype=bool)
@@ -367,6 +381,7 @@ def test_tree_methods_accept_string_dtype_predictors_directly(method):
 # input handling (C4)
 # ---------------------------------------------------------------------------
 
+
 def test_unsupported_dtype_raises_type_error_naming_column_and_dtype():
     from imputation import MICE
 
@@ -401,6 +416,7 @@ def test_complete_rows_in_predictor_matrix_do_not_warn():
 # ---------------------------------------------------------------------------
 # defaults and visit sequences (A2, C3, A7)
 # ---------------------------------------------------------------------------
+
 
 def test_defaults_follow_r():
     """Without arguments: pmm for every incomplete column (R uses pmm for

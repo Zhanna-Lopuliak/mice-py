@@ -8,7 +8,7 @@ import warnings
 
 from .utils import _save_or_show
 
-logger = logging.getLogger('imputation.plotting.diagnostics')
+logger = logging.getLogger("imputation.plotting.diagnostics")
 
 # Size of one panel in inches, and the largest figure side. Figures with many
 # panels shrink their panels rather than grow without bound.
@@ -28,11 +28,10 @@ def _figure_size(n_rows, n_cols):
 def _panel_grid(n_panels, n_rows, n_cols, **subplot_kws):
     """
     Create a grid of panels and remove the slots beyond ``n_panels``.
-    
+
     Returns the figure and a flat list of the ``n_panels`` axes.
     """
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=_figure_size(n_rows, n_cols),
-                             squeeze=False, **subplot_kws)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=_figure_size(n_rows, n_cols), squeeze=False, **subplot_kws)
     axes = list(axes.flatten())
     for i in range(n_panels, len(axes)):
         axes[i].remove()
@@ -79,19 +78,26 @@ def _density(ax, values, color, label=None, **line_kws):
         if values.empty:
             return None
         value = values.iloc[0]
-        ax.axvline(x=value, color=color, label=label, alpha=0.6, linestyle='--', **line_kws)
+        ax.axvline(x=value, color=color, label=label, alpha=0.6, linestyle="--", **line_kws)
         return value
     sns.kdeplot(data=values, ax=ax, color=color, label=label, alpha=0.6, **line_kws)
     return None
 
 
-def stripplot(imputed_datasets, missing_pattern, columns=None, merge_imputations=False, 
-             observed_color='blue', imputed_color='red', save_path=None):
+def stripplot(
+    imputed_datasets,
+    missing_pattern,
+    columns=None,
+    merge_imputations=False,
+    observed_color="blue",
+    imputed_color="red",
+    save_path=None,
+):
     """
     Create stripplots for imputed data showing observed and imputed values.
     First plots observed data, then for each imputation shows both observed and imputed values
     in different colors.
-    
+
     Parameters
     ----------
     imputed_datasets : list of pandas.DataFrame
@@ -116,101 +122,127 @@ def stripplot(imputed_datasets, missing_pattern, columns=None, merge_imputations
         The figure, or None (with a warning) when no column has missing values.
     """
     columns = _columns_to_plot(missing_pattern, columns)
-    
+
     if not columns:
         warnings.warn("No columns with missing values to plot", UserWarning, stacklevel=2)
         return None
-    
+
     # One panel per column, at most four per row
     fig, axes = _variable_grid(len(columns))
-    
+
     # Plot each column
     for ax, col in zip(axes, columns):
         # Get observed values (where missing_pattern is 1)
         observed_mask = missing_pattern[col] == 1
         observed = imputed_datasets[0].loc[observed_mask, col]
-        
+
         # Create data for stripplot
         plot_data = []
-        
+
         if merge_imputations:
             # Add observed-only data
-            plot_data.append(pd.DataFrame({
-                'value': observed.values,
-                'type': ['Observed'] * len(observed),
-                'imputation': ['Observed Only'] * len(observed)
-            }))
-            
+            plot_data.append(
+                pd.DataFrame(
+                    {
+                        "value": observed.values,
+                        "type": ["Observed"] * len(observed),
+                        "imputation": ["Observed Only"] * len(observed),
+                    }
+                )
+            )
+
             # Add observed data again for the second column
-            plot_data.append(pd.DataFrame({
-                'value': observed.values,
-                'type': ['Observed'] * len(observed),
-                'imputation': ['Observed + Imputed'] * len(observed)
-            }))
-            
+            plot_data.append(
+                pd.DataFrame(
+                    {
+                        "value": observed.values,
+                        "type": ["Observed"] * len(observed),
+                        "imputation": ["Observed + Imputed"] * len(observed),
+                    }
+                )
+            )
+
             # Combine all imputed values
             all_imp_values = []
             for df in imputed_datasets:
                 imp_values = df.loc[~observed_mask, col]
                 all_imp_values.extend(imp_values.values)
-            
+
             # Add all imputed values to the second column
-            plot_data.append(pd.DataFrame({
-                'value': all_imp_values,
-                'type': ['Imputed'] * len(all_imp_values),
-                'imputation': ['Observed + Imputed'] * len(all_imp_values)
-            }))
+            plot_data.append(
+                pd.DataFrame(
+                    {
+                        "value": all_imp_values,
+                        "type": ["Imputed"] * len(all_imp_values),
+                        "imputation": ["Observed + Imputed"] * len(all_imp_values),
+                    }
+                )
+            )
         else:
             # Add observed data
-            plot_data.append(pd.DataFrame({
-                'value': observed.values,
-                'type': ['Observed'] * len(observed),
-                'imputation': ['Observed'] * len(observed)
-            }))
-            
+            plot_data.append(
+                pd.DataFrame(
+                    {
+                        "value": observed.values,
+                        "type": ["Observed"] * len(observed),
+                        "imputation": ["Observed"] * len(observed),
+                    }
+                )
+            )
+
             # Add each imputation
             for i, df in enumerate(imputed_datasets, 1):
                 # Get imputed values for this imputation
                 imp_values = df.loc[~observed_mask, col]
-                
+
                 # Add observed and imputed values
-                imp_data = pd.DataFrame({
-                    'value': np.concatenate([observed.values, imp_values.values]),  # Use same observed values
-                    'type': ['Observed'] * len(observed) + ['Imputed'] * len(imp_values),
-                    'imputation': [f'Imp {i}'] * (len(observed) + len(imp_values))
-                })
+                imp_data = pd.DataFrame(
+                    {
+                        "value": np.concatenate([observed.values, imp_values.values]),  # Use same observed values
+                        "type": ["Observed"] * len(observed) + ["Imputed"] * len(imp_values),
+                        "imputation": [f"Imp {i}"] * (len(observed) + len(imp_values)),
+                    }
+                )
                 plot_data.append(imp_data)
-        
+
         # Combine all data
         plot_data = pd.concat(plot_data, ignore_index=True)
-        
+
         # Create stripplot
         sns.stripplot(
             data=plot_data,
-            x='imputation',
-            y='value',
-            hue='type',
+            x="imputation",
+            y="value",
+            hue="type",
             ax=ax,
             jitter=True,
-            palette={'Observed': observed_color, 'Imputed': imputed_color},
+            palette={"Observed": observed_color, "Imputed": imputed_color},
             legend=False,
             alpha=0.6,
-            linewidth=0.5
+            linewidth=0.5,
         )
-        
+
         # Customize plot
-        ax.set_title(f'{col}')
-        ax.set_ylabel('Value')
-        ax.set_xlabel('')
-        
+        ax.set_title(f"{col}")
+        ax.set_ylabel("Value")
+        ax.set_xlabel("")
+
         # Rotate x-axis labels for better readability
-        plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
-    
+        plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+
     fig.tight_layout()
     return _save_or_show(fig, save_path)
 
-def bwplot(imputed_datasets, missing_pattern, columns=None, merge_imputations=False,
-          observed_color='blue', imputed_color='red', save_path=None):
+
+def bwplot(
+    imputed_datasets,
+    missing_pattern,
+    columns=None,
+    merge_imputations=False,
+    observed_color="blue",
+    imputed_color="red",
+    save_path=None,
+):
     """
     Create box-and-whisker plots for imputed data showing observed and imputed values.
     First plots observed data, then for each imputation shows only imputed values
@@ -218,7 +250,7 @@ def bwplot(imputed_datasets, missing_pattern, columns=None, merge_imputations=Fa
 
     As in R's ``bwplot.mids``, values beyond the whiskers (1.5 times the
     interquartile range from the box) are drawn as outliers.
-    
+
     Parameters
     ----------
     imputed_datasets : list of pandas.DataFrame
@@ -242,135 +274,151 @@ def bwplot(imputed_datasets, missing_pattern, columns=None, merge_imputations=Fa
         The figure, or None (with a warning) when no column has missing values.
     """
     columns = _columns_to_plot(missing_pattern, columns)
-    
+
     if not columns:
         warnings.warn("No columns with missing values to plot", UserWarning, stacklevel=2)
         return None
-    
+
     # One panel per column, at most four per row
     fig, axes = _variable_grid(len(columns))
-    
+
     # Plot each column
     for ax, col in zip(axes, columns):
         # Get observed values (where missing_pattern is 1)
         observed_mask = missing_pattern[col] == 1
         observed = imputed_datasets[0].loc[observed_mask, col]
-        
+
         # Create data for boxplot
         plot_data = []
-        
+
         if merge_imputations:
             # Add observed data
-            plot_data.append(pd.DataFrame({
-                'value': observed.values,
-                'type': ['Observed'] * len(observed),
-                'imputation': ['Observed'] * len(observed)
-            }))
-            
+            plot_data.append(
+                pd.DataFrame(
+                    {
+                        "value": observed.values,
+                        "type": ["Observed"] * len(observed),
+                        "imputation": ["Observed"] * len(observed),
+                    }
+                )
+            )
+
             # Combine all imputed values
             all_imp_values = []
             for df in imputed_datasets:
                 imp_values = df.loc[~observed_mask, col]
                 all_imp_values.extend(imp_values.values)
-            
+
             # Add all imputed values together
-            plot_data.append(pd.DataFrame({
-                'value': all_imp_values,
-                'type': ['Imputed'] * len(all_imp_values),
-                'imputation': ['Imputed'] * len(all_imp_values)
-            }))
+            plot_data.append(
+                pd.DataFrame(
+                    {
+                        "value": all_imp_values,
+                        "type": ["Imputed"] * len(all_imp_values),
+                        "imputation": ["Imputed"] * len(all_imp_values),
+                    }
+                )
+            )
         else:
             # Add observed data
-            plot_data.append(pd.DataFrame({
-                'value': observed.values,
-                'type': ['Observed'] * len(observed),
-                'imputation': ['Observed'] * len(observed)
-            }))
-            
+            plot_data.append(
+                pd.DataFrame(
+                    {
+                        "value": observed.values,
+                        "type": ["Observed"] * len(observed),
+                        "imputation": ["Observed"] * len(observed),
+                    }
+                )
+            )
+
             # Add each imputation
             for i, df in enumerate(imputed_datasets, 1):
                 # Get only imputed values for this imputation
                 imp_values = df.loc[~observed_mask, col]
-                
+
                 # Add only imputed values
-                imp_data = pd.DataFrame({
-                    'value': imp_values.values,
-                    'type': ['Imputed'] * len(imp_values),
-                    'imputation': [f'Imp {i}'] * len(imp_values)
-                })
+                imp_data = pd.DataFrame(
+                    {
+                        "value": imp_values.values,
+                        "type": ["Imputed"] * len(imp_values),
+                        "imputation": [f"Imp {i}"] * len(imp_values),
+                    }
+                )
                 plot_data.append(imp_data)
-        
+
         # Combine all data
         plot_data = pd.concat(plot_data, ignore_index=True)
-        
+
         # Create boxplot: dashed whiskers, outliers shown, no legend (the
         # x-axis labels already say which box is observed and which imputed)
         sns.boxplot(
             data=plot_data,
-            x='imputation',
-            y='value',
-            hue='type',
+            x="imputation",
+            y="value",
+            hue="type",
             ax=ax,
-            palette={'Observed': observed_color, 'Imputed': imputed_color},
+            palette={"Observed": observed_color, "Imputed": imputed_color},
             width=0.8,
             showfliers=True,
             showcaps=True,
             showmeans=False,
             legend=False,
-            medianprops={'visible': False},  
-            boxprops={'alpha': 0.6},
-            whiskerprops={'alpha': 0.6, 'linestyle': '--'},
-            capprops={'alpha': 0.6},
-            flierprops={'marker': 'o', 'alpha': 0.6}
+            medianprops={"visible": False},
+            boxprops={"alpha": 0.6},
+            whiskerprops={"alpha": 0.6, "linestyle": "--"},
+            capprops={"alpha": 0.6},
+            flierprops={"marker": "o", "alpha": 0.6},
         )
-        
+
         # Add median points
         if merge_imputations:
             # Add observed data point
-            observed_data = plot_data[plot_data['imputation'] == 'Observed']
+            observed_data = plot_data[plot_data["imputation"] == "Observed"]
             if not observed_data.empty:
-                median_val = observed_data['value'].median()
-                ax.plot(0, median_val, 'o', color=observed_color, alpha=0.6, markersize=6, zorder=3)
-            
+                median_val = observed_data["value"].median()
+                ax.plot(0, median_val, "o", color=observed_color, alpha=0.6, markersize=6, zorder=3)
+
             # Add imputed data point
-            imp_data = plot_data[plot_data['imputation'] == 'Imputed']
+            imp_data = plot_data[plot_data["imputation"] == "Imputed"]
             if not imp_data.empty:
-                median_val = imp_data['value'].median()
-                ax.plot(1, median_val, 'o', color=imputed_color, alpha=0.6, markersize=6, zorder=3)
+                median_val = imp_data["value"].median()
+                ax.plot(1, median_val, "o", color=imputed_color, alpha=0.6, markersize=6, zorder=3)
         else:
             # Add observed data point
-            observed_data = plot_data[plot_data['imputation'] == 'Observed']
+            observed_data = plot_data[plot_data["imputation"] == "Observed"]
             if not observed_data.empty:
-                median_val = observed_data['value'].median()
-                ax.plot(0, median_val, 'o', color=observed_color, alpha=0.6, markersize=6, zorder=3)
-            
+                median_val = observed_data["value"].median()
+                ax.plot(0, median_val, "o", color=observed_color, alpha=0.6, markersize=6, zorder=3)
+
             # Then add imputed data points
             for i, df in enumerate(imputed_datasets, 1):
-                imp_data = plot_data[(plot_data['imputation'] == f'Imp {i}') & (plot_data['type'] == 'Imputed')]
+                imp_data = plot_data[(plot_data["imputation"] == f"Imp {i}") & (plot_data["type"] == "Imputed")]
                 if not imp_data.empty:
-                    median_val = imp_data['value'].median()
-                    ax.plot(i, median_val, 'o', color=imputed_color, alpha=0.6, markersize=6, zorder=3)
-        
+                    median_val = imp_data["value"].median()
+                    ax.plot(i, median_val, "o", color=imputed_color, alpha=0.6, markersize=6, zorder=3)
+
         # Customize plot
-        ax.set_title(f'{col}')
-        ax.set_ylabel('Value')
-        ax.set_xlabel('')
-        
+        ax.set_title(f"{col}")
+        ax.set_ylabel("Value")
+        ax.set_xlabel("")
+
         # Rotate x-axis labels for better readability
-        plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
-    
+        plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+
     fig.tight_layout()
     return _save_or_show(fig, save_path)
 
-def densityplot(imputed_datasets, missing_pattern, columns=None, 
-               observed_color='blue', imputed_color='red', save_path=None):
+
+def densityplot(
+    imputed_datasets, missing_pattern, columns=None, observed_color="blue", imputed_color="red", save_path=None
+):
     """
     Create density plots (KDE) for observed and imputed data.
     Shows the distribution of observed data in blue and imputed data in red.
 
     Values without variance (for example a single imputed cell) have no
     kernel density; they are drawn as a dashed vertical line at the value.
-    
+
     Parameters
     ----------
     imputed_datasets : list of pandas.DataFrame
@@ -392,52 +440,54 @@ def densityplot(imputed_datasets, missing_pattern, columns=None,
         The figure, or None (with a warning) when no column has missing values.
     """
     columns = _columns_to_plot(missing_pattern, columns)
-    
+
     if not columns:
         warnings.warn("No columns with missing values to plot", UserWarning, stacklevel=2)
         return None
-    
+
     # One panel per column, at most four per row
     fig, axes = _variable_grid(len(columns))
-    
+
     # Plot each column
     for ax, col in zip(axes, columns):
         # Get observed values (where missing_pattern is 1)
         observed_mask = missing_pattern[col] == 1
         observed = imputed_datasets[0].loc[observed_mask, col]
-        
+
         # Plot observed data KDE
-        _density(ax, observed, observed_color, label='Observed', linewidth=2.5)
-        
+        _density(ax, observed, observed_color, label="Observed", linewidth=2.5)
+
         # Plot imputed data KDE for each imputation
         for i, df in enumerate(imputed_datasets, 1):
             # Get only imputed values
             imp_values = df.loc[~observed_mask, col]
             # Only add label for the first imputation
-            label = 'Imputed' if i == 1 else None
+            label = "Imputed" if i == 1 else None
             _density(ax, imp_values, imputed_color, label=label)
-        
+
         # Customize plot
-        ax.set_title(f'{col}')
-        ax.set_xlabel('Value')
-        ax.set_ylabel('Density')
-        
+        ax.set_title(f"{col}")
+        ax.set_xlabel("Value")
+        ax.set_ylabel("Density")
+
         # Handle legend - only for the first plot
         if col == columns[0]:
             handles, labels = ax.get_legend_handles_labels()
             if handles:  # If we have any handles
-                ax.legend(handles, labels, title='')
-    
+                ax.legend(handles, labels, title="")
+
     fig.tight_layout()
     return _save_or_show(fig, save_path)
 
-def densityplot_split(imputed_datasets, missing_pattern, column,
-                     observed_color='blue', imputed_color='red', save_path=None):
+
+def densityplot_split(
+    imputed_datasets, missing_pattern, column, observed_color="blue", imputed_color="red", save_path=None
+):
     """
     Create separate density plots (KDE) for observed data and each imputed dataset.
     Shows the distribution of observed data in blue and imputed data in red,
     with each imputation in a separate subplot. All panels share their axes.
-    
+
     Parameters
     ----------
     imputed_datasets : list of pandas.DataFrame
@@ -462,43 +512,52 @@ def densityplot_split(imputed_datasets, missing_pattern, column,
     if column not in missing_pattern.columns:
         warnings.warn(f"Column {column} not found in the data", UserWarning, stacklevel=2)
         return None
-    
+
     if not missing_pattern[column].eq(0).any():
         warnings.warn(f"No missing values in column {column}", UserWarning, stacklevel=2)
         return None
-    
+
     # Get observed values (where missing_pattern is 1)
     observed_mask = missing_pattern[column] == 1
     observed = imputed_datasets[0].loc[observed_mask, column]
-    
+
     # One panel for the observed data and one per imputation, on common axes
     n_plots = len(imputed_datasets) + 1  # +1 for observed data
     fig, axes = _imputation_grid(n_plots, sharex=True, sharey=True)
-    
+
     # Plot observed data; with no variance a dashed vertical line marks the value
     value = _density(axes[0], observed, observed_color, linewidth=2.5)
-    axes[0].set_title('Observed' if value is None else f'Observed (constant value: {value:.2f})')
-    axes[0].set_xlabel('Value')
-    axes[0].set_ylabel('Density')
-    
+    axes[0].set_title("Observed" if value is None else f"Observed (constant value: {value:.2f})")
+    axes[0].set_xlabel("Value")
+    axes[0].set_ylabel("Density")
+
     # Plot each imputation
     for i, df in enumerate(imputed_datasets, 1):
         # Get only imputed values
         imp_values = df.loc[~observed_mask, column]
-        
+
         value = _density(axes[i], imp_values, imputed_color)
-        axes[i].set_title(f'Imp {i}' if value is None else f'Imp {i} (constant value: {value:.2f})')
-        axes[i].set_xlabel('Value')
-        axes[i].set_ylabel('Density')
-    
+        axes[i].set_title(f"Imp {i}" if value is None else f"Imp {i} (constant value: {value:.2f})")
+        axes[i].set_xlabel("Value")
+        axes[i].set_ylabel("Density")
+
     # Add overall title
-    fig.suptitle(f'Density plots for {column}', y=1.02)
-    
+    fig.suptitle(f"Density plots for {column}", y=1.02)
+
     fig.tight_layout()
     return _save_or_show(fig, save_path)
 
-def xyplot(imputed_datasets, missing_pattern, x, y, merge_imputations=False,
-          observed_color='blue', imputed_color='red', save_path=None):
+
+def xyplot(
+    imputed_datasets,
+    missing_pattern,
+    x,
+    y,
+    merge_imputations=False,
+    observed_color="blue",
+    imputed_color="red",
+    save_path=None,
+):
     """
     Create scatter plots of two columns, showing observed and imputed values.
 
@@ -514,7 +573,7 @@ def xyplot(imputed_datasets, missing_pattern, x, y, merge_imputations=False,
       imputation.
 
     All panels share their axes.
-    
+
     Parameters
     ----------
     imputed_datasets : list of pandas.DataFrame
@@ -549,7 +608,7 @@ def xyplot(imputed_datasets, missing_pattern, x, y, merge_imputations=False,
         missing_cols.append(f"x-axis column '{x}'")
     if y not in missing_pattern.columns:
         missing_cols.append(f"y-axis column '{y}'")
-    
+
     if missing_cols:
         warnings.warn(
             f"The following columns are not found in the data: {', '.join(missing_cols)}. "
@@ -558,67 +617,71 @@ def xyplot(imputed_datasets, missing_pattern, x, y, merge_imputations=False,
             stacklevel=2,
         )
         return None
-    
+
     # Rows with an observed y, and rows with both x and y observed
     y_observed = missing_pattern[y] == 1
     complete = y_observed & (missing_pattern[x] == 1)
     first = imputed_datasets[0]
-    
+
     if merge_imputations:
         # Create a single plot
         fig, ax = plt.subplots(figsize=(8, 6))
-        
+
         # Observed colour: the complete rows of the incomplete data, and the
         # rows with an observed y of every completed dataset
         observed_x = pd.concat([first.loc[complete, x]] + [df.loc[y_observed, x] for df in imputed_datasets])
         observed_y = pd.concat([first.loc[complete, y]] + [df.loc[y_observed, y] for df in imputed_datasets])
-        ax.scatter(observed_x, observed_y, color=observed_color, alpha=0.6, label='Observed')
-        
+        ax.scatter(observed_x, observed_y, color=observed_color, alpha=0.6, label="Observed")
+
         # Imputed colour: the rows with an imputed y of every completed dataset
         imp_x = pd.concat([df.loc[~y_observed, x] for df in imputed_datasets])
         imp_y = pd.concat([df.loc[~y_observed, y] for df in imputed_datasets])
-        ax.scatter(imp_x, imp_y, color=imputed_color, alpha=0.6, label=f'Imputed ({y})')
-        
+        ax.scatter(imp_x, imp_y, color=imputed_color, alpha=0.6, label=f"Imputed ({y})")
+
         # Customize plot
         ax.set_xlabel(x)
         ax.set_ylabel(y)
         ax.legend()
-        ax.set_title(f'Scatter plot of {x} vs {y} (all imputations)')
-        
+        ax.set_title(f"Scatter plot of {x} vs {y} (all imputations)")
+
     else:
         # One panel for the observed data and one per imputation, on common axes
         n_plots = len(imputed_datasets) + 1  # +1 for observed data
         fig, axes = _imputation_grid(n_plots, sharex=True, sharey=True)
-        
+
         # First panel: the incomplete data, so only rows with x and y observed
-        axes[0].scatter(first.loc[complete, x], first.loc[complete, y],
-                        color=observed_color, alpha=0.6, label='Observed')
+        axes[0].scatter(
+            first.loc[complete, x], first.loc[complete, y], color=observed_color, alpha=0.6, label="Observed"
+        )
         axes[0].set_xlabel(x)
         axes[0].set_ylabel(y)
         axes[0].legend()
-        axes[0].set_title('Observed')
-        
+        axes[0].set_title("Observed")
+
         # Plot each imputation
         for i, df in enumerate(imputed_datasets, 1):
             # Rows with an observed y (their x may be imputed)
-            axes[i].scatter(df.loc[y_observed, x], df.loc[y_observed, y],
-                            color=observed_color, alpha=0.6, label=f'Observed ({y})')
-            
+            axes[i].scatter(
+                df.loc[y_observed, x], df.loc[y_observed, y], color=observed_color, alpha=0.6, label=f"Observed ({y})"
+            )
+
             # Rows with an imputed y
-            axes[i].scatter(df.loc[~y_observed, x], df.loc[~y_observed, y],
-                            color=imputed_color, alpha=0.6, label=f'Imputed ({y})')
-            
+            axes[i].scatter(
+                df.loc[~y_observed, x], df.loc[~y_observed, y], color=imputed_color, alpha=0.6, label=f"Imputed ({y})"
+            )
+
             # Customize plot
             axes[i].set_xlabel(x)
             axes[i].set_ylabel(y)
             axes[i].legend()
-            axes[i].set_title(f'Imp {i}')
-        
+            axes[i].set_title(f"Imp {i}")
+
         # Add overall title
-        fig.suptitle(f'Scatter plots of {x} vs {y}', y=1.02)
-    
+        fig.suptitle(f"Scatter plots of {x} vs {y}", y=1.02)
+
     fig.tight_layout()
     return _save_or_show(fig, save_path)
+
 
 def plot_chain_stats(chain_mean, chain_var, columns=None, figsize=(10, 5), save_path=None):
     """
@@ -674,9 +737,7 @@ def plot_chain_stats(chain_mean, chain_var, columns=None, figsize=(10, 5), save_
 
     n_rows = len(valid_columns)
     height = min(figsize[1] * n_rows, max(_MAX_FIGURE_INCHES, figsize[1]))
-    fig, axes = plt.subplots(n_rows, 2,
-                            figsize=(figsize[0], height),
-                            squeeze=False)
+    fig, axes = plt.subplots(n_rows, 2, figsize=(figsize[0], height), squeeze=False)
 
     # One colour per chain, enough for the column with the most chains
     n_chains = max(np.shape(chain_mean[col])[1] for col in valid_columns)
@@ -692,23 +753,26 @@ def plot_chain_stats(chain_mean, chain_var, columns=None, figsize=(10, 5), save_
         # Plot means
         ax_mean = axes[row_idx, 0]
         for chain_idx in range(mean_mat.shape[1]):
-            ax_mean.plot(x, mean_mat[:, chain_idx],
-                        marker='o', alpha=0.7,
-                        label=f'Chain {chain_idx + 1}',
-                        color=palette[chain_idx])
+            ax_mean.plot(
+                x,
+                mean_mat[:, chain_idx],
+                marker="o",
+                alpha=0.7,
+                label=f"Chain {chain_idx + 1}",
+                color=palette[chain_idx],
+            )
         ax_mean.set_title(f"{col} – Mean")
         ax_mean.set_xlabel("Iteration")
         ax_mean.set_ylabel("Mean")
         if row_idx == 0:
-            ax_mean.legend(loc='best')
+            ax_mean.legend(loc="best")
 
         # Plot standard deviations
         ax_sd = axes[row_idx, 1]
         for chain_idx in range(sd_mat.shape[1]):
-            ax_sd.plot(x, sd_mat[:, chain_idx],
-                       marker='o', alpha=0.7,
-                       label=f'Chain {chain_idx + 1}',
-                       color=palette[chain_idx])
+            ax_sd.plot(
+                x, sd_mat[:, chain_idx], marker="o", alpha=0.7, label=f"Chain {chain_idx + 1}", color=palette[chain_idx]
+            )
         ax_sd.set_title(f"{col} – SD")
         ax_sd.set_xlabel("Iteration")
         ax_sd.set_ylabel("Standard deviation")

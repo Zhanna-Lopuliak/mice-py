@@ -6,7 +6,7 @@ import logging
 
 from .design import obtain_design
 
-logger = logging.getLogger('imputation.cart')
+logger = logging.getLogger("imputation.cart")
 
 
 def _design_matrix(x) -> np.ndarray:
@@ -49,6 +49,7 @@ def _label_codes(y_obs: np.ndarray) -> np.ndarray:
     except TypeError:  # labels that cannot be ordered: order of appearance
         codes, _ = pd.factorize(y_obs, sort=False)
     return np.asarray(codes)
+
 
 def _draw_pooled_donors(
     nodes_obs: np.ndarray,
@@ -138,10 +139,10 @@ def cart(
 ) -> np.ndarray:
     """
     Impute missing values using Classification and Regression Trees (CART).
-    
+
     This function is designed to be compatible with the MICE framework and
     follows R's ``mice.impute.cart``, which grows the tree with ``rpart``.
-    
+
     Parameters
     ----------
     y : Union[pd.Series, np.ndarray]
@@ -183,7 +184,7 @@ def cart(
         ``ccp_alpha`` or ``random_state``.
     rng : np.random.Generator, optional
         Random number generator for reproducibility. If None, a fresh generator is used.
-        
+
     Returns
     -------
     np.ndarray
@@ -196,7 +197,7 @@ def cart(
     ------
     ValueError
         If `y` has no observed value and some value is to be imputed.
-        
+
     Notes
     -----
     The procedure follows R's ``mice.impute.cart``:
@@ -218,43 +219,41 @@ def cart(
 
     tree_params = dict(tree_params or {})
     reserved = sorted(
-        {"min_samples_leaf", "min_samples_split", "max_depth", "ccp_alpha", "random_state"}
-        & set(tree_params)
+        {"min_samples_leaf", "min_samples_split", "max_depth", "ccp_alpha", "random_state"} & set(tree_params)
     )
     if reserved:
         raise TypeError(
             f"tree_params must not set {reserved}: pass min_samples_leaf, min_samples_split, "
             "max_depth and ccp_alpha as arguments of cart; the random state is drawn from rng."
         )
-    
+
     x = _design_matrix(x)
     id_obs = np.asarray(id_obs, dtype=bool)
-    
+
     if id_mis is None:
         id_mis = ~id_obs
     id_mis = np.asarray(id_mis, dtype=bool)
 
     if rng is None:
         rng = np.random.default_rng()
-    
+
     min_samples_leaf = max(1, int(min_samples_leaf))
     if min_samples_split is None:
         min_samples_split = 3 * min_samples_leaf
-    
+
     if x.shape[1] == 0:
         x = np.ones((len(x), 1))
-    
+
     x_obs = x[id_obs]
     x_mis = x[id_mis]
     is_numeric = _is_numeric_target(y)
     y_obs = np.asarray(y)[id_obs]
-    
+
     if len(x_mis) == 0:
         return np.array([])
     if len(y_obs) == 0:
         raise ValueError(
-            "cart: the target has no observed value in the rows used for the model, "
-            "so there is no donor to draw from."
+            "cart: the target has no observed value in the rows used for the model, so there is no donor to draw from."
         )
 
     if is_numeric:

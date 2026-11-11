@@ -44,9 +44,7 @@ def test_quickpred_matches_r(case):
         method=case["method"],
     )
     expected = _expected(case)
-    pd.testing.assert_frame_equal(
-        got.loc[expected.index, expected.columns].astype(int), expected, check_names=False
-    )
+    pd.testing.assert_frame_equal(got.loc[expected.index, expected.columns].astype(int), expected, check_names=False)
 
 
 # The same rule is reached through the keyword arguments of impute()

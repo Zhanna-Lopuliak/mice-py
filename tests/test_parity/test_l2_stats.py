@@ -50,9 +50,7 @@ def test_pooling_merges_small_categories_into_one_bin():
     # threshold on the total count: 10 * 23_005 / 3_000 = 76.7; only the
     # category with 5 draws is small, and the pooled bin then absorbs the
     # smallest remaining category (1_150 draws)
-    np.testing.assert_array_equal(
-        pool_small_categories(r, p), [[10_000, 9_000, 1_005], [1_500, 1_350, 150]]
-    )
+    np.testing.assert_array_equal(pool_small_categories(r, p), [[10_000, 9_000, 1_005], [1_500, 1_350, 150]])
 
 
 def test_pooling_leaves_every_expected_count_at_least_min_expected():
@@ -85,10 +83,7 @@ def test_chi2_is_calibrated_under_the_null():
     # donor-like distribution: a few likely donors, a long tail of rare ones
     rng = np.random.default_rng(4)
     prob = np.r_[0.2, 0.2, 0.2, 0.15, 0.15, np.full(20, 0.1 / 20)]
-    pvals = np.array([
-        chi2_homogeneity(rng.multinomial(N_R, prob), rng.multinomial(N_P, prob))[2]
-        for _ in range(400)
-    ])
+    pvals = np.array([chi2_homogeneity(rng.multinomial(N_R, prob), rng.multinomial(N_P, prob))[2] for _ in range(400)])
     assert 0.02 <= np.mean(pvals < 0.05) <= 0.09
     assert pvals.min() > 1e-4
 

@@ -8,7 +8,7 @@ from .cart import _design_matrix, _draw_pooled_donors, _is_numeric_target, _labe
 
 # Get a logger for the current module.
 # This will be a child of the 'imputation' logger configured in MICE.py
-logger = logging.getLogger('imputation.rf')
+logger = logging.getLogger("imputation.rf")
 
 # ranger's default min.node.size: a node is split only if it holds more
 # observations than this (5 for regression, 1 for classification). The
@@ -31,10 +31,10 @@ def rf(
 ) -> np.ndarray:
     """
     Impute missing values using Random Forests with donor sampling.
-    
+
     This function is designed to be compatible with the MICE framework and
     follows R's ``mice.impute.rf``, which grows the forest with ``ranger``.
-    
+
     Parameters
     ----------
     y : Union[pd.Series, np.ndarray]
@@ -71,7 +71,7 @@ def rf(
         ``n_jobs`` is left at scikit-learn's default (one job).
     rng : np.random.Generator, optional
         Random number generator for reproducibility. If None, a fresh generator is used.
-        
+
     Returns
     -------
     np.ndarray
@@ -84,7 +84,7 @@ def rf(
     ------
     ValueError
         If `y` has no observed value and some value is to be imputed.
-        
+
     Notes
     -----
     Algorithm (Doove et al., 2014), as R's ``mice.impute.rf``:
@@ -112,16 +112,16 @@ def rf(
             "n_estimators, max_depth, min_samples_leaf and min_samples_split as arguments "
             "of rf; the random state is drawn from rng."
         )
-    
+
     if rng is None:
         rng = np.random.default_rng()
-    
+
     x = _design_matrix(x)
     id_obs = np.asarray(id_obs, bool)
     if id_mis is None:
         id_mis = ~id_obs
     id_mis = np.asarray(id_mis, bool)
-    
+
     is_numeric = _is_numeric_target(y)
     x_obs, y_obs = x[id_obs], np.asarray(y)[id_obs]
     x_mis = x[id_mis]
@@ -129,10 +129,9 @@ def rf(
         return np.array([])
     if len(y_obs) == 0:
         raise ValueError(
-            "rf: the target has no observed value in the rows used for the model, "
-            "so there is no donor to draw from."
+            "rf: the target has no observed value in the rows used for the model, so there is no donor to draw from."
         )
-    
+
     if x.shape[1] == 0:
         # No predictor: every tree is a single leaf holding all observed
         # values, so the imputation is a draw from them (as cart does)

@@ -16,8 +16,21 @@ from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
 
 PLANNED_COLUMNS = [
-    "m", "estimate", "ubar", "b", "t", "dfcom", "df", "riv", "lambda", "fmi",
-    "std_error", "statistic", "p_value", "conf_low", "conf_high",
+    "m",
+    "estimate",
+    "ubar",
+    "b",
+    "t",
+    "dfcom",
+    "df",
+    "riv",
+    "lambda",
+    "fmi",
+    "std_error",
+    "statistic",
+    "p_value",
+    "conf_low",
+    "conf_high",
 ]
 SCALE_FREE = ["df", "riv", "lambda", "fmi", "statistic", "p_value"]
 
@@ -53,6 +66,7 @@ def _pool(est, var, dfcom):
 # ---------------------------------------------------------------------------
 # pool_estimates
 # ---------------------------------------------------------------------------
+
 
 def test_pool_estimates_table_layout():
     from imputation.pooling import pool_estimates
@@ -124,6 +138,7 @@ def test_pool_estimates_ignores_order_of_imputations():
 def test_pool_estimates_scale_equivariance():
     """Estimates times c and variances times c^2: estimate and std_error scale
     by c; df, riv, lambda, fmi, statistic and p_value do not change."""
+
     @_settings(40)
     @given(pooling_inputs(), st.floats(0.01, 100.0))
     def check(inp, c):
@@ -143,6 +158,7 @@ def test_pool_estimates_scale_equivariance():
 # ---------------------------------------------------------------------------
 # barnard_rubin
 # ---------------------------------------------------------------------------
+
 
 def test_barnard_rubin_bounds():
     from imputation.pooling import barnard_rubin
@@ -179,6 +195,7 @@ def test_barnard_rubin_bounds():
 # ---------------------------------------------------------------------------
 # MICE.pool()["table"]
 # ---------------------------------------------------------------------------
+
 
 def test_mice_pool_table():
     from imputation import MICE
@@ -273,6 +290,7 @@ def test_pooled_result_refuses_joint_tests():
 # Descriptive pooling: pool_descriptive_statistics and PoolingResult
 # ---------------------------------------------------------------------------
 
+
 def _descriptive_datasets(m=4, n=30, seed=11):
     """m completed versions of one dataset that differ in 8 'imputed' rows."""
     rng = np.random.default_rng(seed)
@@ -332,9 +350,16 @@ def test_pooled_proportion_follows_rubin_and_barnard_rubin():
 
     summ = pool_descriptive_statistics(datasets).summary().set_index("Parameter").loc["g[a]"]
     expected = {
-        "Estimate": qbar, "Std_Error": np.sqrt(t), "DF": df, "CI_Lower": qbar - half,
-        "CI_Upper": qbar + half, "Within_Var": ubar, "Between_Var": b, "Total_Var": t,
-        "Lambda": lam, "FMI": fmi,
+        "Estimate": qbar,
+        "Std_Error": np.sqrt(t),
+        "DF": df,
+        "CI_Lower": qbar - half,
+        "CI_Upper": qbar + half,
+        "Within_Var": ubar,
+        "Between_Var": b,
+        "Total_Var": t,
+        "Lambda": lam,
+        "FMI": fmi,
     }
     for col, value in expected.items():
         np.testing.assert_allclose(summ[col], value, rtol=1e-10, err_msg=col)
@@ -343,6 +368,7 @@ def test_pooled_proportion_follows_rubin_and_barnard_rubin():
 # ---------------------------------------------------------------------------
 # apply_rubins_rules (kept for existing callers)
 # ---------------------------------------------------------------------------
+
 
 def _rubin(est, var):
     from imputation.pooling import apply_rubins_rules

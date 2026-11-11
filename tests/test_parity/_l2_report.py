@@ -64,8 +64,7 @@ def main():
             other.append(f"donor-set mismatches {len(H.donor_set_mismatches(r_sum, py_sum))}")
         print(
             f"{method:<11}{name:<6}{comp.t1_min_p:>10.3g}"
-            f"{fmt(comp.t2_max_z, '.2f'):>9}{fmt(comp.t3_max_z, '.2f'):>9}  "
-            + "; ".join(other + [f"[{args}]"])
+            f"{fmt(comp.t2_max_z, '.2f'):>9}{fmt(comp.t3_max_z, '.2f'):>9}  " + "; ".join(other + [f"[{args}]"])
         )
 
 

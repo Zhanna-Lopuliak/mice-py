@@ -51,6 +51,7 @@ def test_quantify_matches_r_up_to_sign(case):
 # PMM with one donor and R's random numbers
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("case", PMM_ONE["cases"], ids=[c["name"] for c in PMM_ONE["cases"]])
 def test_pmm_one_donor_matches_r(case):
     is_factor = case["levels"] is not None
@@ -63,9 +64,7 @@ def test_pmm_one_donor_matches_r(case):
 
     assert rng.unused == (0, 0), "not every captured R draw was consumed"
     if is_factor:
-        np.testing.assert_array_equal(
-            np.asarray(imputed, dtype=object), np.array(case["imputed"], dtype=object)
-        )
+        np.testing.assert_array_equal(np.asarray(imputed, dtype=object), np.array(case["imputed"], dtype=object))
     else:
         # donors are observed values, so the match must be exact
         np.testing.assert_array_equal(np.asarray(imputed, dtype=float), as_array(case["imputed"]))

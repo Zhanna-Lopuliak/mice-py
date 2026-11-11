@@ -27,10 +27,7 @@ def xfail(reason):
 def method_params(xfails=None, methods=METHODS):
     """Parametrize over ``methods``; ``xfails`` maps a method to its reason."""
     xfails = xfails or {}
-    return [
-        pytest.param(m, marks=xfail(xfails[m]), id=m) if m in xfails else pytest.param(m, id=m)
-        for m in methods
-    ]
+    return [pytest.param(m, marks=xfail(xfails[m]), id=m) if m in xfails else pytest.param(m, id=m) for m in methods]
 
 
 def full_predictor_matrix(df):
@@ -80,6 +77,7 @@ def impute(df, method, n_imputations=N_IMP, maxit=MAXIT, seed=SEED, predictor_ma
 # ---------------------------------------------------------------------------
 # Data builders
 # ---------------------------------------------------------------------------
+
 
 def _knock_out(df, rng, fractions):
     n = len(df)
@@ -160,6 +158,7 @@ def regression_frame(n=40, seed=3):
 # ---------------------------------------------------------------------------
 # Assertions
 # ---------------------------------------------------------------------------
+
 
 def label_key(value):
     """Comparable key that keeps booleans apart from the numbers 0 and 1."""

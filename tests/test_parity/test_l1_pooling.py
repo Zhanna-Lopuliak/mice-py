@@ -218,9 +218,7 @@ def pooled_lm():
 
 
 def test_pool_linear_model_estimates_match_r(pooled_lm):
-    np.testing.assert_allclose(
-        pooled_lm["pooled_params"], as_array(MODELS["lm"]["pooled"]["estimate"]), rtol=RTOL
-    )
+    np.testing.assert_allclose(pooled_lm["pooled_params"], as_array(MODELS["lm"]["pooled"]["estimate"]), rtol=RTOL)
     names = [_py_term(t) for t in str_list(MODELS["lm"]["pooled"]["term"])]
     assert list(pooled_lm["parameter_names"]) == names
 
@@ -235,18 +233,12 @@ def test_pool_linear_model_standard_errors_match_r(pooled_lm):
 
 def test_pool_linear_model_within_and_between_variance_match_r(pooled_lm):
     pooled = MODELS["lm"]["pooled"]
-    np.testing.assert_allclose(
-        np.diag(pooled_lm["within_covariance"]), as_array(pooled["ubar"]), rtol=RTOL
-    )
-    np.testing.assert_allclose(
-        np.diag(pooled_lm["between_covariance"]), as_array(pooled["b"]), rtol=RTOL
-    )
+    np.testing.assert_allclose(np.diag(pooled_lm["within_covariance"]), as_array(pooled["ubar"]), rtol=RTOL)
+    np.testing.assert_allclose(np.diag(pooled_lm["between_covariance"]), as_array(pooled["b"]), rtol=RTOL)
 
 
 def test_pool_linear_model_fmi_matches_r(pooled_lm):
-    np.testing.assert_allclose(
-        pooled_lm["fraction_missing_info"], as_array(MODELS["lm"]["pooled"]["fmi"]), rtol=RTOL
-    )
+    np.testing.assert_allclose(pooled_lm["fraction_missing_info"], as_array(MODELS["lm"]["pooled"]["fmi"]), rtol=RTOL)
 
 
 def test_completed_datasets_keep_observed_values():

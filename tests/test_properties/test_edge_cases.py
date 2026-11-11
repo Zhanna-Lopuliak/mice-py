@@ -36,6 +36,7 @@ def _check(df, method, n_imputations=N_IMP, maxit=MAXIT, **kwargs):
 # B1: categorical target with pmm
 # ---------------------------------------------------------------------------
 
+
 def _categorical_target_frame(n=48, seed=21):
     rng = np.random.default_rng(seed)
     x1 = rng.normal(size=n)
@@ -69,14 +70,13 @@ def test_midas_rejects_categorical_target_clearly():
 
     df = _categorical_target_frame()
     with pytest.raises((ValueError, TypeError), match=r"(?i)numeric|categor"):
-        MICE(df).impute(
-            n_imputations=1, maxit=1, method="midas", predictor_matrix=full_predictor_matrix(df), seed=1
-        )
+        MICE(df).impute(n_imputations=1, maxit=1, method="midas", predictor_matrix=full_predictor_matrix(df), seed=1)
 
 
 # ---------------------------------------------------------------------------
 # B2: categorical predictor
 # ---------------------------------------------------------------------------
+
 
 def _categorical_predictor_frame():
     df = _categorical_target_frame()
@@ -94,6 +94,7 @@ def test_categorical_predictor(method):
 # ---------------------------------------------------------------------------
 # B3: more donors than observed values
 # ---------------------------------------------------------------------------
+
 
 def test_pmm_more_donors_than_observed_direct():
     from imputation.PMM import pmm
@@ -212,6 +213,7 @@ def test_more_predictors_than_observed_rows(method):
 # B5: midas with a perfect fit
 # ---------------------------------------------------------------------------
 
+
 def _perfect_fit():
     x = np.arange(1.0, 21.0)
     y = 2 * x + 1
@@ -275,7 +277,11 @@ def test_target_collinear_with_its_only_predictor_is_not_imputed():
     assert mice.method["y"] == ""
     assert mice.visit_sequence == []
     assert mice.logged_events.to_dict("list") == {
-        "it": [0], "im": [0], "dep": [""], "meth": ["collinear"], "out": ["y"]
+        "it": [0],
+        "im": [0],
+        "dep": [""],
+        "meth": ["collinear"],
+        "out": ["y"],
     }
     for completed in out:
         pd.testing.assert_frame_equal(completed, df)
@@ -295,6 +301,7 @@ def test_midas_perfect_fit_uses_kappa_100():
 # ---------------------------------------------------------------------------
 # Few observed or few missing values
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("method", METHODS)
 def test_column_with_one_missing_value(method):
@@ -341,6 +348,7 @@ def test_target_without_predictors(method):
 # Rows, columns and sizes
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("method", method_params())
 def test_all_empty_row_is_kept_and_imputed(method):
     df = numeric_frame(n=30)
@@ -385,6 +393,7 @@ def test_single_imputation_single_iteration(method):
 # ---------------------------------------------------------------------------
 # Column types
 # ---------------------------------------------------------------------------
+
 
 def _boolean_target_frame(n=40, seed=7):
     rng = np.random.default_rng(seed)
@@ -571,6 +580,7 @@ def test_string_dtype_predictor(method):
 # B6: midas with tied predictor rows
 # ---------------------------------------------------------------------------
 
+
 def test_midas_tied_predictor_rows_direct():
     """Minimal reproduction: a binary predictor puts several donors at distance 0."""
     from imputation.midas import midas
@@ -640,6 +650,7 @@ def test_midas_three_incomplete_numeric_columns():
 # midas: kappa through impute
 # ---------------------------------------------------------------------------
 
+
 def test_midas_kappa_through_impute(monkeypatch):
     """``midas_kappa`` reaches midas as ``kappa``; without it kappa is estimated."""
     import imputation.midas as midas_module
@@ -670,6 +681,7 @@ def test_midas_kappa_through_impute(monkeypatch):
 # ---------------------------------------------------------------------------
 # C6: the setup functions of imputation.design
 # ---------------------------------------------------------------------------
+
 
 def test_obtain_design_dummy_codes_object_columns():
     from imputation.design import obtain_design
@@ -768,6 +780,7 @@ def test_tree_method_with_one_observed_target_value_imputes_it(method, kind):
 # ---------------------------------------------------------------------------
 # B10: initial="meanobs" with non-numeric columns
 # ---------------------------------------------------------------------------
+
 
 def _meanobs_frame():
     """Incomplete numeric, object, category, string and boolean columns."""

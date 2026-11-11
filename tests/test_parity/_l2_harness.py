@@ -132,9 +132,7 @@ def draw(func, inp, n_calls, seed, **kwargs):
         out = func(inp.y.copy(), inp.ry.copy(), inp.x.copy(), rng=rng, **kwargs)
         out = np.asarray(out).ravel()
         if out.shape != (inp.n_mis,):
-            raise AssertionError(
-                f"imputer returned shape {out.shape}, expected ({inp.n_mis},)"
-            )
+            raise AssertionError(f"imputer returned shape {out.shape}, expected ({inp.n_mis},)")
         idx[i] = donor_index(out, inp)
     return idx
 
@@ -209,17 +207,12 @@ class Comparison:
         return _z_message("T2 cell", self.t2_z_mean, self.t2_z_var, None, self.n_not_donor)
 
     def t3_message(self):
-        return _z_message(
-            "T3 coef", self.t3_z_mean, self.t3_z_var, self.coef_names, self.n_not_donor
-        )
+        return _z_message("T3 coef", self.t3_z_mean, self.t3_z_var, self.coef_names, self.n_not_donor)
 
 
 def _z_message(label, zm, zv, names, n_not_donor):
     if zm is None or zv is None:
-        return (
-            f"{label}: not computed ({n_not_donor} imputations are not observed "
-            "values, or the target is a factor)"
-        )
+        return f"{label}: not computed ({n_not_donor} imputations are not observed values, or the target is a factor)"
 
     def worst(z):
         j = int(np.argmax(np.abs(z)))
@@ -240,14 +233,10 @@ def compare(r_sum, py_sum, inp):
     n_r, n_p = r_sum["n_calls"], py_sum["n_calls"]
     rc, pc = r_sum["cell"], py_sum["cell"]
     comp.t2_z_mean = z_mean(pc["mean"], pc["var"], n_p, as_array(rc["mean"]), as_array(rc["var"]), n_r)
-    comp.t2_z_var = z_logvar(
-        pc["var"], pc["kurt"], n_p, as_array(rc["var"]), as_array(rc["kurt"]), n_r
-    )
+    comp.t2_z_var = z_logvar(pc["var"], pc["kurt"], n_p, as_array(rc["var"]), as_array(rc["kurt"]), n_r)
     rb, pb = r_sum["coef"], py_sum["coef"]
     comp.t3_z_mean = z_mean(pb["mean"], pb["var"], n_p, as_array(rb["mean"]), as_array(rb["var"]), n_r)
-    comp.t3_z_var = z_logvar(
-        pb["var"], pb["kurt"], n_p, as_array(rb["var"]), as_array(rb["kurt"]), n_r
-    )
+    comp.t3_z_var = z_logvar(pb["var"], pb["kurt"], n_p, as_array(rb["var"]), as_array(rb["kurt"]), n_r)
     comp.coef_names = tuple(rb["names"])
     return comp
 

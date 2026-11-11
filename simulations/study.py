@@ -67,8 +67,17 @@ DEFAULT_RF_REPS = 500
 
 RESULT_COLUMNS = ["scenario", "method", "rep", "term", "qbar", "ubar", "b", "m", "n", "dfcom"]
 STATUS_COLUMNS = [
-    "scenario", "method", "rep", "status", "error_class", "error_message",
-    "n_events", "events", "n_warnings", "warnings", "seconds",
+    "scenario",
+    "method",
+    "rep",
+    "status",
+    "error_class",
+    "error_message",
+    "n_events",
+    "events",
+    "n_warnings",
+    "warnings",
+    "seconds",
 ]
 
 
@@ -157,8 +166,17 @@ def _run_one(args):
     scenario_id, method, rep, data_dir = args
     sc = SCENARIOS[scenario_id]
     status = dict(
-        scenario=scenario_id, method=method, rep=rep, status="ok", error_class="",
-        error_message="", n_events=np.nan, events="", n_warnings=0, warnings="", seconds=np.nan,
+        scenario=scenario_id,
+        method=method,
+        rep=rep,
+        status="ok",
+        error_class="",
+        error_message="",
+        n_events=np.nan,
+        events="",
+        n_warnings=0,
+        warnings="",
+        seconds=np.nan,
     )
     start = time.perf_counter()
     rows = []
@@ -173,14 +191,13 @@ def _run_one(args):
 
             df = read_dataset(Path(data_dir) / scenario_id / f"rep_{rep}.csv", sc)
             stage = "imputation"
-            outcome = _adapter.impute(
-                df, method, M_IMPUTATIONS, sc.maxit, replication_seed(sc.index, rep)
-            )
+            outcome = _adapter.impute(df, method, M_IMPUTATIONS, sc.maxit, replication_seed(sc.index, rep))
             status["n_warnings"] = len(outcome.events)
             status["warnings"] = " | ".join(sorted(set(outcome.events)))[:500]
             if not outcome.ok:
                 status.update(
-                    status="failed", error_class=outcome.error_class,
+                    status="failed",
+                    error_class=outcome.error_class,
                     error_message=outcome.error_message,
                 )
                 status["seconds"] = time.perf_counter() - start
@@ -190,14 +207,24 @@ def _run_one(args):
         qbar, ubar, b = _pool_terms(analyses, m)
         first = analyses[0]
         for i, term in enumerate(first["term"]):
-            rows.append(dict(
-                scenario=scenario_id, method=method, rep=rep, term=term,
-                qbar=qbar[i], ubar=ubar[i], b=b[i], m=m, n=len(df),
-                dfcom=first["dfcom"].iloc[i],
-            ))
+            rows.append(
+                dict(
+                    scenario=scenario_id,
+                    method=method,
+                    rep=rep,
+                    term=term,
+                    qbar=qbar[i],
+                    ubar=ubar[i],
+                    b=b[i],
+                    m=m,
+                    n=len(df),
+                    dfcom=first["dfcom"].iloc[i],
+                )
+            )
     except Exception as exc:  # recorded, so one bad replication does not stop the study
         status.update(
-            status="failed", error_class=type(exc).__name__,
+            status="failed",
+            error_class=type(exc).__name__,
             error_message=f"{stage}: " + " ".join(str(exc).split())[:300],
         )
         rows = []
@@ -234,11 +261,7 @@ def cmd_run_python(args):
             file=sys.stderr,
         )
 
-    tasks = [
-        (sid, mth, rep, str(data_dir))
-        for (sid, mth), reps in plan.items()
-        for rep in range(1, reps + 1)
-    ]
+    tasks = [(sid, mth, rep, str(data_dir)) for (sid, mth), reps in plan.items() for rep in range(1, reps + 1)]
     remaining = {key: reps for key, reps in plan.items()}
     collected = {key: ([], []) for key in plan}
     start = time.perf_counter()
@@ -332,8 +355,9 @@ def main(argv=None):
     parser.add_argument("--scenarios", type=_csv_list(SCENARIOS, "scenario"), default=list(SCENARIOS))
     parser.add_argument("--methods", type=_csv_list(METHODS, "method"), default=list(METHODS))
     parser.add_argument("--reps", type=int, default=DEFAULT_REPS, help="replications (default 1000)")
-    parser.add_argument("--rf-reps", type=int, default=DEFAULT_RF_REPS,
-                        help="replications for rf, capped at --reps (default 500)")
+    parser.add_argument(
+        "--rf-reps", type=int, default=DEFAULT_RF_REPS, help="replications for rf, capped at --reps (default 500)"
+    )
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 1, help="processes (default: all cores)")
     parser.add_argument("--work-dir", type=Path, default=DEFAULT_WORK, help="default simulations/work")
     args = parser.parse_args(argv)

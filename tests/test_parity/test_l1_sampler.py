@@ -34,9 +34,7 @@ def test_estimice_matches_r(case):
     assert p["df"] == case["df"]
     np.testing.assert_allclose(np.ravel(p["c"]), as_array(case["c"]), rtol=RTOL, atol=ATOL)
     # residuals are close to zero relative to y, so compare on the scale of y
-    np.testing.assert_allclose(
-        np.ravel(p["r"]), as_array(case["r"]), rtol=0, atol=RTOL * np.abs(y).max()
-    )
+    np.testing.assert_allclose(np.ravel(p["r"]), as_array(case["r"]), rtol=0, atol=RTOL * np.abs(y).max())
     v = as_array(case["v"])
     v = v.reshape(np.shape(p["v"]))
     np.testing.assert_allclose(p["v"], v, rtol=RTOL, atol=ATOL)

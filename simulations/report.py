@@ -30,21 +30,28 @@ FULL_METHODS = ("pmm", "midastouch", "cart", "rf", "sample")
 # Failures whose cause is known. (engine, method or None, error class, regex
 # on the message, label). The first match wins.
 KNOWN_FAILURES = [
-    ("python", "pmm", "AttributeError", r"has no attribute 'values'",
-     "B1: pmm crashes on a categorical target"),
-    ("python", None, "ValueError", r"Predictors must be numeric",
-     "B2: categorical predictor rejected"),
-    ("python", "midastouch", "ValueError", r"Target y must be numeric",
-     "midas does not take a categorical target (R's midastouch fails too)"),
-    ("r", "midastouch", "simpleError", r"analysis: completed data still contain missing values",
-     "R midastouch imputes factor codes; R sets them to NA ('invalid factor level')"),
+    ("python", "pmm", "AttributeError", r"has no attribute 'values'", "B1: pmm crashes on a categorical target"),
+    ("python", None, "ValueError", r"Predictors must be numeric", "B2: categorical predictor rejected"),
+    (
+        "python",
+        "midastouch",
+        "ValueError",
+        r"Target y must be numeric",
+        "midas does not take a categorical target (R's midastouch fails too)",
+    ),
+    (
+        "r",
+        "midastouch",
+        "simpleError",
+        r"analysis: completed data still contain missing values",
+        "R midastouch imputes factor codes; R sets them to NA ('invalid factor level')",
+    ),
 ]
 
 
 def known_cause(engine, method, error_class, message):
     for eng, mth, cls, pattern, label in KNOWN_FAILURES:
-        if eng == engine and (mth is None or mth == method) and cls == error_class \
-                and re.search(pattern, str(message)):
+        if eng == engine and (mth is None or mth == method) and cls == error_class and re.search(pattern, str(message)):
             return label
     return "unknown: investigate (NEW-?)"
 
@@ -103,10 +110,18 @@ def failures_table(status):
         if failed.empty:
             continue
         for (cls, msg), h in failed.groupby(["error_class", "error_message"], sort=False):
-            rows.append(dict(
-                scenario=sid, method=method, engine=engine, failed=len(h), attempted=len(g),
-                error_class=cls, message=str(msg)[:120], cause=known_cause(engine, method, cls, msg),
-            ))
+            rows.append(
+                dict(
+                    scenario=sid,
+                    method=method,
+                    engine=engine,
+                    failed=len(h),
+                    attempted=len(g),
+                    error_class=cls,
+                    message=str(msg)[:120],
+                    cause=known_cause(engine, method, cls, msg),
+                )
+            )
     return pd.DataFrame(rows)
 
 
@@ -122,9 +137,16 @@ def events_table(status):
         wa = int((g["n_warnings"] > 0).sum())
         if ev or wa:
             texts = sorted(set(t for t in g["events"].fillna("").tolist() + g["warnings"].fillna("").tolist() if t))
-            rows.append(dict(scenario=sid, method=method, engine=engine,
-                             reps_with_logged_events=ev if engine == "r" else "n/a",
-                             reps_with_warnings=wa, text="; ".join(texts)[:200]))
+            rows.append(
+                dict(
+                    scenario=sid,
+                    method=method,
+                    engine=engine,
+                    reps_with_logged_events=ev if engine == "r" else "n/a",
+                    reps_with_warnings=wa,
+                    text="; ".join(texts)[:200],
+                )
+            )
     return pd.DataFrame(rows)
 
 
@@ -190,13 +212,34 @@ def build_report(work_dir, out_dir):
     method_order = {m: i for i, m in enumerate(FULL_METHODS + ("complete",))}
     metric_order = {m: i for i, m in enumerate(mx.METRICS)}
     term_order = {(sid, t): i for sid, spec in manifest["scenarios"].items() for i, t in enumerate(spec["terms"])}
-    summary = summary.assign(
-        _s=summary["scenario"].map(order), _m=summary["method"].map(method_order),
-        _t=[term_order.get((s, t), 99) for s, t in zip(summary["scenario"], summary["term"])],
-        _x=summary["metric"].map(metric_order),
-    ).sort_values(["_s", "_m", "_t", "_x"]).drop(columns=["_s", "_m", "_t", "_x"])
-    cols = ["scenario", "method", "term", "truth", "metric", "python", "python_mcse", "python_reps",
-            "r", "r_mcse", "r_reps", "diff", "diff_se", "z", "flagged", "n_pairs"]
+    summary = (
+        summary.assign(
+            _s=summary["scenario"].map(order),
+            _m=summary["method"].map(method_order),
+            _t=[term_order.get((s, t), 99) for s, t in zip(summary["scenario"], summary["term"])],
+            _x=summary["metric"].map(metric_order),
+        )
+        .sort_values(["_s", "_m", "_t", "_x"])
+        .drop(columns=["_s", "_m", "_t", "_x"])
+    )
+    cols = [
+        "scenario",
+        "method",
+        "term",
+        "truth",
+        "metric",
+        "python",
+        "python_mcse",
+        "python_reps",
+        "r",
+        "r_mcse",
+        "r_reps",
+        "diff",
+        "diff_se",
+        "z",
+        "flagged",
+        "n_pairs",
+    ]
     for c in cols:
         if c not in summary:
             summary[c] = np.nan
@@ -207,40 +250,69 @@ def build_report(work_dir, out_dir):
     w = lines.append
     w("# L3 simulation study: mice-py against R mice")
     w("")
-    w(f"Generated {time.strftime('%Y-%m-%d %H:%M')} by `simulations/report.py` from "
-      "`simulations/work/results/`. Method and formulas: `simulations/README.md` and "
-      "`simulations/metrics.py`.")
+    w(
+        f"Generated {time.strftime('%Y-%m-%d %H:%M')} by `simulations/report.py` from "
+        "`simulations/work/results/`. Method and formulas: `simulations/README.md` and "
+        "`simulations/metrics.py`."
+    )
     w("")
     if meta_py and not meta_py.get("seed_supported", True):
-        w("> **Not valid for inference (finding C1).** The library had no `seed` argument when "
-          "the Python side ran: chain j is always seeded with 42 + j, so every replication "
-          "reuses the same random streams. The replications are not independent and the Monte "
-          "Carlo errors, z-scores and flags below do not mean what they say. This run checks "
-          "the pipeline only.")
+        w(
+            "> **Not valid for inference (finding C1).** The library had no `seed` argument when "
+            "the Python side ran: chain j is always seeded with 42 + j, so every replication "
+            "reuses the same random streams. The replications are not independent and the Monte "
+            "Carlo errors, z-scores and flags below do not mean what they say. This run checks "
+            "the pipeline only."
+        )
         w("")
 
     reps_info = _plan_summary(meta_py, meta_r)
     w("## Run")
     w("")
-    w(md_table(["", "Python", "R"], [
-        ["software",
-         f"mice-py {meta_py.get('library_version', '?')}, Python {meta_py.get('python', '?')}, "
-         f"NumPy {meta_py.get('numpy', '?')}" if meta_py else "–",
-         f"{meta_r.get('r', '?')}, mice {meta_r.get('mice', '?')}, ranger {meta_r.get('ranger', '?')}, "
-         f"rpart {meta_r.get('rpart', '?')}" if meta_r else "–"],
-        ["seeds", "per replication" if meta_py.get("seed_supported") else "hard-coded (C1)",
-         "per replication (`mice(seed = )`)"],
-        ["replications", reps_info.get("python", "–"), reps_info.get("r", "–")],
-        ["processes", meta_py.get("jobs", "–"), meta_r.get("jobs", "–")],
-    ]))
+    w(
+        md_table(
+            ["", "Python", "R"],
+            [
+                [
+                    "software",
+                    f"mice-py {meta_py.get('library_version', '?')}, Python {meta_py.get('python', '?')}, "
+                    f"NumPy {meta_py.get('numpy', '?')}"
+                    if meta_py
+                    else "–",
+                    f"{meta_r.get('r', '?')}, mice {meta_r.get('mice', '?')}, ranger {meta_r.get('ranger', '?')}, "
+                    f"rpart {meta_r.get('rpart', '?')}"
+                    if meta_r
+                    else "–",
+                ],
+                [
+                    "seeds",
+                    "per replication" if meta_py.get("seed_supported") else "hard-coded (C1)",
+                    "per replication (`mice(seed = )`)",
+                ],
+                ["replications", reps_info.get("python", "–"), reps_info.get("r", "–")],
+                ["processes", meta_py.get("jobs", "–"), meta_r.get("jobs", "–")],
+            ],
+        )
+    )
     w("")
     w("Scenarios:")
     w("")
-    w(md_table(["ID", "data", "n", "missingness", "maxit", "terms (truth)"], [
-        [sid, spec["description"], spec["n"], spec["missingness"], spec["maxit"],
-         ", ".join(f"{t} = {v:.4g}" for t, v in spec["truth"].items())]
-        for sid, spec in manifest["scenarios"].items()
-    ]))
+    w(
+        md_table(
+            ["ID", "data", "n", "missingness", "maxit", "terms (truth)"],
+            [
+                [
+                    sid,
+                    spec["description"],
+                    spec["n"],
+                    spec["missingness"],
+                    spec["maxit"],
+                    ", ".join(f"{t} = {v:.4g}" for t, v in spec["truth"].items()),
+                ]
+                for sid, spec in manifest["scenarios"].items()
+            ],
+        )
+    )
     w("")
 
     # Harness
@@ -251,20 +323,28 @@ def build_report(work_dir, out_dir):
         w("No complete-data rows.")
     else:
         bad = hc[~hc["within"]]
-        w("Coverage of the complete-data analysis (pseudo-method `complete`) must lie within "
-          "0.95 ± 3 nominal Monte Carlo errors. "
-          + ("All cells pass." if bad.empty else f"**{len(bad)} cell(s) outside the band.**"))
+        w(
+            "Coverage of the complete-data analysis (pseudo-method `complete`) must lie within "
+            "0.95 ± 3 nominal Monte Carlo errors. "
+            + ("All cells pass." if bad.empty else f"**{len(bad)} cell(s) outside the band.**")
+        )
         w("")
-        wide = hc.pivot_table(index=["scenario", "term"], columns="engine",
-                              values=["value", "band", "within", "reps"], aggfunc="first", sort=False)
+        wide = hc.pivot_table(
+            index=["scenario", "term"],
+            columns="engine",
+            values=["value", "band", "within", "reps"],
+            aggfunc="first",
+            sort=False,
+        )
         rows = []
         for (sid, term), r in wide.iterrows():
             cells = []
             for engine in mx.ENGINES:
                 if ("value", engine) in r.index and pd.notna(r[("value", engine)]):
                     ok = "" if r[("within", engine)] else " **outside**"
-                    cells.append(f"{r[('value', engine)]:.3f} ± {r[('band', engine)]:.3f} "
-                                 f"({int(r[('reps', engine)])} reps){ok}")
+                    cells.append(
+                        f"{r[('value', engine)]:.3f} ± {r[('band', engine)]:.3f} ({int(r[('reps', engine)])} reps){ok}"
+                    )
                 else:
                     cells.append("–")
             rows.append([sid, term, *cells])
@@ -272,9 +352,11 @@ def build_report(work_dir, out_dir):
     w("")
     ident = mx.harness_identity(pooled)
     if ident:
-        w(f"Identical data, identical analysis: over {ident['pairs']} complete-data rows the largest "
-          f"|qbar Python − qbar R| is {ident['max_abs_qbar']:.2e}, the largest relative ubar "
-          f"difference {ident['max_rel_ubar']:.2e}; dfcom equal: {'yes' if ident['dfcom_equal'] else '**no**'}.")
+        w(
+            f"Identical data, identical analysis: over {ident['pairs']} complete-data rows the largest "
+            f"|qbar Python − qbar R| is {ident['max_abs_qbar']:.2e}, the largest relative ubar "
+            f"difference {ident['max_rel_ubar']:.2e}; dfcom equal: {'yes' if ident['dfcom_equal'] else '**no**'}."
+        )
         w("")
 
     # Flags
@@ -285,21 +367,35 @@ def build_report(work_dir, out_dir):
     n_tests = int(summary.loc[tested, "z"].notna().sum())
     min_pairs = summary.loc[tested, "n_pairs"].min()
     if pd.notna(min_pairs) and min_pairs < 100:
-        w(f"Some cells have only {int(min_pairs)} paired replications. The z-scores use a normal "
-          "approximation and Monte Carlo errors estimated from the same replications; below about "
-          "100 replications they are not meaningful and flags are expected by chance.")
+        w(
+            f"Some cells have only {int(min_pairs)} paired replications. The z-scores use a normal "
+            "approximation and Monte Carlo errors estimated from the same replications; below about "
+            "100 replications they are not meaningful and flags are expected by chance."
+        )
         w("")
     if flagged.empty:
         w(f"None of {n_tests} paired comparisons.")
     else:
         w(f"{len(flagged)} of {n_tests} paired comparisons:")
         w("")
-        w(md_table(["scenario", "method", "term", "metric", "Python", "R", "Py − R (SE)", "z"], [
-            [r.scenario, r.method, r.term, mx.METRIC_LABELS[r.metric],
-             fmt(r.python, None, r.metric), fmt(r.r, None, r.metric),
-             fmt(r.diff, r.diff_se, r.metric), fmt_z(r.z, True)]
-            for r in flagged.itertuples()
-        ]))
+        w(
+            md_table(
+                ["scenario", "method", "term", "metric", "Python", "R", "Py − R (SE)", "z"],
+                [
+                    [
+                        r.scenario,
+                        r.method,
+                        r.term,
+                        mx.METRIC_LABELS[r.metric],
+                        fmt(r.python, None, r.metric),
+                        fmt(r.r, None, r.metric),
+                        fmt(r.diff, r.diff_se, r.metric),
+                        fmt_z(r.z, True),
+                    ]
+                    for r in flagged.itertuples()
+                ],
+            )
+        )
     w("")
 
     # Failures
@@ -309,21 +405,44 @@ def build_report(work_dir, out_dir):
     if ft.empty:
         w("No replication failed.")
     else:
-        w(md_table(["scenario", "method", "engine", "failed / attempted", "exception", "message", "cause"], [
-            [r.scenario, r.method, r.engine, f"{r.failed} / {r.attempted}", r.error_class,
-             r.message.replace("|", "\\|"), r.cause]
-            for r in ft.itertuples()
-        ]))
+        w(
+            md_table(
+                ["scenario", "method", "engine", "failed / attempted", "exception", "message", "cause"],
+                [
+                    [
+                        r.scenario,
+                        r.method,
+                        r.engine,
+                        f"{r.failed} / {r.attempted}",
+                        r.error_class,
+                        r.message.replace("|", "\\|"),
+                        r.cause,
+                    ]
+                    for r in ft.itertuples()
+                ],
+            )
+        )
     w("")
     et = events_table(status)
     if not et.empty:
         w("Replications with R `loggedEvents` or with warnings:")
         w("")
-        w(md_table(["scenario", "method", "engine", "logged events", "warnings", "text"], [
-            [r.scenario, r.method, r.engine, r.reps_with_logged_events, r.reps_with_warnings,
-             r.text.replace("|", "\\|")]
-            for r in et.itertuples()
-        ]))
+        w(
+            md_table(
+                ["scenario", "method", "engine", "logged events", "warnings", "text"],
+                [
+                    [
+                        r.scenario,
+                        r.method,
+                        r.engine,
+                        r.reps_with_logged_events,
+                        r.reps_with_warnings,
+                        r.text.replace("|", "\\|"),
+                    ]
+                    for r in et.itertuples()
+                ],
+            )
+        )
         w("")
 
     # Timing
@@ -331,35 +450,47 @@ def build_report(work_dir, out_dir):
     if not timing.empty:
         w("## Timing")
         w("")
-        w("Mean seconds per replication (m = 5 imputations plus analysis), measured with all "
-          "processes busy:")
+        w("Mean seconds per replication (m = 5 imputations plus analysis), measured with all processes busy:")
         w("")
-        w(md_table(["scenario", "method", "Python", "R"], [
-            [r.scenario, r.method,
-             f"{getattr(r, 'python', np.nan):.3f}" if np.isfinite(getattr(r, "python", np.nan)) else "–",
-             f"{getattr(r, 'r', np.nan):.3f}" if np.isfinite(getattr(r, "r", np.nan)) else "–"]
-            for r in timing.itertuples()
-        ]))
+        w(
+            md_table(
+                ["scenario", "method", "Python", "R"],
+                [
+                    [
+                        r.scenario,
+                        r.method,
+                        f"{getattr(r, 'python', np.nan):.3f}" if np.isfinite(getattr(r, "python", np.nan)) else "–",
+                        f"{getattr(r, 'r', np.nan):.3f}" if np.isfinite(getattr(r, "r", np.nan)) else "–",
+                    ]
+                    for r in timing.itertuples()
+                ],
+            )
+        )
         w("")
         ext = extrapolate(timing, meta_py, meta_r, list(manifest["scenarios"]))
         if ext:
-            w(f"Extrapolated to the full study ({FULL_REPS} replications, rf {FULL_RF_REPS}, "
-              f"all six scenarios and five methods) on 8 cores:")
+            w(
+                f"Extrapolated to the full study ({FULL_REPS} replications, rf {FULL_RF_REPS}, "
+                f"all six scenarios and five methods) on 8 cores:"
+            )
             w("")
             for engine, e in ext.items():
                 g = ""
                 if e["guessed"]:
-                    g = ("; cells not measured, taken from the slowest measured scenario of the "
-                         f"same method: {', '.join(e['guessed'])}")
-                w(f"- {engine}: about {e['wall_seconds'] / 60:.0f} min "
-                  f"({e['cpu_seconds'] / 3600:.1f} CPU hours){g}.")
+                    g = (
+                        "; cells not measured, taken from the slowest measured scenario of the "
+                        f"same method: {', '.join(e['guessed'])}"
+                    )
+                w(f"- {engine}: about {e['wall_seconds'] / 60:.0f} min ({e['cpu_seconds'] / 3600:.1f} CPU hours){g}.")
             w("")
 
     # Per scenario and method
     w("## Results per scenario and method")
     w("")
-    w("Cells: value (Monte Carlo SE). Py − R is the paired difference over replications where "
-      "both engines succeeded, with its SE; z = difference / SE; bold z is flagged.")
+    w(
+        "Cells: value (Monte Carlo SE). Py − R is the paired difference over replications where "
+        "both engines succeeded, with its SE; z = difference / SE; bold z is flagged."
+    )
     w("")
     for sid, spec in manifest["scenarios"].items():
         sub = summary[(summary["scenario"] == sid) & (summary["method"] != "complete")]
@@ -382,12 +513,16 @@ def build_report(work_dir, out_dir):
                     continue
                 if r.metric == "pct_bias" and r.truth == 0:
                     continue
-                rows.append([
-                    f"{r.term} = {r.truth:.4g}" if r.metric == "bias" else r.term,
-                    mx.METRIC_LABELS[r.metric],
-                    fmt(r.python, r.python_mcse, r.metric), fmt(r.r, r.r_mcse, r.metric),
-                    fmt(r.diff, r.diff_se, r.metric), fmt_z(r.z, bool(r.flagged) if r.flagged == r.flagged else False),
-                ])
+                rows.append(
+                    [
+                        f"{r.term} = {r.truth:.4g}" if r.metric == "bias" else r.term,
+                        mx.METRIC_LABELS[r.metric],
+                        fmt(r.python, r.python_mcse, r.metric),
+                        fmt(r.r, r.r_mcse, r.metric),
+                        fmt(r.diff, r.diff_se, r.metric),
+                        fmt_z(r.z, bool(r.flagged) if r.flagged == r.flagged else False),
+                    ]
+                )
             w(md_table(["term", "metric", "Python", "R", "Py − R", "z"], rows))
             w("")
     (out_dir / "REPORT.md").write_text("\n".join(lines) + "\n")
@@ -419,8 +554,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     summary = build_report(args.work_dir.resolve(), args.out.resolve())
     n_flag = int((summary["flagged"] == True).sum())  # noqa: E712
-    print(f"wrote {args.out / 'summary.csv'} ({len(summary)} rows) and {args.out / 'REPORT.md'}; "
-          f"{n_flag} flagged")
+    print(f"wrote {args.out / 'summary.csv'} ({len(summary)} rows) and {args.out / 'REPORT.md'}; {n_flag} flagged")
 
 
 if __name__ == "__main__":

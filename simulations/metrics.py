@@ -202,8 +202,19 @@ def engine_metrics(pooled):
         }
         for metric in METRICS:
             v, s = values[metric]
-            rows.append(dict(engine=engine, scenario=sid, method=method, term=term,
-                             truth=truth, metric=metric, value=v, mcse=s, reps=r))
+            rows.append(
+                dict(
+                    engine=engine,
+                    scenario=sid,
+                    method=method,
+                    term=term,
+                    truth=truth,
+                    metric=metric,
+                    value=v,
+                    mcse=s,
+                    reps=r,
+                )
+            )
     return pd.DataFrame(rows)
 
 
@@ -254,12 +265,27 @@ def paired_differences(pooled):
             diff, se = out[metric]
             z = _z(diff, se)
             # complete: identical data on both sides, judged by harness_identity().
-            flagged = (method != "complete" and metric in TESTED_METRICS
-                       and bool(np.isinf(z) or (np.isfinite(z) and abs(z) > Z_FLAG)))
-            rows.append(dict(scenario=sid, method=method, term=term, metric=metric,
-                             diff=diff, diff_se=se, z=z, flagged=flagged, n_pairs=n))
-    return pd.DataFrame(rows, columns=["scenario", "method", "term", "metric", "diff",
-                                       "diff_se", "z", "flagged", "n_pairs"])
+            flagged = (
+                method != "complete"
+                and metric in TESTED_METRICS
+                and bool(np.isinf(z) or (np.isfinite(z) and abs(z) > Z_FLAG))
+            )
+            rows.append(
+                dict(
+                    scenario=sid,
+                    method=method,
+                    term=term,
+                    metric=metric,
+                    diff=diff,
+                    diff_se=se,
+                    z=z,
+                    flagged=flagged,
+                    n_pairs=n,
+                )
+            )
+    return pd.DataFrame(
+        rows, columns=["scenario", "method", "term", "metric", "diff", "diff_se", "z", "flagged", "n_pairs"]
+    )
 
 
 # ---------------------------------------------------------------------------

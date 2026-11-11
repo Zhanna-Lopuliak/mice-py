@@ -76,8 +76,16 @@ def test_quickpred_arguments_still_accepted():
     df = numeric_frame(n=30)
     with pytest.warns(DeprecationWarning, match="imputation.quickpred"):
         mice, _ = impute(
-            df, "pmm", n_imputations=1, maxit=1, predictor_matrix=None,
-            min_cor=0.0, min_puc=0.0, include=["d"], exclude=["k"], correlation_method="spearman",
+            df,
+            "pmm",
+            n_imputations=1,
+            maxit=1,
+            predictor_matrix=None,
+            min_cor=0.0,
+            min_puc=0.0,
+            include=["d"],
+            exclude=["k"],
+            correlation_method="spearman",
         )
     assert mice.predictor_matrix.loc[["a", "b", "c"], "d"].eq(1).all()
     assert mice.predictor_matrix["k"].eq(0).all()
@@ -139,12 +147,21 @@ def test_formerly_implicit_parameters_reach_the_backend(monkeypatch):
     impute(df, "pmm", n_imputations=1, maxit=1, pmm_ls_meth="ridge")
     # max_depth is an argument of cart now, so it cannot go through tree_params
     impute(
-        df, "cart", n_imputations=1, maxit=1,
-        cart_max_depth=3, cart_tree_params={"max_leaf_nodes": 7},
+        df,
+        "cart",
+        n_imputations=1,
+        maxit=1,
+        cart_max_depth=3,
+        cart_tree_params={"max_leaf_nodes": 7},
     )
     impute(
-        df, "rf", n_imputations=1, maxit=1,
-        rf_max_depth=4, rf_min_samples_leaf=2, rf_forest_params={"max_features": 0.5},
+        df,
+        "rf",
+        n_imputations=1,
+        maxit=1,
+        rf_max_depth=4,
+        rf_min_samples_leaf=2,
+        rf_forest_params={"max_features": 0.5},
     )
     assert seen["ls_meth"] == "ridge"
     assert seen["tree"]["max_depth"] == 3

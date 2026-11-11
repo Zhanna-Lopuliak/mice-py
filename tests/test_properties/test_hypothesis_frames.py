@@ -16,9 +16,7 @@ from hypothesis.extra.numpy import arrays
 
 from ._helpers import assert_all_invariants, impute
 
-FLOATS = st.floats(
-    min_value=-1e3, max_value=1e3, allow_nan=False, allow_infinity=False, allow_subnormal=False
-)
+FLOATS = st.floats(min_value=-1e3, max_value=1e3, allow_nan=False, allow_infinity=False, allow_subnormal=False)
 
 
 @st.composite

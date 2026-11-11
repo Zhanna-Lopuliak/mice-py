@@ -48,14 +48,11 @@ def _r_matrix(payload):
 # method
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("case", SETUP["cases"], ids=[c["name"] for c in SETUP["cases"]])
 def test_default_method_is_pmm_for_numeric_columns(case):
     df, mice = _impute(case)
-    numeric = [
-        col
-        for col, meth in case["method"].items()
-        if meth == "pmm" and pd.api.types.is_numeric_dtype(df[col])
-    ]
+    numeric = [col for col, meth in case["method"].items() if meth == "pmm" and pd.api.types.is_numeric_dtype(df[col])]
     assert numeric, "fixture has no numeric incomplete column"
     assert {col: mice.method[col] for col in numeric} == {col: "pmm" for col in numeric}
 
@@ -63,6 +60,7 @@ def test_default_method_is_pmm_for_numeric_columns(case):
 # ---------------------------------------------------------------------------
 # predictor matrix
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("case", SETUP["cases"], ids=[c["name"] for c in SETUP["cases"]])
 def test_default_predictor_matrix_matches_r(case):
@@ -165,20 +163,17 @@ def test_visit_sequence_matches_r(case, code):
 # imputation.design: obtain_design, remove_lindep, find_collinear
 # ---------------------------------------------------------------------------
 
+
 # model.matrix() codes ordered factors with polynomial contrasts (contr.poly)
 # and unordered ones with treatment dummies; boys_ordered_factor pins the first.
-@pytest.mark.parametrize(
-    "case", DESIGN["obtain_design"], ids=[c["name"] for c in DESIGN["obtain_design"]]
-)
+@pytest.mark.parametrize("case", DESIGN["obtain_design"], ids=[c["name"] for c in DESIGN["obtain_design"]])
 def test_obtain_design_matches_r(case):
     from imputation.design import obtain_design
 
     df = decode_frame(case["data"])
     x = obtain_design(df, str_list(case["predictors"]))
     assert [str(c) for c in x.columns] == str_list(case["columns"])
-    np.testing.assert_allclose(
-        np.asarray(x, dtype=float), as_array(case["x"]).reshape(x.shape), rtol=1e-12, atol=1e-12
-    )
+    np.testing.assert_allclose(np.asarray(x, dtype=float), as_array(case["x"]).reshape(x.shape), rtol=1e-12, atol=1e-12)
 
 
 LINDEP_SINGLE = [c for c in DESIGN["remove_lindep"] if not c["several_dependencies"]]
@@ -212,9 +207,7 @@ def test_remove_lindep_several_dependencies_matches_r(case):
     np.testing.assert_array_equal(_remove_lindep(case), as_bool(case["keep"]))
 
 
-@pytest.mark.parametrize(
-    "case", DESIGN["find_collinear"], ids=[c["name"] for c in DESIGN["find_collinear"]]
-)
+@pytest.mark.parametrize("case", DESIGN["find_collinear"], ids=[c["name"] for c in DESIGN["find_collinear"]])
 def test_find_collinear_matches_r(case):
     from imputation.design import find_collinear
 

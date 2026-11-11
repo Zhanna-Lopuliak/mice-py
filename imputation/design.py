@@ -78,9 +78,7 @@ def _levels(series: pd.Series, kind: str) -> list:
     try:
         return sorted(pd.unique(series.dropna()))
     except TypeError as err:
-        raise TypeError(
-            f"column {series.name!r}: values of mixed types cannot be ordered as levels"
-        ) from err
+        raise TypeError(f"column {series.name!r}: values of mixed types cannot be ordered as levels") from err
 
 
 def _codes(series: pd.Series, levels: list) -> np.ndarray:
@@ -123,10 +121,7 @@ def _poly_contrasts(n_levels: int) -> np.ndarray:
     These are the contrasts of R's ``contr.poly``.
     """
     if n_levels > _MAX_POLY_LEVELS:
-        raise ValueError(
-            f"polynomial contrasts are limited to {_MAX_POLY_LEVELS} levels, as in R; "
-            f"got {n_levels}"
-        )
+        raise ValueError(f"polynomial contrasts are limited to {_MAX_POLY_LEVELS} levels, as in R; got {n_levels}")
     scores = np.arange(1, n_levels + 1, dtype=float)
     vandermonde = (scores - scores.mean())[:, None] ** np.arange(n_levels)
     q, r = np.linalg.qr(vandermonde)
@@ -286,9 +281,7 @@ def _correlation_matrix(x: np.ndarray) -> np.ndarray:
     return corr
 
 
-def _remove_lindep(
-    x, y, ry, eps: float = 1e-4, maxcor: float = 0.99
-) -> tuple[np.ndarray, str | None]:
+def _remove_lindep(x, y, ry, eps: float = 1e-4, maxcor: float = 0.99) -> tuple[np.ndarray, str | None]:
     """:func:`remove_lindep` plus the event R would add to its log.
 
     Returns ``(keep, event)``. ``event`` is the ``out`` text that

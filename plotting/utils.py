@@ -6,14 +6,14 @@ import numpy as np
 import os
 import logging
 
-logger = logging.getLogger('imputation.plotting.utils')
+logger = logging.getLogger("imputation.plotting.utils")
 
 
 def _ensure_directory(file_path):
     """
     Ensure the directory for a file path exists.
     Creates parent directories if they don't exist.
-    
+
     Parameters
     ----------
     file_path : str
@@ -47,7 +47,7 @@ def _save_or_show(fig, save_path):
     """
     if save_path:
         _ensure_directory(save_path)
-        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
         plt.close(fig)
     else:
         plt.show()
@@ -70,7 +70,7 @@ def md_pattern_like(df):
     -----------
     df : pandas.DataFrame
         Input DataFrame with potential missing values
-        
+
     Returns:
     --------
     pandas.DataFrame
@@ -89,9 +89,7 @@ def md_pattern_like(df):
 
     # np.unique sorts the rows lexicographically, which for 0/1 rows of equal
     # length is R's order(pat) on the pattern strings
-    patterns, pattern_counts = np.unique(
-        missing[sorted_cols].to_numpy(dtype=int), axis=0, return_counts=True
-    )
+    patterns, pattern_counts = np.unique(missing[sorted_cols].to_numpy(dtype=int), axis=0, return_counts=True)
 
     pattern_matrix = pd.DataFrame(1 - patterns, columns=sorted_cols)
     pattern_matrix["#miss_row"] = patterns.sum(axis=1)
@@ -105,10 +103,13 @@ def md_pattern_like(df):
 
     return summary_df
 
-def plot_missing_data_pattern(pattern_df, figsize=(8, 5), title="Missing Data Pattern", rotate_names=False, save_path=None):
+
+def plot_missing_data_pattern(
+    pattern_df, figsize=(8, 5), title="Missing Data Pattern", rotate_names=False, save_path=None
+):
     """
     Plots the missing data pattern from a pattern dataframe.
-    
+
     Parameters:
     -----------
     pattern_df : pandas.DataFrame
@@ -121,7 +122,7 @@ def plot_missing_data_pattern(pattern_df, figsize=(8, 5), title="Missing Data Pa
         Whether to rotate column names 90 degrees. Default is False
     save_path : str, optional
         If provided, save the plot to this path instead of displaying it
-        
+
     Returns:
     --------
     matplotlib.figure.Figure
@@ -132,10 +133,12 @@ def plot_missing_data_pattern(pattern_df, figsize=(8, 5), title="Missing Data Pa
     row_miss = pattern_df.iloc[:-1, -1]
     col_miss = pattern_df.loc["#miss_col"].iloc[:-1]
 
-    cmap = ListedColormap([
-        (101/255, 155/255, 213/255),  # blue for present
-        (205/255, 100/255, 140/255)   # pink for missing
-    ])
+    cmap = ListedColormap(
+        [
+            (101 / 255, 155 / 255, 213 / 255),  # blue for present
+            (205 / 255, 100 / 255, 140 / 255),  # pink for missing
+        ]
+    )
 
     # Create figure with adjusted size based on rotation
     if rotate_names:
@@ -144,27 +147,36 @@ def plot_missing_data_pattern(pattern_df, figsize=(8, 5), title="Missing Data Pa
 
     # Create the heatmap; fixed limits keep the colours right when every
     # cell is observed or every cell is missing
-    sns.heatmap(1 - data_only.astype(int), cmap=cmap, cbar=False, vmin=0, vmax=1,
-                linewidths=0.5, linecolor='black', square=True, ax=ax)
+    sns.heatmap(
+        1 - data_only.astype(int),
+        cmap=cmap,
+        cbar=False,
+        vmin=0,
+        vmax=1,
+        linewidths=0.5,
+        linecolor="black",
+        square=True,
+        ax=ax,
+    )
 
     # Add row counts on the left
     for i, count in enumerate(row_counts):
-        ax.text(-0.7, i + 0.5, f"{count}", va='center', ha='right', fontsize=10)
+        ax.text(-0.7, i + 0.5, f"{count}", va="center", ha="right", fontsize=10)
 
     # Add missing counts on the right
     for i, miss in enumerate(row_miss):
-        ax.text(data_only.shape[1] + 0.1, i + 0.5, f"{int(miss)}", va='center', ha='left', fontsize=10)
+        ax.text(data_only.shape[1] + 0.1, i + 0.5, f"{int(miss)}", va="center", ha="left", fontsize=10)
 
     # Add column missing counts at the bottom
     for j, miss in enumerate(col_miss):
-        ax.text(j + 0.5, data_only.shape[0] + 0.5, f"{int(miss)}", ha='center', va='top', fontsize=10)
+        ax.text(j + 0.5, data_only.shape[0] + 0.5, f"{int(miss)}", ha="center", va="top", fontsize=10)
 
     # Add column names on top
     for j, col_name in enumerate(data_only.columns):
         if rotate_names:
-            ax.text(j + 0.5, -0.5, col_name, ha='right', va='top', rotation=90, fontsize=10)
+            ax.text(j + 0.5, -0.5, col_name, ha="right", va="top", rotation=90, fontsize=10)
         else:
-            ax.text(j + 0.5, -0.5, col_name, ha='center', va='top', fontsize=10)
+            ax.text(j + 0.5, -0.5, col_name, ha="center", va="top", fontsize=10)
 
     # Remove default x and y axis labels
     ax.set_xticks([])
@@ -173,9 +185,14 @@ def plot_missing_data_pattern(pattern_df, figsize=(8, 5), title="Missing Data Pa
     ax.set_yticklabels([])
 
     # Add total missing count at bottom right
-    ax.text(data_only.shape[1] + 0.1, data_only.shape[0] + 0.5, 
-            f"{int(pattern_df.loc['#miss_col'].iloc[-1])}", 
-            ha='left', va='top', fontsize=10)
+    ax.text(
+        data_only.shape[1] + 0.1,
+        data_only.shape[0] + 0.5,
+        f"{int(pattern_df.loc['#miss_col'].iloc[-1])}",
+        ha="left",
+        va="top",
+        fontsize=10,
+    )
 
     ax.set_title(title)
     fig.tight_layout(pad=0.4)

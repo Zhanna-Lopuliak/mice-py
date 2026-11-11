@@ -60,7 +60,7 @@ def get_imputer_func(method_name: str):
             f"'{method_name}'. Supported methods are: {list(_IMPUTER_MAP.keys())}"
         )
 
-    return _IMPUTER_MAP[method_name] 
+    return _IMPUTER_MAP[method_name]
 
 
 def get_imputer_params(method_name: str):
@@ -90,6 +90,5 @@ def get_imputer_params(method_name: str):
     return [
         name
         for name, param in signature.parameters.items()
-        if name not in _SUPPLIED_BY_MICE
-        and param.kind in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY)
+        if name not in _SUPPLIED_BY_MICE and param.kind in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY)
     ]
