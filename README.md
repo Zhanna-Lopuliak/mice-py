@@ -1,297 +1,124 @@
 # mice-py
 
-A comprehensive Python implementation of **Multiple Imputation by Chained Equations (MICE)** for handling missing data in statistical analysis and machine learning workflows.
+Multiple imputation by chained equations (MICE) in Python: a port of the R
+package [mice](https://cran.r-project.org/package=mice) for pandas data
+frames, checked against R mice 3.19.0.
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Documentation Status](https://readthedocs.org/projects/mice-py/badge/?version=latest)](https://mice-py.readthedocs.io/en/latest/?badge=latest)
 
-## Features
+## What it does
 
-- **Multiple Imputation Methods**: Choose from five robust imputation strategies
-  - **PMM** (Predictive Mean Matching) - Maintains distributional properties
-  - **CART** (Classification and Regression Trees) - Handles non-linear relationships
-  - **Random Forest** - Captures complex interactions
-  - **MIDAS** (Multiple Imputation with Distant Average Substitution) - Efficient for small samples
-  - **Sample** - Simple random sampling from observed values
+- **Imputation** with five of R mice's methods: predictive mean matching
+  (`pmm`, the default), `midas` (R's `midastouch`), classification and
+  regression trees (`cart`), random forests (`rf`) and random draws
+  (`sample`). Numeric, boolean and categorical columns.
+- **R's model set-up**: full predictor matrix by default, `quickpred`,
+  removal of constant and collinear variables (with R's logged events), R's
+  dummy coding of categorical predictors.
+- **Pooling** with Rubin's rules and Barnard-Rubin degrees of freedom, for
+  any statsmodels formula model or for estimates computed elsewhere.
+- **Diagnostic plots** after R mice: missing-data pattern, strip, box,
+  density and scatter plots of observed and imputed values, trace plots.
 
-- **Flexible Configuration**:
-  - Automatic predictor matrix estimation
-  - Custom visit sequences for imputation order
-  - Method-specific parameter control
-  - Mixed data types (numeric and categorical)
+## Relation to R mice
 
-- **Statistical Pooling**:
-  - Rubin's rules for combining estimates
-  - Fraction of missing information (FMI)
-  - Confidence intervals and standard errors
-  - Formula-based model fitting with statsmodels integration
+mice-py 0.2 was compared with R mice 3.19.0 (R 4.6.2) in four layers: exact
+comparisons of the deterministic parts, the distribution of the imputed
+values of each method, a simulation study in which both engines impute the
+same datasets, and tests of invariants. Every comparison with R agrees (the
+random ones within Monte Carlo error) except random forests with categorical
+predictors, where scikit-learn and ranger grow different trees. Details:
+[Validation against R mice](https://mice-py.readthedocs.io/en/latest/r_mice/validation.html)
+and [Differences from R mice](https://mice-py.readthedocs.io/en/latest/r_mice/differences.html).
 
-- **Diagnostic Tools**:
-  - Convergence diagnostics (chain statistics)
-  - Stripplots, box plots, and density plots
-  - Missing data pattern visualization
-  - XY plots for bivariate relationships
-
-- **Production-Ready**:
-  - Comprehensive input validation
-  - Configurable logging system
-  - Extensive test suite
-  - Well-documented API
+**Upgrading from 0.1:** version 0.2 uses R's defaults and corrects several
+methods, so results change. See
+[Upgrading from 0.1 to 0.2](https://mice-py.readthedocs.io/en/latest/upgrading.html)
+and the [changelog](CHANGELOG.md).
 
 ## Installation
-
-### From GitHub
 
 ```bash
 pip install git+https://github.com/Zhanna-Lopuliak/mice-py.git
 ```
 
-### Development Installation
+Python 3.9 to 3.13. This installs two packages, `imputation` and `plotting`.
+
+## Quick start
+
+```python
+import numpy as np
+import pandas as pd
+from imputation import MICE
+
+# Example data: y depends on x1 and x2; 30% of x1 is missing
+rng = np.random.default_rng(0)
+n = 200
+df = pd.DataFrame({"x1": rng.normal(size=n), "x2": rng.normal(size=n)})
+df["y"] = 0.5 + df["x1"] + 0.5 * df["x2"] + rng.normal(size=n)
+df.loc[rng.random(n) < 0.3, "x1"] = np.nan
+
+mice = MICE(df)
+datasets = mice.impute(n_imputations=5, seed=1)  # pmm, 5 iterations: R's defaults
+mice.fit("y ~ x1 + x2")                          # OLS on each completed dataset
+print(mice.pool(summ=True))                      # Rubin's rules, Barnard-Rubin df
+```
+
+In R this is `imp <- mice(df, m = 5, seed = 1)`,
+`fit <- with(imp, lm(y ~ x1 + x2))`, `summary(pool(fit))`; the numbers differ
+because the random number generators do. `mice.pool()["table"]` gives R's
+full table (`estimate`, `ubar`, `b`, `t`, `df`, `riv`, `lambda`, `fmi`,
+intervals) as a data frame.
+
+## Documentation
+
+[mice-py.readthedocs.io](https://mice-py.readthedocs.io/): the
+[quick start](https://mice-py.readthedocs.io/en/latest/quickstart.html) with
+diagnostics, the
+[user guide](https://mice-py.readthedocs.io/en/latest/user_guide/index.html)
+(methods and their parameters, predictor matrices, convergence, plots,
+pooling, logging) and the
+[API reference](https://mice-py.readthedocs.io/en/latest/api/index.html). The
+sources are in `docs/source/`; example notebooks are in `examples/`.
+
+## Development
 
 ```bash
 git clone https://github.com/Zhanna-Lopuliak/mice-py.git
 cd mice-py
-pip install -e .
+uv sync          # package, test tools, ruff, mypy, pre-commit
+uv run pytest    # all tests, including the comparisons with R
 ```
 
-### With Optional Dependencies
+See the [contributing guide](https://mice-py.readthedocs.io/en/latest/contributing.html),
+[`tests/README.md`](tests/README.md) and
+[`simulations/README.md`](simulations/README.md).
 
-```bash
-# For testing
-pip install -e ".[test]"
-
-# For development
-pip install -e ".[dev]"
-
-# For documentation
-pip install -e ".[docs]"
-```
-
-## Quick Start
-
-```python
-import pandas as pd
-import numpy as np
-from imputation import MICE
-
-# Load your data with missing values
-df = pd.read_csv("your_data.csv")
-
-# Initialize MICE
-mice = MICE(df)
-
-# Perform multiple imputation
-mice.impute(
-    n_imputations=5,      # Number of imputed datasets to create
-    maxit=10,             # Number of MICE iterations
-    method='pmm'          # Imputation method (pmm, cart, rf, midas, sample)
-)
-
-# Access imputed datasets
-imputed_datasets = mice.imputed_datasets
-
-# Fit a model on imputed data
-mice.fit('outcome ~ predictor1 + predictor2 + predictor3')
-
-# Pool results using Rubin's rules
-pooled_results = mice.pool(summ=True)
-print(pooled_results)
-```
-
-## Complete Workflow Example
-
-```python
-import pandas as pd
-import numpy as np
-from imputation import MICE, configure_logging
-from plotting.utils import md_pattern_like, plot_missing_data_pattern
-from plotting.diagnostics import stripplot, densityplot, plot_chain_stats
-
-# Optional: Enable logging to track progress
-configure_logging(level='INFO')
-
-# 1. Load data
-df = pd.DataFrame({
-    'age': [25, 30, np.nan, 45, 50, np.nan, 35, 40],
-    'income': [50000, np.nan, 60000, np.nan, 80000, 70000, np.nan, 75000],
-    'education': ['Bachelor', 'Master', 'Bachelor', np.nan, 'PhD', 'Master', 'Bachelor', np.nan],
-    'employed': [1, 1, 0, 1, 1, np.nan, 1, 0]
-})
-
-# 2. Examine missing data patterns
-pattern = md_pattern_like(df)
-print("Missing Data Pattern:\n", pattern)
-plot_missing_data_pattern(pattern, save_path='missing_pattern.png')
-
-# 3. Set up predictor matrix (optional - auto-estimated if not provided)
-predictor_matrix = pd.DataFrame(1, index=df.columns, columns=df.columns)
-np.fill_diagonal(predictor_matrix.values, 0)
-
-# 4. Perform imputation
-mice = MICE(df)
-mice.impute(
-    n_imputations=5,
-    maxit=15,
-    predictor_matrix=predictor_matrix,
-    method='cart',  # Can also use dict for column-specific methods
-    initial='sample'
-)
-
-# 5. Check convergence
-plot_chain_stats(
-    chain_mean=mice.chain_mean,
-    chain_var=mice.chain_var,
-    save_path='convergence.png'
-)
-
-# 6. Visualize imputations
-missing_pattern = df.notna().astype(int)
-stripplot(mice.imputed_datasets, missing_pattern, save_path='stripplot.png')
-densityplot(mice.imputed_datasets, missing_pattern, save_path='density.png')
-
-# 7. Analyze imputed data
-mice.fit('income ~ age + education + employed')
-results = mice.pool(summ=True)
-print("\nPooled Analysis Results:")
-print(results)
-```
-
-## Using Different Methods
-
-```python
-# Use the same method for all variables
-mice.impute(n_imputations=5, method='pmm')
-
-# Use different methods for different variables
-method_dict = {
-    'age': 'pmm',
-    'income': 'cart',
-    'education': 'sample',
-    'employed': 'rf'
-}
-mice.impute(n_imputations=5, method=method_dict)
-
-# Pass method-specific parameters
-mice.impute(
-    n_imputations=5,
-    method='pmm',
-    pmm_donors=5  # PMM-specific parameter
-)
-```
-
-## Logging Configuration
-
-The package is silent by default. Enable logging when needed:
-
-```python
-from imputation import configure_logging
-
-# Basic configuration
-configure_logging()
-
-# Detailed debugging
-configure_logging(level='DEBUG')
-
-# Custom log directory
-configure_logging(log_dir='my_logs', level='INFO')
-
-# Quiet mode (errors only)
-configure_logging(console_level='ERROR')
-```
-
-See `LOGGING.md` for detailed logging documentation.
-
-## Requirements
-
-- Python ≥ 3.9
-- numpy ≥ 1.24
-- pandas ≥ 2.0
-- scipy ≥ 1.10
-- scikit-learn ≥ 1.3
-- statsmodels ≥ 0.14
-- matplotlib ≥ 3.7
-- seaborn ≥ 0.12
-- patsy ≥ 1.0
-- tqdm ≥ 4.60
-
-## Documentation
-
-Full documentation is available at [Read the Docs](https://mice-py.readthedocs.io/) (powered by Sphinx).
-
-### Documentation includes:
-- Complete API reference
-- Method descriptions and mathematical details
-- Advanced usage examples
-- Troubleshooting guide
-
-## Testing
-
-```bash
-# Install test dependencies
-pip install -e ".[test]"
-
-# Run all tests
-pytest
-
-# Run with coverage
-pytest --cov=imputation --cov=plotting --cov-report=term-missing
-
-# Run specific test categories
-pytest tests/test_imputation/     # Core functionality
-pytest tests/test_plotting/       # Plotting functions
-pytest tests/test_integration.py  # End-to-end workflows
-```
-
-See `tests/README.md` for detailed testing documentation.
-
-## Project Structure
+## Project structure
 
 ```
 mice-py/
-├── imputation/          # Core MICE implementation
-│   ├── MICE.py         # Main MICE class
-│   ├── PMM.py          # Predictive Mean Matching
-│   ├── cart.py         # CART imputation
-│   ├── rf.py           # Random Forest imputation
-│   ├── midas.py        # MIDAS imputation
-│   ├── sample.py       # Simple sampling
-│   ├── pooling.py      # Rubin's rules pooling
-│   ├── validators.py   # Input validation
-│   └── utils.py        # Helper functions
-├── plotting/            # Diagnostic visualization
-│   ├── diagnostics.py  # Diagnostic plots
-│   └── utils.py        # Missing data pattern plots
-├── tests/               # Test suite
-├── docs/                # Sphinx documentation source
-└── examples/            # Usage examples
+├── imputation/        # MICE class, imputation methods, design, pooling
+├── plotting/          # diagnostic plots and the missing-data pattern
+├── tests/             # unit, parity (against R fixtures) and property tests
+│   └── reference/     # R scripts and the fixtures they produce
+├── simulations/       # simulation study, mice-py against R mice
+├── examples/          # Jupyter notebooks and the nhanes data
+└── docs/              # Sphinx documentation
 ```
 
 ## Background
 
-This package was developed as part of a master's thesis at Ludwig Maximilian University of Munich, Statistics Department. It provides a modular Python framework for multiple imputation inspired by the R package `mice`, with full flexibility in defining distance metrics, donor selection rules, and imputation parameters.
-
-### Key Findings from Research
-
-Based on extensive simulation studies (675 configurations across continuous, semi-continuous, and discrete target variables):
-
-- **PMM** performs reliably under MCAR and mild MAR, particularly with symmetric distributions and large samples
-- **PMM** may struggle under skewed distributions or structured missingness
-- **MIDAS** consistently matches or outperforms PMM in coverage and standard error estimation, especially under skewness or small sample sizes
-- **CART** and **Random Forest** handle non-linear relationships and interactions effectively
-- Method choice should consider data characteristics, missingness patterns, and sample size
-
-## Contributing
-
-Contributions are welcome! Please feel free to:
-- Report bugs and issues
-- Suggest new features
-- Submit pull requests
-- Improve documentation
+mice-py was developed as part of a master's thesis at the Department of
+Statistics, Ludwig Maximilian University of Munich. `simulations/legacy/`
+holds result files of the thesis's simulation study; the code that produced
+them is not in this repository.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT; see [LICENSE](LICENSE).
 
 ## Authors
 
@@ -300,8 +127,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Anna-Carolina Haensch** - Anna-Carolina.Haensch@stat.uni-muenchen.de
 
 ## Citation
-
-If you use this package in your research, please cite:
 
 ```bibtex
 @software{mice-py,
@@ -314,5 +139,10 @@ If you use this package in your research, please cite:
 
 ## References
 
-- Van Buuren, S., & Groothuis-Oudshoorn, K. (2011). mice: Multivariate imputation by chained equations in R. *Journal of statistical software*, 45, 1-67.
-- Rubin, D. B. (1987). *Multiple imputation for nonresponse in surveys*. New York: John Wiley & Sons.
+- Van Buuren, S., & Groothuis-Oudshoorn, K. (2011). mice: Multivariate
+  imputation by chained equations in R. *Journal of Statistical Software*,
+  45(3), 1-67.
+- Van Buuren, S. (2018). *Flexible Imputation of Missing Data* (2nd ed.).
+  Chapman & Hall/CRC.
+- Rubin, D. B. (1987). *Multiple imputation for nonresponse in surveys*. New
+  York: John Wiley & Sons.
