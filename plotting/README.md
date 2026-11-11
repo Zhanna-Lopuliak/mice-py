@@ -11,19 +11,20 @@ Contains diagnostic visualization functions for analyzing imputed datasets:
 - `bwplot()`: Creates box-and-whisker plots for observed and imputed values  
 - `densityplot()`: Creates density plots (KDE) for observed and imputed values
 - `densityplot_split()`: Creates separate density plots for one column for observed data and each imputation
-- `xyplot()`: Creates scatter plots of two columns, showing observed and imputed values
-- `plot_chain_stats()`: Plots convergence diagnostics for MICE chains (mean and variance)
+- `xyplot()`: Creates scatter plots of two columns, coloured by whether the y value was imputed (as R's `xyplot.mids`)
+- `plot_chain_stats()`: Plots convergence diagnostics for MICE chains (mean and standard deviation, as R's `plot.mids`)
 
 All diagnostic functions support:
 - Custom colors for observed and imputed values
 - Option to merge imputations into a single plot or show separate plots
 - Automatic handling of missing values
 - Optional saving to file
+- They return the matplotlib `Figure`; with `save_path` the figure is saved and then closed
 
 ### `utils.py`
 Contains utility functions for missing data pattern analysis and visualization:
 
-- `md_pattern_like()`: Replicates R's mice::md.pattern() behavior, showing missing data patterns as 1 (observed) and 0 (missing), with counts per pattern and per column
+- `md_pattern_like()`: Replicates R's mice::md.pattern(plot = FALSE), showing missing data patterns as 1 (observed) and 0 (missing), with counts per pattern and per column, in R's row and column order
 - `plot_missing_data_pattern()`: Creates a visual representation of missing data patterns
 
 ### Example Files
@@ -111,6 +112,7 @@ plot_chain_stats(
 ## Notes
 
 - All plotting functions handle missing values automatically
-- Plots can be saved to files by providing a `save_path` parameter
+- Plots can be saved to files by providing a `save_path` parameter; the figure is then closed
+- Every plot function returns its `Figure` (or `None`, with a warning, when there is nothing to plot). In Jupyter, end the call with `;` to avoid showing the figure twice
 - The diagnostic plots are designed to help assess the quality of MICE imputations
 - Missing data pattern functions help understand the structure of missingness in your data 

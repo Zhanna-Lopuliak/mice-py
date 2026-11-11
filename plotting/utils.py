@@ -25,6 +25,35 @@ def _ensure_directory(file_path):
         logger.debug(f"Created directory: {directory}")
 
 
+def _save_or_show(fig, save_path):
+    """
+    Save and close ``fig`` when ``save_path`` is given, otherwise show it.
+
+    Closing a saved figure keeps loops that save many plots from piling up
+    open figures. The figure object itself stays usable, for example for
+    another ``savefig``.
+
+    Parameters
+    ----------
+    fig : matplotlib.figure.Figure
+        The figure to save or show.
+    save_path : str or None
+        Where to save the figure.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        ``fig``.
+    """
+    if save_path:
+        _ensure_directory(save_path)
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+    else:
+        plt.show()
+    return fig
+
+
 def md_pattern_like(df):
     """
     Replicates the md.pattern() behavior from R's mice package.
@@ -95,8 +124,8 @@ def plot_missing_data_pattern(pattern_df, figsize=(8, 5), title="Missing Data Pa
         
     Returns:
     --------
-    pandas.DataFrame
-        The pattern matrix with counts, similar to R's md.pattern output
+    matplotlib.figure.Figure
+        The figure. With ``save_path`` it is saved and then closed.
     """
     data_only = pattern_df.iloc[:-1, :-1]
     row_counts = pattern_df.index[:-1]
@@ -111,11 +140,12 @@ def plot_missing_data_pattern(pattern_df, figsize=(8, 5), title="Missing Data Pa
     # Create figure with adjusted size based on rotation
     if rotate_names:
         figsize = (figsize[0], figsize[1] + 0.5)  # Add extra height for rotated labels
-    plt.figure(figsize=figsize)
-    
-    # Create the heatmap
-    ax = sns.heatmap(1 - data_only.astype(int), cmap=cmap, cbar=False,
-                     linewidths=0.5, linecolor='black', square=True)
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Create the heatmap; fixed limits keep the colours right when every
+    # cell is observed or every cell is missing
+    sns.heatmap(1 - data_only.astype(int), cmap=cmap, cbar=False, vmin=0, vmax=1,
+                linewidths=0.5, linecolor='black', square=True, ax=ax)
 
     # Add row counts on the left
     for i, count in enumerate(row_counts):
@@ -147,15 +177,7 @@ def plot_missing_data_pattern(pattern_df, figsize=(8, 5), title="Missing Data Pa
             f"{int(pattern_df.loc['#miss_col'].iloc[-1])}", 
             ha='left', va='top', fontsize=10)
 
-    plt.title(title)
-    plt.tight_layout(pad=0.4)
-    
-    if save_path:
-        _ensure_directory(save_path)
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.close()
-    else:
-        plt.show()
+    ax.set_title(title)
+    fig.tight_layout(pad=0.4)
 
-    # Return the pattern matrix for textual output
-    return pattern_df
+    return _save_or_show(fig, save_path)

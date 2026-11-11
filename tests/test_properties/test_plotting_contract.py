@@ -1,8 +1,8 @@
 """Item 7: plotting contract (C7, A8).
 
-Planned: importing ``plotting`` has no side effects; every plot function
-returns its matplotlib ``Figure``; ``xyplot`` does not show rows with an
-imputed x as observed; the trace plot shows the standard deviation.
+Importing ``plotting`` has no side effects; every plot function returns its
+matplotlib ``Figure``; ``xyplot`` groups points as R's ``xyplot.mids`` does;
+the trace plot shows the standard deviation.
 """
 
 import importlib
@@ -17,14 +17,12 @@ from matplotlib.figure import Figure
 
 pytestmark = pytest.mark.plotting
 
-C7_IMPORT = "C7: plotting.diagnostics seeds NumPy and sets pandas options at import"
-C7_RETURN = "C7: plot functions return None instead of the Figure"
 PANDAS_OPTIONS = ["display.max_columns", "mode.chained_assignment"]
 
 
 @pytest.fixture(autouse=True)
 def _preserve_pandas_options():
-    """Re-importing ``plotting`` today changes pandas options; undo that after each test."""
+    """Restore pandas options after each test, should a re-import of ``plotting`` change them."""
     saved = {n: pd.get_option(n) for n in PANDAS_OPTIONS}
     yield
     for n, v in saved.items():
@@ -50,7 +48,6 @@ def _reimport_plotting():
     return restore
 
 
-@pytest.mark.xfail(strict=True, reason=C7_IMPORT + " (np.random.seed(42))")
 def test_import_does_not_touch_numpy_global_rng():
     np.random.seed(987)
     before = np.random.get_state()
@@ -63,7 +60,6 @@ def test_import_does_not_touch_numpy_global_rng():
     assert after[2:] == before[2:]
 
 
-@pytest.mark.xfail(strict=True, reason=C7_IMPORT + " (pandas display / chained_assignment)")
 def test_import_does_not_change_pandas_options():
     pd.set_option("display.max_columns", 7)
     pd.set_option("mode.chained_assignment", "warn")
@@ -127,7 +123,6 @@ PLOT_FUNCTIONS = [
 ]
 
 
-@pytest.mark.xfail(strict=True, reason=C7_RETURN)
 @pytest.mark.parametrize("name", PLOT_FUNCTIONS)
 def test_plot_function_returns_figure(name):
     assert isinstance(_call(name), Figure)
@@ -147,19 +142,14 @@ def test_saving_closes_the_figure(tmp_path):
 # A8
 # ---------------------------------------------------------------------------
 
-def _figure(returned):
-    """The figure under test, independent of C7 (today the functions return None)."""
-    return returned if isinstance(returned, Figure) else plt.gcf()
-
-
-@pytest.mark.xfail(strict=True, reason="A8: trace plot shows the variance, R shows the standard deviation")
 def test_trace_plot_shows_standard_deviation():
     from plotting.diagnostics import plot_chain_stats
 
     chain_mean = {"y": np.arange(6.0).reshape(3, 2)}
     chain_var = {"y": (np.arange(1.0, 7.0) ** 2).reshape(3, 2)}
     plt.close("all")
-    fig = _figure(plot_chain_stats(chain_mean, chain_var))
+    fig = plot_chain_stats(chain_mean, chain_var)
+    assert isinstance(fig, Figure)
     spread_axes = fig.axes[1]
     lines = [line.get_ydata() for line in spread_axes.get_lines()]
     assert len(lines) == 2
@@ -167,11 +157,23 @@ def test_trace_plot_shows_standard_deviation():
         np.testing.assert_allclose(ydata, np.sqrt(chain_var["y"][:, chain]))
 
 
-@pytest.mark.xfail(strict=True, reason="A8: xyplot draws rows with an imputed x in the observed colour")
-def test_xyplot_does_not_show_imputed_x_as_observed():
-    """Only rows where both x and y are observed may appear in the observed colour."""
-    from plotting.diagnostics import xyplot
+# xyplot. R 4.6.2 with mice 3.19.0 on this exact missingness layout (x missing in
+# rows 1-3, y missing in rows 3, 6, 7; m = 2), reading the groups and the drawn
+# (non-NA) points of each panel of the lattice object:
+#   xyplot(imp, y ~ x | .imp)
+#     .imp = 0       observed colour: rows 0, 4, 5, 8, 9, 10, 11; imputed colour: none
+#     .imp = 1, 2    observed colour: rows 0, 1, 2, 4, 5, 8, 9, 10, 11; imputed colour: rows 3, 6, 7
+#   xyplot(imp, y ~ x)
+#     one panel      observed colour: 25 points (7 + 2 * 9); imputed colour: 6 (2 * 3)
+# With its default na.groups, R colours by the missingness of y only. Rows with
+# an observed y and an imputed x are therefore in the observed colour in the
+# panels of the completed datasets, at the imputed x; the panel of the original
+# data (.imp = 0) leaves them out because x is NA there.
 
+OBSERVED, IMPUTED = "#0000ff", "#ff0000"
+
+
+def _xy_inputs():
     n = 12
     x = np.arange(n, dtype=float)
     y = 2 * x + 1
@@ -182,16 +184,58 @@ def test_xyplot_does_not_show_imputed_x_as_observed():
         pd.DataFrame({"x": x + 100 * x_missing * (k + 1), "y": y + 100 * y_missing * (k + 1)})
         for k in range(2)
     ]
-    observed_rgb = to_rgba("#0000ff")[:3]
+    return datasets, pattern, x_missing, y_missing
+
+
+def _points(ax, colour):
+    """Sorted (x, y) pairs drawn on ``ax`` in ``colour``."""
+    rgb = to_rgba(colour)[:3]
+    offsets = [
+        c.get_offsets() for c in ax.collections
+        if len(c.get_offsets()) and np.allclose(c.get_facecolor()[0][:3], rgb)
+    ]
+    return sorted(map(tuple, np.concatenate(offsets).tolist())) if offsets else []
+
+
+def _rows(df, mask):
+    return sorted(zip(df.loc[mask, "x"].tolist(), df.loc[mask, "y"].tolist()))
+
+
+def test_xyplot_groups_points_as_r():
+    """Observed panel: complete rows only. Panel k: coloured by whether y was imputed."""
+    from plotting.diagnostics import xyplot
+
+    datasets, pattern, x_missing, y_missing = _xy_inputs()
     plt.close("all")
-    fig = _figure(xyplot(datasets, pattern, "x", "y", observed_color="#0000ff", imputed_color="#ff0000"))
-    both_observed = int((~x_missing & ~y_missing).sum())
+    fig = xyplot(datasets, pattern, "x", "y", observed_color=OBSERVED, imputed_color=IMPUTED)
+    assert isinstance(fig, Figure)
     panels = [ax for ax in fig.axes if ax.get_visible() and ax.collections]
-    assert panels
-    for ax in panels:
-        n_observed_colour = sum(
-            len(c.get_offsets())
-            for c in ax.collections
-            if len(c.get_offsets()) and np.allclose(c.get_facecolor()[0][:3], observed_rgb)
-        )
-        assert n_observed_colour == both_observed, ax.get_title()
+    assert [ax.get_title() for ax in panels] == ["Observed", "Imp 1", "Imp 2"]
+
+    # Only rows where both x and y are observed appear in the observed panel
+    complete = ~x_missing & ~y_missing
+    assert _points(panels[0], OBSERVED) == _rows(datasets[0], complete)
+    assert len(_points(panels[0], OBSERVED)) == 7
+    assert _points(panels[0], IMPUTED) == []
+
+    for ax, df in zip(panels[1:], datasets):
+        assert _points(ax, OBSERVED) == _rows(df, ~y_missing), ax.get_title()
+        assert _points(ax, IMPUTED) == _rows(df, y_missing), ax.get_title()
+        assert (len(_points(ax, OBSERVED)), len(_points(ax, IMPUTED))) == (9, 3)
+
+
+def test_xyplot_merged_overlays_all_panels_as_r():
+    from plotting.diagnostics import xyplot
+
+    datasets, pattern, x_missing, y_missing = _xy_inputs()
+    plt.close("all")
+    fig = xyplot(datasets, pattern, "x", "y", merge_imputations=True,
+                 observed_color=OBSERVED, imputed_color=IMPUTED)
+    assert isinstance(fig, Figure)
+    (ax,) = fig.axes
+    complete = ~x_missing & ~y_missing
+    expected_observed = sorted(_rows(datasets[0], complete) + sum((_rows(df, ~y_missing) for df in datasets), []))
+    expected_imputed = sorted(sum((_rows(df, y_missing) for df in datasets), []))
+    assert _points(ax, OBSERVED) == expected_observed
+    assert _points(ax, IMPUTED) == expected_imputed
+    assert (len(expected_observed), len(expected_imputed)) == (25, 6)
