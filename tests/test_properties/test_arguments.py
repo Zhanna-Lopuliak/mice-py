@@ -1,17 +1,15 @@
 """Item 3: argument handling (C2, C4).
 
-Planned: the imputers have no ``**kwargs``, so an unknown argument raises
+The imputers have no ``**kwargs``, so an unknown argument raises
 ``TypeError``; ``impute`` validates ``<method>_<param>`` names against the
-imputer signatures and raises on unknown names; NumPy integers are accepted
-for ``n_imputations`` and ``maxit``.
+imputer signatures and raises on unknown names. Planned: NumPy integers are
+accepted for ``n_imputations`` and ``maxit``.
 """
 
 import numpy as np
 import pytest
 
-from ._helpers import impute, method_params, numeric_frame, pmm_reference_frame
-
-C2_SWALLOWED = "C2: unknown keyword arguments are swallowed by **kwargs"
+from ._helpers import METHODS, impute, numeric_frame, pmm_reference_frame
 
 
 def _problem():
@@ -25,7 +23,7 @@ def _problem():
     return y, ry, x
 
 
-@pytest.mark.parametrize("method", method_params({"midas": C2_SWALLOWED, "sample": C2_SWALLOWED}))
+@pytest.mark.parametrize("method", METHODS)
 def test_imputer_rejects_unknown_keyword(method):
     from imputation.utils import get_imputer_func
 
@@ -34,25 +32,115 @@ def test_imputer_rejects_unknown_keyword(method):
         get_imputer_func(method)(y, ry, x, not_a_parameter=1, rng=np.random.default_rng(0))
 
 
-@pytest.mark.parametrize("method", method_params({"midas": C2_SWALLOWED, "sample": C2_SWALLOWED}))
+@pytest.mark.parametrize("method", METHODS)
 def test_impute_rejects_misspelled_method_parameter(method):
     df = numeric_frame(n=30)
     with pytest.raises((TypeError, ValueError)):
         impute(df, method, n_imputations=1, maxit=1, **{f"{method}_not_a_parameter": 3})
 
 
-@pytest.mark.xfail(strict=True, reason=C2_SWALLOWED + " (unknown method prefix)")
 def test_impute_rejects_unknown_method_prefix():
     df = numeric_frame(n=30)
     with pytest.raises((TypeError, ValueError)):
         impute(df, "pmm", n_imputations=1, maxit=1, nosuchmethod_donors=3)
 
 
-@pytest.mark.xfail(strict=True, reason=C2_SWALLOWED + " (plain unknown keyword)")
 def test_impute_rejects_unknown_plain_keyword():
     df = numeric_frame(n=30)
     with pytest.raises((TypeError, ValueError)):
         impute(df, "pmm", n_imputations=1, maxit=1, n_imputation=3)
+
+
+def test_unknown_argument_message_names_it_and_lists_valid_ones():
+    df = numeric_frame(n=30)
+    with pytest.raises((TypeError, ValueError)) as info:
+        impute(df, "pmm", n_imputations=1, maxit=1, pmm_donor=3)
+    message = str(info.value)
+    assert "pmm_donor" in message
+    assert "pmm_donors" in message and "pmm_matchtype" in message
+
+
+def test_valid_parameter_of_another_method_is_accepted():
+    """``cart_min_samples_leaf`` names a real parameter; with pmm it is unused, not wrong."""
+    df = numeric_frame(n=30)
+    _, out = impute(df, "pmm", n_imputations=1, maxit=1, cart_min_samples_leaf=3)
+    assert len(out) == 1
+
+
+def test_quickpred_arguments_still_accepted():
+    df = numeric_frame(n=30)
+    mice, _ = impute(
+        df, "pmm", n_imputations=1, maxit=1, predictor_matrix=None,
+        min_cor=0.0, min_puc=0.0, include=["d"], exclude=["k"], correlation_method="spearman",
+    )
+    assert mice.predictor_matrix["d"].drop("d").eq(1).all()
+    assert mice.predictor_matrix["k"].eq(0).all()
+
+
+def test_output_dir_is_deprecated_and_ignored(tmp_path):
+    df = numeric_frame(n=30)
+    target = tmp_path / "out"
+    with pytest.warns(DeprecationWarning, match="output_dir"):
+        _, out = impute(df, "sample", n_imputations=1, maxit=1, output_dir=str(target))
+    assert len(out) == 1
+    assert not target.exists()
+
+
+def test_formerly_implicit_parameters_reach_the_backend(monkeypatch):
+    """``ls_meth`` (pmm), ``tree_params`` (cart) and ``forest_params`` (rf) are
+    explicit parameters now and arrive where they belong."""
+    import imputation.cart
+    import imputation.PMM
+    import imputation.rf
+
+    seen = {}
+    norm_draw = imputation.PMM.norm_draw
+
+    def recording_norm_draw(*args, **kwargs):
+        seen["ls_meth"] = kwargs.get("ls_meth")
+        return norm_draw(*args, **kwargs)
+
+    class RecordingTree(imputation.cart.DecisionTreeRegressor):
+        def fit(self, *args, **kwargs):
+            seen["tree"] = self.get_params()
+            return super().fit(*args, **kwargs)
+
+    class RecordingForest(imputation.rf.RandomForestRegressor):
+        def fit(self, *args, **kwargs):
+            seen["forest"] = self.get_params()
+            return super().fit(*args, **kwargs)
+
+    monkeypatch.setattr(imputation.PMM, "norm_draw", recording_norm_draw)
+    monkeypatch.setattr(imputation.cart, "DecisionTreeRegressor", RecordingTree)
+    monkeypatch.setattr(imputation.rf, "RandomForestRegressor", RecordingForest)
+    df = numeric_frame(n=30)
+    impute(df, "pmm", n_imputations=1, maxit=1, pmm_ls_meth="ridge")
+    impute(df, "cart", n_imputations=1, maxit=1, cart_tree_params={"max_depth": 3})
+    impute(
+        df, "rf", n_imputations=1, maxit=1,
+        rf_max_depth=4, rf_min_samples_leaf=2, rf_forest_params={"max_features": 0.5},
+    )
+    assert seen["ls_meth"] == "ridge"
+    assert seen["tree"]["max_depth"] == 3
+    assert (seen["forest"]["max_depth"], seen["forest"]["min_samples_leaf"]) == (4, 2)
+    assert seen["forest"]["max_features"] == 0.5
+
+
+@pytest.mark.parametrize(
+    "method, argument, key",
+    [
+        ("cart", "tree_params", "random_state"),
+        ("cart", "tree_params", "ccp_alpha"),
+        ("rf", "forest_params", "random_state"),
+        ("rf", "forest_params", "n_estimators"),
+    ],
+)
+def test_estimator_params_cannot_override_explicit_arguments(method, argument, key):
+    from imputation.utils import get_imputer_func
+
+    y, ry, x = _problem()
+    with pytest.raises(TypeError, match=key):
+        get_imputer_func(method)(y, ry, x, rng=np.random.default_rng(0), **{argument: {key: 1}})
 
 
 def _nearest_fitted_donor(df, mis):

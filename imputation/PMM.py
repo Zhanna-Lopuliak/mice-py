@@ -6,7 +6,7 @@ from sklearn.cross_decomposition import CCA
 from sklearn.neighbors import KDTree
 
 def pmm(y, id_obs, x, id_mis = None, donors = 5, matchtype = 1,
-                    quantify = True, ridge = 1e-5, matcher = "NN", rng = None, **kwargs):
+                    quantify = True, ridge = 1e-5, matcher = "NN", ls_meth = "qr", rng = None):
     """
        Predictive Mean Matching (PMM) imputation.
 
@@ -49,8 +49,11 @@ def pmm(y, id_obs, x, id_mis = None, donors = 5, matchtype = 1,
        matcher : str, default="NN"
            Matching method. Currently only "NN" (nearest neighbor) is supported.
 
-       **kwargs : dict
-           Additional arguments passed to `norm_draw()`, such as `ls_meth`.
+       ls_meth : str, default="qr"
+           Least squares method passed to `norm_draw()`: "qr", "ridge" or "svd".
+
+       rng : np.random.Generator, optional
+           Random number generator for reproducibility. If None, a fresh generator is used.
 
        Returns
        -------
@@ -115,7 +118,7 @@ def pmm(y, id_obs, x, id_mis = None, donors = 5, matchtype = 1,
         rng = np.random.default_rng()
     
     # Parameter estimation
-    p = norm_draw(ynum, id_obs, x, ridge=ridge, rng=rng, **kwargs)
+    p = norm_draw(ynum, id_obs, x, ridge=ridge, rng=rng, ls_meth=ls_meth)
 
     #dotproduct x @ parameter = predicted values
     if matchtype == 0:

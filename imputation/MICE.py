@@ -46,6 +46,7 @@ from .validators import (
     validate_formula,
 )
 from .constants import (
+    ImputationMethod,
     InitialMethod,
     DEFAULT_METHOD,
     DEFAULT_INITIAL_METHOD,
@@ -53,10 +54,47 @@ from .constants import (
 )
 
 # Import concrete imputation functions
-from .utils import get_imputer_func
+from .utils import get_imputer_func, get_imputer_params
 # External helpers
 from .mice_result import MICEresult
 from .pooling import pool_descriptive_statistics
+
+# Keyword arguments of `MICE.impute` that are passed to `_quickpred`
+_QUICKPRED_ARGUMENTS = ('min_cor', 'min_puc', 'include', 'exclude', 'correlation_method')
+
+
+def _check_method_params(params):
+    """
+    Check that every name in `params` has the form `<method>_<param>`.
+
+    `<method>` must be a supported method and `<param>` a parameter of its
+    imputer that MICE does not supply itself (see `get_imputer_params`).
+
+    Raises
+    ------
+    TypeError
+        For the first invalid name; the message lists the valid names.
+    """
+    valid = {method: get_imputer_params(method) for method in ImputationMethod.get_all_methods()}
+    for key in params:
+        method = next((m for m in valid if key.startswith(f"{m}_")), None)
+        if method is not None and key[len(method) + 1:] in valid[method]:
+            continue
+        if method is not None and not valid[method]:
+            hint = f"Method '{method}' takes no parameters."
+        elif method is not None:
+            hint = (
+                f"Valid parameters for method '{method}': "
+                f"{', '.join(f'{method}_{p}' for p in valid[method])}."
+            )
+        else:
+            hint = (
+                "Method parameters take the form <method>_<parameter>; valid ones: "
+                f"{', '.join(f'{m}_{p}' for m, names in valid.items() for p in names)}. "
+                f"Other keyword arguments: {', '.join(_QUICKPRED_ARGUMENTS)}."
+            )
+        raise TypeError(f"impute() got an unexpected keyword argument '{key}'. {hint}")
+
 
 class MICE:
     """
@@ -183,14 +221,17 @@ class MICE:
             ``None`` draws fresh entropy from the operating system.
 
         **kwargs : dict
-            Additional keyword arguments.
-            - `output_dir` (str, optional): Directory to save outputs for this run.
-              If not provided, a timestamped folder is created in `output_figures`.
-            
-            Parameters for specific imputation methods can also be passed. These should
-            be prefixed with the method name and an underscore, e.g., `pmm_donors=5` to pass
-            `donors=5` to the `pmm` imputer.
-            
+            Additional keyword arguments. An argument not listed here raises
+            ``TypeError``.
+
+            Parameters for specific imputation methods can be passed with the method
+            name and an underscore as prefix, e.g., `pmm_donors=5` to pass
+            `donors=5` to the `pmm` imputer. The parameter must exist in that
+            imputer's signature.
+
+            - `output_dir`: deprecated and ignored; passing it issues a
+              ``DeprecationWarning``.
+
             When `predictor_matrix` is not specified, the following can be passed for `_quickpred`:
             - `min_cor` (float, default=0.1): Minimum correlation for a predictor.
             - `min_puc` (float, default=0.0): Minimum proportion of usable cases.
@@ -215,21 +256,31 @@ class MICE:
         seed_sequence = np.random.SeedSequence(seed)
         visit_stream = seed_sequence.spawn(1)[0]
         chain_streams = seed_sequence.spawn(n_imputations)
-        
+
+        if 'output_dir' in kwargs:
+            kwargs.pop('output_dir')
+            warnings.warn(
+                "The 'output_dir' argument of impute() is deprecated and ignored.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        quickpred_args = {name: kwargs.pop(name) for name in _QUICKPRED_ARGUMENTS if name in kwargs}
+        _check_method_params(kwargs)
+
         if predictor_matrix is None:
-            min_cor = kwargs.pop('min_cor', 0.1)
-            min_puc = kwargs.pop('min_puc', 0.0)
-            include = kwargs.pop('include', None)
-            exclude = kwargs.pop('exclude', None)
-            correlation_method = kwargs.pop('correlation_method', 'pearson')
             predictor_matrix = self._quickpred(
-                min_cor=min_cor, 
-                min_puc=min_puc, 
-                include=include, 
-                exclude=exclude, 
-                method=correlation_method
+                min_cor=quickpred_args.get('min_cor', 0.1),
+                min_puc=quickpred_args.get('min_puc', 0.0),
+                include=quickpred_args.get('include'),
+                exclude=quickpred_args.get('exclude'),
+                method=quickpred_args.get('correlation_method', 'pearson')
             )
         else:
+            if quickpred_args:
+                logger.warning(
+                    "Arguments %s only apply when predictor_matrix is None; they are ignored.",
+                    sorted(quickpred_args)
+                )
             predictor_matrix = validate_predictor_matrix(predictor_matrix, list(self.data.columns), self.data)
             logger.debug("Predictor matrix validated successfully")
         

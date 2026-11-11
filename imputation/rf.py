@@ -14,8 +14,10 @@ def rf(
     x: Union[pd.DataFrame, np.ndarray],
     id_mis: Optional[np.ndarray] = None,
     n_estimators: int = 10,
+    max_depth: Optional[int] = None,
+    min_samples_leaf: int = 1,
+    forest_params: Optional[dict] = None,
     rng: Optional[np.random.Generator] = None,
-    **kwargs
 ) -> np.ndarray:
     """
     Impute missing values using Random Forests with donor sampling.
@@ -35,10 +37,18 @@ def rf(
         Boolean mask of missing values. If None, uses ~id_obs.
     n_estimators : int, default=10
         Number of trees in the forest
+    max_depth : int, optional
+        Maximum depth of the trees; None grows them until the leaves are pure
+        or reach ``min_samples_leaf``.
+    min_samples_leaf : int, default=1
+        Minimum number of samples required to be at a leaf node
+    forest_params : dict, optional
+        Further arguments for scikit-learn's ``RandomForestRegressor`` or
+        ``RandomForestClassifier``, e.g. ``{"max_features": 0.5}``. It must not
+        set ``n_estimators``, ``max_depth``, ``min_samples_leaf`` or
+        ``random_state``. ``n_jobs`` defaults to -1.
     rng : np.random.Generator, optional
         Random number generator for reproducibility. If None, a fresh generator is used.
-    **kwargs : dict
-        Additional parameters passed to the random forest model.
         
     Returns
     -------
@@ -59,6 +69,22 @@ def rf(
     built on a bootstrap sample of the data.
     """
     logger.debug("Starting Random Forest imputation.")
+
+    forest_params = dict(forest_params or {})
+    reserved = {"n_estimators", "max_depth", "min_samples_leaf", "random_state"}
+    if reserved & set(forest_params):
+        raise TypeError(
+            f"forest_params must not set {sorted(reserved & set(forest_params))}: pass "
+            "n_estimators, max_depth and min_samples_leaf as arguments of rf; the random "
+            "state is drawn from rng."
+        )
+    forest_params = {
+        "n_estimators": n_estimators,
+        "max_depth": max_depth,
+        "min_samples_leaf": min_samples_leaf,
+        "n_jobs": -1,
+        **forest_params,
+    }
     
     if rng is None:
         rng = np.random.default_rng()
@@ -90,26 +116,18 @@ def rf(
     is_numeric = pd.api.types.is_numeric_dtype(y_obs)
     if is_numeric:
         logger.debug("Performing regression random forest imputation.")
-        imputed_values = _rf_regression_impute(x_obs, x_mis, y_obs, n_estimators, rng, **kwargs)
+        imputed_values = _rf_regression_impute(x_obs, x_mis, y_obs, rng, forest_params)
     else:
         logger.debug("Performing classification random forest imputation.")
-        imputed_values = _rf_classification_impute(x_obs, x_mis, y_obs, n_estimators, rng, **kwargs)
+        imputed_values = _rf_classification_impute(x_obs, x_mis, y_obs, rng, forest_params)
     
     logger.debug(f"Random Forest imputation complete. Imputed {len(imputed_values)} values.")
     return imputed_values
 
-def _rf_regression_impute(x_obs, x_mis, y_obs, n_estimators, rng, **kwargs):
+def _rf_regression_impute(x_obs, x_mis, y_obs, rng, forest_params):
     """Helper for regression random forest imputation."""
     rf_seed = int(rng.integers(2**31 - 1))
-    kwargs.pop("random_state", None)
-    rf = RandomForestRegressor(
-        n_estimators=n_estimators,
-        max_depth=kwargs.pop("max_depth", None),
-        min_samples_leaf=kwargs.pop("min_samples_leaf", 1),
-        random_state=rf_seed,
-        n_jobs=-1,
-        **kwargs
-    )
+    rf = RandomForestRegressor(random_state=rf_seed, **forest_params)
     rf.fit(x_obs, y_obs)
     
     nodes_obs = np.array([t.apply(x_obs) for t in rf.estimators_]).T
@@ -134,22 +152,14 @@ def _rf_regression_impute(x_obs, x_mis, y_obs, n_estimators, rng, **kwargs):
         logger.debug(f"RF regression donor fallback used {fallback_count}/{len(imputed)} times.")
     return imputed
 
-def _rf_classification_impute(x_obs, x_mis, y_obs, n_estimators, rng, **kwargs):
+def _rf_classification_impute(x_obs, x_mis, y_obs, rng, forest_params):
     """Helper for classification random forest imputation."""
     unique_cats = np.unique(y_obs)
     if len(unique_cats) == 1:
         return np.repeat(unique_cats[0], x_mis.shape[0])
     
     rf_seed = int(rng.integers(2**31 - 1))
-    kwargs.pop("random_state", None)
-    rf = RandomForestClassifier(
-        n_estimators=n_estimators,
-        max_depth=kwargs.pop("max_depth", None),
-        min_samples_leaf=kwargs.pop("min_samples_leaf", 1),
-        random_state=rf_seed,
-        n_jobs=-1,
-        **kwargs
-    )
+    rf = RandomForestClassifier(random_state=rf_seed, **forest_params)
     rf.fit(x_obs, y_obs)
     
     nodes_obs = np.array([t.apply(x_obs) for t in rf.estimators_]).T

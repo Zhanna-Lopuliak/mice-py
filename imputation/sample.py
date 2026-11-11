@@ -8,7 +8,6 @@ def sample(
     x: Union[pd.DataFrame, np.ndarray],
     id_mis: Optional[np.ndarray] = None,
     rng: Optional[np.random.Generator] = None,
-    **kwargs
 ) -> np.ndarray:
     """
     Impute missing values by random sampling from observed values.
@@ -28,8 +27,6 @@ def sample(
         Boolean mask of missing values to impute. If None, uses ~id_obs
     rng : np.random.Generator, optional
         Random number generator for reproducibility. If None, a fresh generator is used.
-    **kwargs : dict
-        Additional arguments (not used in this method)
         
     Returns
     -------

@@ -16,7 +16,7 @@ def sym(x):
 
         """
     return (x + x.T) / 2
-def norm_draw(y, ry, x, rank_adjust=True, rng=None, **kwargs):
+def norm_draw(y, ry, x, rank_adjust=True, rng=None, ls_meth="qr", ridge=1e-5):
     """
         Bayesian linear regression draw of regression coefficients and residual variance,
         based on the least squares parameters from `estimice()`.
@@ -38,8 +38,10 @@ def norm_draw(y, ry, x, rank_adjust=True, rng=None, **kwargs):
             Default is True.
         rng : np.random.Generator, optional
             Random number generator for reproducibility. If None, a fresh generator is used.
-        **kwargs : dict
-            Additional keyword arguments passed to `estimice()`, e.g., `ls_meth` to specify the least squares method.
+        ls_meth : str, optional
+            Least squares method passed to `estimice()`: "qr" (default), "ridge" or "svd".
+        ridge : float, optional
+            Ridge penalty passed to `estimice()`; used when `ls_meth` is "ridge". Default is 1e-5.
 
         Returns
         -------
@@ -73,7 +75,7 @@ def norm_draw(y, ry, x, rank_adjust=True, rng=None, **kwargs):
     if rng is None:
         rng = np.random.default_rng()
     #Draw from estimice
-    p = estimice(x[ry, :], y[ry], **kwargs)
+    p = estimice(x[ry, :], y[ry], ls_meth=ls_meth, ridge=ridge)
     #sqrt(sum((p$r)^2) / rchisq(n = 1,df = p$df)) #one random variate with p$df normal noise
     #sqrt because we need sigma not sigma^2 for beta later
     sigma_star = np.sqrt(np.sum(p["r"] ** 2) / chi2.rvs(df = p["df"], size = 1, random_state=rng))

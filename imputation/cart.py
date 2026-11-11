@@ -12,8 +12,8 @@ def cart(
     id_mis: Optional[np.ndarray] = None,
     min_samples_leaf: int = 5,
     ccp_alpha: float = 1e-4,
+    tree_params: Optional[dict] = None,
     rng: Optional[np.random.Generator] = None,
-    **kwargs
 ) -> np.ndarray:
     """
     Impute missing values using Classification and Regression Trees (CART).
@@ -34,10 +34,12 @@ def cart(
         Minimum number of samples required to be at a leaf node
     ccp_alpha : float, default=1e-4
         Complexity parameter for pruning
+    tree_params : dict, optional
+        Further arguments for scikit-learn's ``DecisionTreeRegressor`` or
+        ``DecisionTreeClassifier``, e.g. ``{"max_depth": 10}``. It must not set
+        ``min_samples_leaf``, ``ccp_alpha`` or ``random_state``.
     rng : np.random.Generator, optional
         Random number generator for reproducibility. If None, a fresh generator is used.
-    **kwargs : dict
-        Additional parameters passed to the tree model
         
     Returns
     -------
@@ -55,6 +57,14 @@ def cart(
     This adds stochasticity through both bootstrapping and donor sampling.
     """
     logger.debug("Starting CART imputation.")
+
+    tree_params = dict(tree_params or {})
+    reserved = sorted({"min_samples_leaf", "ccp_alpha", "random_state"} & set(tree_params))
+    if reserved:
+        raise TypeError(
+            f"tree_params must not set {reserved}: pass min_samples_leaf and ccp_alpha "
+            "as arguments of cart; the random state is drawn from rng."
+        )
     
     if isinstance(x, pd.DataFrame) and (x.select_dtypes(include=['object', 'category']).shape[1] > 0):
         logger.debug("One-hot encoding categorical predictors for column %s.", x.select_dtypes(include=['object', 'category']).columns[0])
@@ -108,7 +118,7 @@ def cart(
             min_samples_leaf=min_samples_leaf,
             ccp_alpha=ccp_alpha,
             random_state=tree_seed,
-            **kwargs
+            **tree_params
         )
         
         tree.fit(x_boot, y_boot)
@@ -149,7 +159,7 @@ def cart(
             min_samples_leaf=min_samples_leaf,
             ccp_alpha=ccp_alpha,
             random_state=tree_seed,
-            **kwargs
+            **tree_params
         )
         
         tree.fit(x_boot, y_boot)

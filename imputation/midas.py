@@ -39,7 +39,7 @@ def compute_beta(x, m):
     A = x[:m**2].reshape((m, m))
     b = x[m**2:]
     return np.linalg.solve(A, b)
-def midas(y, id_obs, x, id_mis=None, ridge=1e-5, midas_kappa=None, outout=True, rng=None, **kwargs):
+def midas(y, id_obs, x, id_mis=None, ridge=1e-5, midas_kappa=None, outout=True, rng=None):
     """
         MIDAS Imputation: Multiple Imputation with Distant Average Substitution.
 
@@ -80,9 +80,6 @@ def midas(y, id_obs, x, id_mis=None, ridge=1e-5, midas_kappa=None, outout=True, 
         rng : np.random.Generator, optional
             Random number generator for the bootstrap weights and the donor draw.
             If None, a fresh generator is used.
-
-        **kwargs : dict
-            Additional arguments (not used in this method).
 
         Returns
         -------

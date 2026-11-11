@@ -2,10 +2,12 @@ from __future__ import annotations
 
 """Utility helpers.
 
-Currently this module offers a single public function, :func:`get_imputer_func`,
-which maps a string identifying an imputation method to the concrete callable
-that implements that method.
+This module offers :func:`get_imputer_func`, which maps a string identifying
+an imputation method to the concrete callable that implements that method, and
+:func:`get_imputer_params`, which lists the parameters a user may set for it.
 """
+
+import inspect
 
 from .constants import ImputationMethod
 
@@ -28,6 +30,9 @@ _IMPUTER_MAP = {
     ImputationMethod.SAMPLE.value: sample,
     ImputationMethod.RF.value: rf,
 }
+
+# Arguments that MICE supplies to every imputer itself
+_SUPPLIED_BY_MICE = ("y", "id_obs", "x", "id_mis", "rng")
 
 
 def get_imputer_func(method_name: str):
@@ -56,3 +61,35 @@ def get_imputer_func(method_name: str):
         )
 
     return _IMPUTER_MAP[method_name] 
+
+
+def get_imputer_params(method_name: str):
+    """Return the names of the parameters a user may set for *method_name*.
+
+    These are the parameters of the imputer's signature except the ones MICE
+    supplies itself (``y``, ``id_obs``, ``x``, ``id_mis`` and ``rng``). In
+    :meth:`imputation.MICE.impute` they are passed with the method name as
+    prefix, e.g. ``pmm_donors``.
+
+    Parameters
+    ----------
+    method_name : str
+        Name of the imputation method.
+
+    Returns
+    -------
+    list of str
+        Parameter names in signature order.
+
+    Raises
+    ------
+    ValueError
+        If *method_name* is unknown or not yet implemented.
+    """
+    signature = inspect.signature(get_imputer_func(method_name))
+    return [
+        name
+        for name, param in signature.parameters.items()
+        if name not in _SUPPLIED_BY_MICE
+        and param.kind in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY)
+    ]

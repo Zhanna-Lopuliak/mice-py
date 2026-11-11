@@ -66,14 +66,14 @@ class TestSampleImputation:
         for val in result:
             assert val in [1, 3, 5]
             
-    def test_sample_with_random_state(self):
-        """Test sample imputation with random state for reproducibility."""
+    def test_sample_with_rng(self):
+        """Test sample imputation with a seeded generator for reproducibility."""
         y = np.array([1, 2, np.nan, 4, 5])
         id_obs = ~np.isnan(y)
         x = np.array([[1], [2], [3], [4], [5]])
         
-        result1 = sample(y, id_obs, x, random_state=42)
-        result2 = sample(y, id_obs, x, random_state=42)
+        result1 = sample(y, id_obs, x, rng=np.random.default_rng(42))
+        result2 = sample(y, id_obs, x, rng=np.random.default_rng(42))
         
         assert result1[0] == result2[0]
 
@@ -167,9 +167,11 @@ class TestRFImputation:
         id_obs = ~np.isnan(y)
         x = np.random.randn(10, 3)
         
-        result = rf(y, id_obs, x, n_estimators=3, random_state=42)
+        result = rf(y, id_obs, x, n_estimators=3, rng=np.random.default_rng(42))
         assert len(result) == 1
         assert not np.isnan(result[0])
+        again = rf(y, id_obs, x, n_estimators=3, rng=np.random.default_rng(42))
+        np.testing.assert_array_equal(result, again)
 
 
 class TestMIDASImputation:
