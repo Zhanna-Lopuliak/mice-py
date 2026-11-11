@@ -103,7 +103,7 @@ L1 and L4
 
 All checks pass. At this version the test suite has 162 L1 tests, 68 L2 tests
 (including the tests of the tests), 4 tests of the in-suite L3 simulation and
-474 L4 tests, besides 194 unit and workflow tests; all 902 pass and none is
+474 L4 tests, besides 209 unit and workflow tests; all 917 pass and none is
 marked as an expected failure. Before
 the fixes, 102 L1 checks and 114 L4 checks failed; their causes are listed in
 `simulations/BASELINE.md
