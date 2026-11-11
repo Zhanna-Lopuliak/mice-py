@@ -30,7 +30,13 @@ def md_pattern_like(df):
     Replicates the md.pattern() behavior from R's mice package.
     Shows missing data patterns as 1 (observed) and 0 (missing),
     counts per pattern and per column.
-    
+
+    Columns are ordered by their number of missing values (ties keep the
+    data order). Rows are ordered as in R's ``md.pattern``: by the pattern
+    of missing cells read as a string of 0s (observed) and 1s (missing)
+    over the sorted columns. Patterns with the same number of missing cells
+    are therefore not necessarily next to each other.
+
     Parameters:
     -----------
     df : pandas.DataFrame
@@ -47,37 +53,25 @@ def md_pattern_like(df):
     if df.shape[1] < 2:
         raise ValueError("Data must have at least two columns")
 
-    R = df.notna().astype(int)
+    missing = df.isna()
 
-    col_missing_counts = (R == 0).sum()
-    sorted_cols = col_missing_counts.sort_values(ascending=True).index.tolist()
-    R_sorted = R[sorted_cols]
+    col_missing_counts = missing.sum()
+    sorted_cols = col_missing_counts.sort_values(ascending=True, kind="stable").index.tolist()
 
-    pattern_strings = R_sorted.astype(str).agg(''.join, axis=1)
-    pattern_counts = pattern_strings.value_counts()
-
-    pattern_matrix = pd.DataFrame(
-        [list(map(int, list(p))) for p in pattern_counts.index],
-        columns=sorted_cols
+    # np.unique sorts the rows lexicographically, which for 0/1 rows of equal
+    # length is R's order(pat) on the pattern strings
+    patterns, pattern_counts = np.unique(
+        missing[sorted_cols].to_numpy(dtype=int), axis=0, return_counts=True
     )
-    
-    pattern_matrix["#miss_row"] = pattern_matrix.shape[1] - pattern_matrix.sum(axis=1)
-    
-    pattern_matrix = pattern_matrix.sort_values(by="#miss_row")
-    pattern_counts = pattern_counts.iloc[pattern_matrix.index]
 
+    pattern_matrix = pd.DataFrame(1 - patterns, columns=sorted_cols)
+    pattern_matrix["#miss_row"] = patterns.sum(axis=1)
+    pattern_matrix.index = pd.Index([str(c) for c in pattern_counts], name="#rows")
 
-    
-    pattern_matrix.index = pattern_counts.values
-    pattern_matrix.index.name = "#rows"
+    col_missing_row = col_missing_counts[sorted_cols].to_list()
+    col_missing_row.append(sum(col_missing_row))
 
-    col_missing_sorted = col_missing_counts[sorted_cols]
-    col_missing_row = col_missing_sorted.to_list()
-    total_missing = sum(col_missing_row)
-    col_missing_row.append(total_missing)
-
-    summary_df = pattern_matrix.copy()
-    summary_df.index = summary_df.index.map(str)
+    summary_df = pattern_matrix.astype(int)
     summary_df.loc["#miss_col"] = col_missing_row
 
     return summary_df

@@ -38,18 +38,7 @@ def _patterns(table, counts):
     return {(tuple(row[:-1]), row[-1]): count for row, count in zip(table[:-1].tolist(), counts)}
 
 
-A10 = "A10: md_pattern_like orders patterns by number of missing cells, R by pattern"
-
-
-def _params():
-    for case in MD["cases"]:
-        marks = []
-        if case["name"] != "nhanes":  # nhanes: both orders coincide
-            marks = [pytest.mark.xfail(strict=True, reason=A10)]
-        yield pytest.param(case, id=case["name"], marks=marks)
-
-
-@pytest.mark.parametrize("case", list(_params()))
+@pytest.mark.parametrize("case", MD["cases"], ids=[c["name"] for c in MD["cases"]])
 def test_md_pattern_matches_r_including_row_order(case):
     r_table, r_counts, r_columns = _r_table(case)
     table, counts, columns = _py_table(case)
