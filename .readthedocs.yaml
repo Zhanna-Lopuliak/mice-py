@@ -9,6 +9,8 @@ build:
 
 sphinx:
   configuration: docs/source/conf.py
+  # the same strictness as the docs job in .github/workflows/ci.yml
+  fail_on_warning: true
 
 python:
   install:
