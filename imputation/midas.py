@@ -1,5 +1,9 @@
 import numpy as np
 import pandas as pd
+
+from .design import obtain_design
+
+
 def bootfunc_plain(n, rng=None):
     """
         Generates bootstrap weights for n observations using simple random sampling with replacement.
@@ -57,8 +61,10 @@ def midas(y, id_obs, x, id_mis=None, ridge=1e-5, kappa=None, outout=True, rng=No
         id_obs : array-like of bool of shape (n_samples,)
             Logical array indicating observed values in `y`. True where `y` is observed, False where missing.
 
-        x : array-like of shape (n_samples, n_features)
-            Design matrix of predictor variables. Must be fully observed.
+        x : array-like or pd.DataFrame of shape (n_samples, n_features)
+            Predictor variables. Must be fully observed. A DataFrame with categorical,
+            object, string or boolean columns is dummy-coded first by
+            :func:`imputation.design.obtain_design`, as MICE does.
 
         id_mis : np.ndarray, optional
             Boolean mask of missing values to impute. If None, uses ~id_obs.
@@ -247,13 +253,14 @@ def _draw_donors(probs, rng):
 
 
 def _predictor_matrix(x):
-    """`x` as a float array of shape (n_samples, n_features); it must be numeric and complete."""
+    """`x` as a float array of shape (n_samples, n_features); it must be complete.
+
+    A DataFrame with non-numeric columns is dummy-coded by
+    :func:`imputation.design.obtain_design`, as MICE does.
+    """
     if isinstance(x, pd.DataFrame):
-        non_numeric_cols = x.select_dtypes(exclude=[np.number]).columns.tolist()
-        if non_numeric_cols:
-            raise ValueError(
-                f"Predictors must be numeric for midas. Non-numeric predictors found: {non_numeric_cols}"
-            )
+        if not x.select_dtypes(exclude=[np.number]).columns.empty:
+            x = obtain_design(x, list(x.columns))
         missing_cols = x.columns[x.isna().any()].tolist()
         if missing_cols:
             raise ValueError(

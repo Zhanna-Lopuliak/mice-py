@@ -24,12 +24,8 @@ from ._helpers import (
 
 NON_MIDAS = ("pmm", "cart", "rf", "sample")
 
-B2 = "B2: categorical predictors are rejected instead of dummy-coded"
 C4_EMPTY = "C4: validate_dataframe drops all-empty rows"
 C4_PRINT = "C4: validators print to stdout"
-NEW2 = "B7: rf crashes when the target has no predictors"
-NEW3 = "B8: cart/rf crash on an incomplete boolean column (sklearn 'Unknown label type')"
-NEW5 = "B9: pandas 'string' predictors crash cart/rf ('could not convert string to float')"
 
 
 def _check(df, method, n_imputations=N_IMP, maxit=MAXIT, **kwargs):
@@ -93,7 +89,7 @@ def _categorical_predictor_frame():
     return df
 
 
-@pytest.mark.parametrize("method", method_params({"pmm": B2, "midas": B2}))
+@pytest.mark.parametrize("method", method_params())
 def test_categorical_predictor(method):
     _check(_categorical_predictor_frame(), method)
 
@@ -289,7 +285,7 @@ def test_constant_incomplete_column(method):
     _check(df, method)
 
 
-@pytest.mark.parametrize("method", method_params({"rf": NEW2}))
+@pytest.mark.parametrize("method", method_params())
 def test_target_without_predictors(method):
     df = regression_frame(n=30)
     pm = full_predictor_matrix(df)
@@ -357,7 +353,7 @@ def _boolean_target_frame(n=40, seed=7):
     return df
 
 
-@pytest.mark.parametrize("method", method_params({"cart": NEW3, "rf": NEW3}, methods=NON_MIDAS))
+@pytest.mark.parametrize("method", method_params(methods=NON_MIDAS))
 def test_boolean_target(method):
     _check(_boolean_target_frame(), method)
 
@@ -444,7 +440,7 @@ def test_midas_rejects_non_numeric_target_direct(kind):
         midas(y, ry, x, rng=np.random.default_rng(0))
 
 
-@pytest.mark.parametrize("method", method_params({"pmm": B2, "midas": B2}))
+@pytest.mark.parametrize("method", method_params())
 def test_boolean_predictor(method):
     df = regression_frame()
     df["flag"] = df["x1"] > 0
@@ -463,7 +459,7 @@ def test_category_dtype_target(method):
     _check(_category_target_frame(), method)
 
 
-@pytest.mark.parametrize("method", method_params({"pmm": B2, "midas": B2}))
+@pytest.mark.parametrize("method", method_params())
 def test_category_dtype_predictor(method):
     df = _categorical_predictor_frame()
     df["g"] = pd.Categorical(df["g"], categories=["mid", "low", "high"])
@@ -520,12 +516,7 @@ def test_string_dtype_target(method):
     _works_or_names_dtype(df, method, "string")
 
 
-@pytest.mark.parametrize(
-    "method",
-    method_params(
-        {"pmm": B2 + " (string dtype)", "midas": B2 + " (string dtype)", "cart": NEW5, "rf": NEW5}
-    ),
-)
+@pytest.mark.parametrize("method", method_params())
 def test_string_dtype_predictor(method):
     rng = np.random.default_rng(13)
     df = regression_frame()

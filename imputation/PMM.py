@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from .design import obtain_design
 from .sampler import norm_draw
 
 def pmm(y, id_obs, x, id_mis = None, donors = 5, matchtype = 1,
@@ -20,8 +21,11 @@ def pmm(y, id_obs, x, id_mis = None, donors = 5, matchtype = 1,
        id_obs : array-like of bool, shape (n_samples,)
            Logical array indicating which elements of `y` are observed (True) or missing (False).
 
-       x : array-like (2D), shape (n_samples, n_features)
-           Numeric design matrix of predictors. Must have no missing values.
+       x : array-like (2D) or pd.DataFrame, shape (n_samples, n_features)
+           Predictors without missing values. A numeric array is used as the
+           design matrix. A DataFrame with categorical, object, string or
+           boolean columns is dummy-coded first by
+           :func:`imputation.design.obtain_design`, as MICE does.
 
        id_mis : array-like of bool, shape (n_samples,), optional
            Logical array indicating which values should be imputed.
@@ -71,13 +75,10 @@ def pmm(y, id_obs, x, id_mis = None, donors = 5, matchtype = 1,
        >>> x = np.array([[1, 2], [3, 4], [5, 7], [7, 8], [9, 10]])
        >>> pmm(y=y, id_obs=id_obs, x=x, donors=3)
     """
-    # Validate predictors (x): must be numeric and contain no missing values
+    # Validate predictors (x): numeric or dummy-coded, without missing values
     if isinstance(x, pd.DataFrame):
-        non_numeric_cols = x.select_dtypes(exclude=[np.number]).columns.tolist()
-        if non_numeric_cols:
-            raise ValueError(
-                f"Predictors must be numeric for pmm. Non-numeric predictors found: {non_numeric_cols}"
-            )
+        if not x.select_dtypes(exclude=[np.number]).columns.empty:
+            x = obtain_design(x, list(x.columns))
         missing_cols = x.columns[x.isna().any()].tolist()
         if missing_cols:
             raise ValueError(

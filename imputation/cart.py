@@ -3,7 +3,52 @@ import pandas as pd
 from sklearn.tree import DecisionTreeRegressor, DecisionTreeClassifier
 from typing import Union, Optional
 import logging
+
+from .design import obtain_design
+
 logger = logging.getLogger('imputation.cart')
+
+
+def _design_matrix(x) -> np.ndarray:
+    """Predictors as a 2-D float array.
+
+    A DataFrame with categorical, object, string or boolean columns is
+    dummy-coded by :func:`imputation.design.obtain_design`, as MICE does;
+    numeric input is only converted to float.
+    """
+    if isinstance(x, pd.DataFrame) and not x.select_dtypes(exclude=[np.number]).columns.empty:
+        x = obtain_design(x, list(x.columns))
+    x = np.asarray(x, dtype=float)
+    if x.ndim == 1:
+        x = x.reshape(-1, 1)
+    return x
+
+
+def _is_numeric_target(y) -> bool:
+    """True if `y` has a numeric dtype that is neither boolean nor categorical.
+
+    Such a target gets a regression tree; any other target (categorical,
+    object, string, boolean) a classification tree.
+    """
+    dtype = getattr(y, "dtype", None)
+    if dtype is None:
+        dtype = np.asarray(y).dtype
+    return pd.api.types.is_numeric_dtype(dtype) and not pd.api.types.is_bool_dtype(dtype)
+
+
+def _label_codes(y_obs: np.ndarray) -> np.ndarray:
+    """Integer codes of the observed labels, in sorted label order if they sort.
+
+    scikit-learn's classifiers accept numbers and strings as labels but not,
+    for example, an object array of booleans. The trees are fitted on these
+    codes; the imputations are drawn from the labels themselves. Sorted codes
+    give the same tree as fitting on sortable labels directly.
+    """
+    try:
+        codes, _ = pd.factorize(y_obs, sort=True)
+    except TypeError:  # labels that cannot be ordered: order of appearance
+        codes, _ = pd.factorize(y_obs, sort=False)
+    return np.asarray(codes)
 
 def cart(
     y: Union[pd.Series, np.ndarray],
@@ -27,7 +72,10 @@ def cart(
     id_obs : np.ndarray
         Boolean mask of observed values in y (True for observed, False for missing)
     x : Union[pd.DataFrame, np.ndarray]
-        Predictor variables (must be fully observed)
+        Predictor variables (must be fully observed). A DataFrame with
+        categorical, object, string or boolean columns is dummy-coded first by
+        :func:`imputation.design.obtain_design`, as MICE does. Without any
+        predictor, the imputations are draws from the observed values.
     id_mis : np.ndarray, optional
         Boolean mask of missing values to impute. If None, uses ~id_obs
     min_samples_leaf : int, default=5
@@ -45,6 +93,9 @@ def cart(
     -------
     np.ndarray
         Imputed values for missing positions only (matching R implementation).
+        A numeric target gets a regression tree. Any other target (categorical,
+        object, string, boolean) gets a classification tree, and its
+        imputations are observed labels of `y`, so booleans stay booleans.
         
     Notes
     -----
@@ -66,15 +117,12 @@ def cart(
             "as arguments of cart; the random state is drawn from rng."
         )
     
-    if isinstance(x, pd.DataFrame) and (x.select_dtypes(include=['object', 'category']).shape[1] > 0):
-        logger.debug("One-hot encoding categorical predictors for column %s.", x.select_dtypes(include=['object', 'category']).columns[0])
-        x = pd.get_dummies(x, drop_first=True)
-    
-    x = np.asarray(x)
+    x = _design_matrix(x)
     id_obs = np.asarray(id_obs, dtype=bool)
     
     if id_mis is None:
         id_mis = ~id_obs
+    id_mis = np.asarray(id_mis, dtype=bool)
 
     if rng is None:
         rng = np.random.default_rng()
@@ -86,14 +134,14 @@ def cart(
     
     x_obs = x[id_obs].copy()
     x_mis = x[id_mis].copy()
-    y_obs = y[id_obs]
+    is_numeric = _is_numeric_target(y)
+    y_obs = np.asarray(y)[id_obs]
     
     if len(x_mis) == 0:
         return np.array([])
     
     if len(y_obs) < 2:
         logger.warning("Not enough observed data to fit a tree. Using fallback imputation.")
-        is_numeric = pd.api.types.is_numeric_dtype(y_obs)
         if is_numeric:
             mean_val = np.mean(y_obs)
             imputed_values = np.full(np.sum(id_mis), mean_val)
@@ -104,7 +152,6 @@ def cart(
         
         return imputed_values
     
-    is_numeric = pd.api.types.is_numeric_dtype(y_obs)
     if is_numeric:
         logger.debug("Performing regression tree imputation with bootstrap (matching R mice).")
         
@@ -145,14 +192,14 @@ def cart(
     else:
         logger.debug("Performing classification tree imputation with bootstrap (matching R mice).")
         
-        unique_cats, _ = np.unique(y_obs, return_counts=True)
-        if len(unique_cats) == 1:
-            return np.repeat(unique_cats[0], np.sum(id_mis))
+        codes = _label_codes(y_obs)
+        if codes.max() == 0:  # a single observed label
+            return np.repeat(y_obs[:1], np.sum(id_mis))
         
         n_obs = len(y_obs)
         boot_idx = rng.choice(n_obs, size=n_obs, replace=True)
         x_boot = x_obs[boot_idx]
-        y_boot = np.asarray(y_obs)[boot_idx]
+        y_boot = codes[boot_idx]
         
         tree_seed = int(rng.integers(2**31 - 1))
         tree = DecisionTreeClassifier(

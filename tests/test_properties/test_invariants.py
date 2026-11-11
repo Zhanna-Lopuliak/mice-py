@@ -32,10 +32,7 @@ DATASETS = {
     "mixed": lambda: mixed_frame(index="noncontiguous"),
 }
 
-KNOWN = {
-    ("mixed", "pmm"): "B2: pmm rejects categorical predictors (B1: and crashes on a categorical target)",
-    ("mixed", "midas"): "B2: midas rejects categorical predictors",
-}
+KNOWN = {}
 
 CASES = [
     pytest.param(ds, m, marks=xfail(KNOWN[(ds, m)]), id=f"{ds}-{m}") if (ds, m) in KNOWN

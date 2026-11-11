@@ -4,6 +4,8 @@ from typing import Union, Optional
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 import logging
 
+from .cart import _design_matrix, _is_numeric_target, _label_codes
+
 # Get a logger for the current module.
 # This will be a child of the 'imputation' logger configured in MICE.py
 logger = logging.getLogger('imputation.rf')
@@ -32,7 +34,11 @@ def rf(
     id_obs : np.ndarray
         Boolean mask of observed values in y (True = observed, False = missing)
     x : Union[pd.DataFrame, np.ndarray]
-        Predictor variables (should be the current completed columns)
+        Predictor variables (should be the current completed columns). A
+        DataFrame with categorical, object, string or boolean columns is
+        dummy-coded first by :func:`imputation.design.obtain_design`, as MICE
+        does. Without any predictor, the imputations are draws from the
+        observed values, as with ``cart``.
     id_mis : np.ndarray, optional
         Boolean mask of missing values. If None, uses ~id_obs.
     n_estimators : int, default=10
@@ -53,7 +59,10 @@ def rf(
     Returns
     -------
     np.ndarray
-        Imputed values for missing positions only.
+        Imputed values for missing positions only. A numeric target gets a
+        regression forest. Any other target (categorical, object, string,
+        boolean) gets a classification forest, and its imputations are
+        observed labels of `y`, so booleans stay booleans.
         
     Notes
     -----
@@ -89,16 +98,13 @@ def rf(
     if rng is None:
         rng = np.random.default_rng()
     
-    # One-hot encode categoricals
-    if isinstance(x, pd.DataFrame) and (x.select_dtypes(include=["object", "category"]).shape[1] > 0):
-        logger.debug("One-hot encoding categorical predictors.")
-        x = pd.get_dummies(x, drop_first=True)
-    
-    x = np.asarray(x)
+    x = _design_matrix(x)
     id_obs = np.asarray(id_obs, bool)
     if id_mis is None:
         id_mis = ~id_obs
+    id_mis = np.asarray(id_mis, bool)
     
+    is_numeric = _is_numeric_target(y)
     x_obs, y_obs = x[id_obs], np.asarray(y)[id_obs]
     x_mis = x[id_mis]
     if x_mis.shape[0] == 0:
@@ -106,14 +112,19 @@ def rf(
     
     if len(y_obs) < 2:
         logger.warning("Not enough observed data for RF. Using fallback imputation.")
-        if pd.api.types.is_numeric_dtype(y_obs):
+        if is_numeric:
             return np.full(np.sum(id_mis), np.mean(y_obs))
         else:
             from collections import Counter
             most_frequent = Counter(y_obs).most_common(1)[0][0]
             return np.full(np.sum(id_mis), most_frequent)
     
-    is_numeric = pd.api.types.is_numeric_dtype(y_obs)
+    if x.shape[1] == 0:
+        # No predictor: every tree is a single leaf holding all observed
+        # values, so the imputation is a draw from them (as cart does)
+        logger.debug("No predictors: drawing from the observed values.")
+        return rng.choice(y_obs, size=x_mis.shape[0])
+
     if is_numeric:
         logger.debug("Performing regression random forest imputation.")
         imputed_values = _rf_regression_impute(x_obs, x_mis, y_obs, rng, forest_params)
@@ -154,13 +165,14 @@ def _rf_regression_impute(x_obs, x_mis, y_obs, rng, forest_params):
 
 def _rf_classification_impute(x_obs, x_mis, y_obs, rng, forest_params):
     """Helper for classification random forest imputation."""
-    unique_cats = np.unique(y_obs)
-    if len(unique_cats) == 1:
-        return np.repeat(unique_cats[0], x_mis.shape[0])
+    # fitted on label codes, so that any label type works (e.g. booleans)
+    codes = _label_codes(y_obs)
+    if codes.max() == 0:  # a single observed label
+        return np.repeat(y_obs[:1], x_mis.shape[0])
     
     rf_seed = int(rng.integers(2**31 - 1))
     rf = RandomForestClassifier(random_state=rf_seed, **forest_params)
-    rf.fit(x_obs, y_obs)
+    rf.fit(x_obs, codes)
     
     nodes_obs = np.array([t.apply(x_obs) for t in rf.estimators_]).T
     nodes_mis = np.array([t.apply(x_mis) for t in rf.estimators_]).T
@@ -177,8 +189,9 @@ def _rf_classification_impute(x_obs, x_mis, y_obs, rng, forest_params):
         if donors_all:
             imputed[i] = rng.choice(donors_all)
         else:
-            vals, counts = np.unique(y_obs, return_counts=True)
-            imputed[i] = vals[rng.choice(np.flatnonzero(counts == counts.max()))]
+            counts = np.bincount(codes)
+            first = np.unique(codes, return_index=True)[1]  # a label per code
+            imputed[i] = y_obs[first[rng.choice(np.flatnonzero(counts == counts.max()))]]
             fallback_count += 1
     
     if fallback_count:
