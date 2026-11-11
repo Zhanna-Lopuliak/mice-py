@@ -57,7 +57,7 @@ from .constants import (
 from .utils import get_imputer_func, get_imputer_params
 # External helpers
 from .mice_result import MICEresult
-from .pooling import pool_descriptive_statistics
+from .pooling import pool_descriptive_statistics, pool_estimates, _residual_df
 
 # Keyword arguments of `MICE.impute` that are passed to `_quickpred`
 _QUICKPRED_ARGUMENTS = ('min_cor', 'min_puc', 'include', 'exclude', 'correlation_method')
@@ -449,28 +449,52 @@ class MICE:
         logger.debug(f"Estimated predictor matrix:\n{predictor_matrix}")
         return predictor_matrix
 
-    def fit(self, formula: str) -> None:
+    def fit(self, formula: str, model=None, model_kwargs: Optional[Dict] = None, **fit_kwargs):
         """
         Fit a statistical model to each imputed dataset using the specified formula.
         
         This method fits the specified statistical model to each dataset in 
         self.imputed_datasets and stores the results in self.model_results.
+        It corresponds to R's ``with(imp, <model>)``.
         
         Parameters
         ----------
         formula : str
             A formula string in patsy syntax for statsmodels (e.g., 'y ~ x1 + x2')
+        model : callable, optional
+            A statsmodels formula model such as ``statsmodels.formula.api.ols``,
+            ``logit``, ``poisson`` or ``glm``, called as
+            ``model(formula, data=dataset, **model_kwargs)``. A statsmodels
+            model class (for example ``sm.GLM``) is used through its
+            ``from_formula``. Default: ``statsmodels.formula.api.ols``.
+        model_kwargs : dict, optional
+            Keyword arguments for the model, for example
+            ``{"family": sm.families.Binomial()}`` for ``smf.glm``.
+        **fit_kwargs
+            Keyword arguments passed to the model's ``.fit()``, for example
+            ``disp=False`` for ``smf.logit``.
+            
+        Returns
+        -------
+        list
+            The fitted results, one per imputed dataset (also stored in
+            ``self.model_results``).
             
         Raises
         ------
         ValueError
             If no imputed datasets are available or if variables in formula are not in data
+        RuntimeError
+            If the model cannot be fitted to one of the imputed datasets
             
         Examples
         --------
         >>> mice_obj = MICE(data)
         >>> mice_obj.impute(n_imputations=5)
         >>> mice_obj.fit('outcome ~ predictor1 + predictor2')
+        >>> mice_obj.fit('event ~ age + dose', model=smf.logit, disp=False)
+        >>> mice_obj.fit('count ~ age', model=smf.glm,
+        ...              model_kwargs={'family': sm.families.Poisson()})
         """
         logger.info(f"Starting analysis with formula: {formula}")
         
@@ -482,28 +506,35 @@ class MICE:
         
         # Validate formula
         validate_formula(formula, list(self.data.columns))
+
+        if model is None:
+            model = smf.ols
+        elif hasattr(model, 'from_formula'):
+            model = model.from_formula
+        if not callable(model):
+            raise ValueError(f"model must be a statsmodels formula model such as smf.ols, got {model!r}")
+        model_kwargs = dict(model_kwargs or {})
         
         # Clear any previous model results
         self.model_results = []
         
         # Fit model to each imputed dataset
         n_datasets = len(self.imputed_datasets)
-        logger.info(f"Fitting model to {n_datasets} imputed datasets")
+        model_name = getattr(model, '__qualname__', repr(model))
+        logger.info(f"Fitting {model_name} to {n_datasets} imputed datasets")
         
         for i, dataset in enumerate(self.imputed_datasets):
             logger.debug(f"Fitting model to dataset {i + 1}/{n_datasets}")
             
             try:
-                # Fit OLS model using statsmodels
-                model = smf.ols(formula, data=dataset)
-                fitted_model = model.fit()
+                fitted_model = model(formula, data=dataset, **model_kwargs).fit(**fit_kwargs)
                 self.model_results.append(fitted_model)
                 
                 logger.debug(f"Successfully fitted model to dataset {i + 1}")
                 
             except Exception as e:
                 logger.error(f"Error fitting model to dataset {i + 1}: {str(e)}")
-                raise RuntimeError(f"Failed to fit model to dataset {i + 1}: {str(e)}")
+                raise RuntimeError(f"Failed to fit model to dataset {i + 1}: {str(e)}") from e
         
         # Store formula for potential later use
         self.formula = formula
@@ -518,7 +549,8 @@ class MICE:
         
         This method combines parameter estimates and their uncertainties from 
         multiple imputed datasets according to Rubin's (1987) rules for 
-        multiple imputation inference.
+        multiple imputation inference, with the small-sample degrees of
+        freedom of Barnard and Rubin (1999), as R's ``pool()`` does.
         
         Parameters
         ----------
@@ -527,9 +559,17 @@ class MICE:
             
         Returns
         -------
-        MICEresult or summary
-            If summ=False, returns a MICEresult object containing pooled estimates.
-            If summ=True, returns a summary table of the pooled results.
+        dict or summary
+            If summ=False, a dict with the keys ``pooled_result`` (a
+            MICEresult), ``pooled_params``, ``pooled_covariance``,
+            ``within_covariance``, ``between_covariance``,
+            ``fraction_missing_info`` (R's ``fmi``), ``pooled_scale``,
+            ``n_imputations``, ``parameter_names``, ``formula`` and ``table``
+            (the DataFrame of `imputation.pooling.pool_estimates`, one row
+            per parameter, with R's columns ``df``, ``riv``, ``lambda``,
+            ``fmi``, intervals and p-values).
+            If summ=True, the statsmodels summary of the MICEresult, which
+            shows the df and FMI of each parameter.
             
         Raises
         ------
@@ -538,17 +578,29 @@ class MICE:
             
         Notes
         -----
-        Rubin's pooling rules combine:
+        Rubin's pooling rules combine, per parameter:
         - Point estimates: average across imputations
-        - Within-imputation variance: average of individual model variances  
-        - Between-imputation variance: variance of point estimates across imputations
-        - Total variance: within + (1 + 1/m) * between
-        - Fraction of missing information (FMI): proportion of uncertainty due to missingness
+        - Within-imputation variance (ubar): average of individual model variances
+        - Between-imputation variance (b): variance of point estimates across imputations
+        - Total variance (t): ubar + (1 + 1/m) * b
+        - Degrees of freedom (df): Barnard-Rubin, with ``dfcom`` the residual
+          degrees of freedom of the first fitted model
+        - riv = (1 + 1/m) * b / ubar, lambda = (1 + 1/m) * b / t, and the
+          fraction of missing information fmi = (riv + 2/(df + 3)) / (riv + 1)
+
+        Standard errors, t statistics, p-values and confidence intervals of
+        the MICEresult use the t distribution with each parameter's df.
+        With a single imputation nothing is pooled (as in R): the
+        between-imputation variance is NaN and the single analysis is
+        reported with ``dfcom`` degrees of freedom.
         
         References
         ----------
         Rubin, D.B. (1987). Multiple Imputation for Nonresponse in Surveys. 
         New York: John Wiley and Sons.
+
+        Barnard, J. and Rubin, D.B. (1999). Small-sample degrees of freedom
+        with multiple imputation. Biometrika, 86, 948-955.
         """
         logger.info("Starting pooling of model results using Rubin's rules")
         
@@ -573,14 +625,19 @@ class MICE:
         for i, model_result in enumerate(self.model_results):
             logger.debug(f"Extracting results from model {i + 1}")
             
-            # Extract parameter estimates
-            params_list.append(model_result.params.values)
+            # Extract parameter estimates. Multi-equation models (MNLogit)
+            # hold one column per equation; their covariance stacks the
+            # equations, which is column-major order.
+            params_list.append(np.asarray(model_result.params, dtype=float).ravel(order='F'))
             
             # Extract covariance matrix (within-imputation variance)
-            cov_within_list.append(model_result.cov_params().values)
+            cov_within_list.append(np.asarray(model_result.cov_params(), dtype=float))
             
-            # Extract scale (residual variance)
-            scale_list.append(model_result.scale)
+            # Extract scale (residual variance); not every model has one
+            try:
+                scale_list.append(float(model_result.scale))
+            except (AttributeError, TypeError, ValueError, NotImplementedError):
+                scale_list.append(np.nan)
         
         # Convert to numpy arrays for easier computation
         params_array = np.array(params_list)  # Shape: (m, p) where p = number of parameters
@@ -590,7 +647,27 @@ class MICE:
         logger.debug(f"Parameter array shape: {params_array.shape}")
         logger.debug(f"Covariance array shape: {cov_within_array.shape}")
         
-        # Apply Rubin's pooling rules
+        # Create parameter names (use from first model)
+        first_params = self.model_results[0].params
+        if np.ndim(first_params) == 2:
+            # Multi-equation model: '<equation>:<term>', as its covariance labels them
+            labels = getattr(self.model_results[0].cov_params(), 'index', range(params_array.shape[1]))
+            param_names = [':'.join(map(str, k)) if isinstance(k, tuple) else k for k in labels]
+        else:
+            param_names = list(getattr(first_params, 'index', range(params_array.shape[1])))
+        logger.debug(f"Parameter names: {param_names}")
+
+        # Per-parameter pooling as R's pool(): Rubin's rules, Barnard-Rubin df
+        # with dfcom the residual df of the first fitted model
+        dfcom = _residual_df(self.model_results[0])
+        table = pool_estimates(
+            params_array,
+            np.diagonal(cov_within_array, axis1=1, axis2=2),
+            dfcom=dfcom,
+            param_names=param_names,
+        )
+        
+        # Rubin's rules for the full covariance matrices
         # 1. Pooled point estimates (qbar): average of individual estimates
         pooled_params = np.mean(params_array, axis=0)
         logger.debug(f"Computed pooled parameter estimates: {pooled_params}")
@@ -599,38 +676,27 @@ class MICE:
         cov_within = np.mean(cov_within_array, axis=0)
         
         # 3. Between-imputation variance (b): covariance of parameter estimates across imputations
+        # 4. Total covariance matrix: within + (1 + 1/m) * between
         if m > 1:
-            cov_between = np.cov(params_array, rowvar=False, ddof=1)
+            cov_between = np.cov(params_array, rowvar=False, ddof=1).reshape(cov_within.shape)
+            cov_total = cov_within + (1.0 + 1.0 / m) * cov_between
         else:
-            cov_between = np.zeros_like(cov_within)
-            logger.warning("Only one imputation available. Between-imputation variance set to zero.")
+            # Nothing to pool: b cannot be estimated, t is the single analysis
+            cov_between = np.full_like(cov_within, np.nan)
+            cov_total = cov_within.copy()
         
-        # 4. Total covariance matrix using Rubin's rules
-        # Total variance = within + (1 + 1/m) * between
-        f = 1.0 + 1.0 / m  # Adjustment factor
-        cov_total = cov_within + f * cov_between
-        
-        # 5. Fraction of missing information (FMI)
-        # FMI = (1 + 1/m) * diag(between) / diag(total)
-        if m > 1:
-            fmi = f * np.diag(cov_between) / np.diag(cov_total)
-            # Ensure FMI is between 0 and 1
-            fmi = np.clip(fmi, 0.0, 1.0)
-        else:
-            fmi = np.zeros(len(pooled_params))
+        # 5. Fraction of missing information, R's fmi
+        fmi = table['fmi'].to_numpy()
         
         # 6. Pooled scale (average of individual scales)
-        pooled_scale = np.mean(scale_array)
+        pooled_scale = float(np.mean(scale_array))
         
         logger.debug(f"Computed within-imputation variance diagonal: {np.diag(cov_within)}")
         logger.debug(f"Computed between-imputation variance diagonal: {np.diag(cov_between)}")
         logger.debug(f"Computed total variance diagonal: {np.diag(cov_total)}")
+        logger.debug(f"Computed degrees of freedom: {table['df'].to_numpy()}")
         logger.debug(f"Computed fraction of missing information: {fmi}")
         logger.debug(f"Computed pooled scale: {pooled_scale}")
-        
-        # Create parameter names (use from first model)
-        param_names = list(self.model_results[0].params.index)
-        logger.debug(f"Parameter names: {param_names}")
         
         # Store results for backward compatibility
         self.exog_names = param_names
@@ -639,13 +705,23 @@ class MICE:
         
         # Create MICEresult object
         logger.debug("Creating MICEresult object")
-        from .mice_result import MICEresult
         
-        # The MICEresult expects normalized covariance params (divided by scale)
-        normalized_cov_params = cov_total / pooled_scale
+        # The MICEresult expects normalized covariance params (divided by
+        # scale); models without a usable residual scale use 1
+        if np.isfinite(pooled_scale) and pooled_scale > 0:
+            result_scale = pooled_scale
+        else:
+            result_scale = 1.0
+        normalized_cov_params = cov_total / result_scale
         
-        pooled_result = MICEresult(self, pooled_params, normalized_cov_params)
-        pooled_result.scale = pooled_scale
+        pooled_result = MICEresult(
+            self,
+            pooled_params,
+            normalized_cov_params,
+            scale=result_scale,
+            df=table['df'].to_numpy(),
+            dfcom=dfcom,
+        )
         pooled_result.frac_miss_info = fmi
         
         # Store additional pooling diagnostics
@@ -653,6 +729,7 @@ class MICE:
         pooled_result.cov_between = cov_between
         pooled_result.cov_total = cov_total
         pooled_result.m = m
+        pooled_result.table = table
         
         # Store the result
         self.pooled_result = pooled_result
@@ -676,7 +753,8 @@ class MICE:
             'pooled_scale': pooled_scale,
             'n_imputations': m,
             'parameter_names': param_names,
-            'formula': getattr(self, 'formula', None)
+            'formula': getattr(self, 'formula', None),
+            'table': table,
         }
         
         return comprehensive_result

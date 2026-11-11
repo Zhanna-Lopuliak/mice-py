@@ -64,13 +64,10 @@ def _fitted_mice(model_case, **fit_kwargs):
 
 
 # ---------------------------------------------------------------------------
-# (a) planned functions: barnard_rubin and pool_estimates
+# (a) barnard_rubin and pool_estimates
 # ---------------------------------------------------------------------------
 
-A4 = "A4: barnard_rubin / pool_estimates not implemented (normal reference, lambda as FMI)"
 
-
-@pytest.mark.xfail(strict=True, reason=A4)
 def test_barnard_rubin_matches_r_on_grid():
     from imputation.pooling import barnard_rubin
 
@@ -98,7 +95,6 @@ def _pool_inputs(case):
 POOL_CASES = POOL["models"] + POOL["edges"]
 
 
-@pytest.mark.xfail(strict=True, reason=A4)
 @pytest.mark.parametrize("case", POOL_CASES, ids=[c["name"] for c in POOL_CASES])
 def test_pool_estimates_matches_r(case):
     from imputation.pooling import pool_estimates
@@ -113,24 +109,105 @@ def test_pool_estimates_matches_r(case):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="A4: pool() has no 'table' with Barnard-Rubin inference")
 def test_pool_table_linear_model_matches_r():
     mice = _fitted_mice(MODELS["lm"])
     out = mice.pool()
     _assert_table_matches(out["table"], MODELS["lm"]["summary"])
 
 
-@pytest.mark.xfail(strict=True, reason="C5: fit() is OLS only (parity also needs A4)")
 def test_pool_table_logistic_model_matches_r():
     import statsmodels.formula.api as smf
 
-    mice = _fitted_mice(MODELS["logistic"], model=smf.logit)
+    mice = _fitted_mice(MODELS["logistic"], model=smf.logit, disp=False)
     out = mice.pool()
     _assert_table_matches(out["table"], MODELS["logistic"]["summary"])
 
 
+@pytest.mark.parametrize("model_name", ["glm", "GLM"])
+def test_pool_table_glm_through_model_kwargs_matches_r(model_name):
+    """A binomial GLM: the family goes through ``model_kwargs``, ``tol`` and
+    ``maxiter`` through to ``.fit()``. The R side uses
+    ``glm.control(epsilon = 1e-14, maxit = 100)``. Both the formula function
+    ``smf.glm`` and the model class ``sm.GLM`` are accepted."""
+    import statsmodels.api as sm
+    import statsmodels.formula.api as smf
+
+    model = smf.glm if model_name == "glm" else sm.GLM
+    mice = _fitted_mice(
+        MODELS["logistic"],
+        model=model,
+        model_kwargs={"family": sm.families.Binomial()},
+        tol=1e-14,
+        maxiter=100,
+    )
+    assert all(isinstance(f.model.family, sm.families.Binomial) for f in mice.model_results)
+    out = mice.pool()
+    _assert_table_matches(out["table"], MODELS["logistic"]["summary"])
+
+
+def _fit_kwargs(name):
+    import statsmodels.formula.api as smf
+
+    return {} if name == "lm" else {"model": smf.logit, "disp": False}
+
+
+@pytest.mark.parametrize("name", ["lm", "logistic"])
+def test_pooled_result_inference_uses_t_with_barnard_rubin_df(name):
+    """Standard errors, t statistics, p-values and the 95% interval of the
+    MICEresult are R's, which use a t reference with each term's own df."""
+    from scipy import stats
+
+    summary = MODELS[name]["summary"]
+    res = _fitted_mice(MODELS[name], **_fit_kwargs(name)).pool()["pooled_result"]
+    assert res.use_t
+    np.testing.assert_allclose(res.df, as_array(summary["df"]), rtol=RTOL, atol=0)
+    np.testing.assert_allclose(res.bse, as_array(summary["std.error"]), rtol=RTOL, atol=0)
+    np.testing.assert_allclose(res.tvalues, as_array(summary["statistic"]), rtol=RTOL, atol=0)
+    np.testing.assert_allclose(res.pvalues, as_array(summary["p.value"]), rtol=RTOL, atol=0)
+    ci = np.asarray(res.conf_int())
+    np.testing.assert_allclose(ci[:, 0], as_array(summary["conf.low"]), rtol=RTOL, atol=0)
+    np.testing.assert_allclose(ci[:, 1], as_array(summary["conf.high"]), rtol=RTOL, atol=0)
+    # other levels: the same t quantile rule on R's df and standard error.
+    # Compared as midpoint and half-width: a limit close to zero would turn
+    # the 3e-9 relative difference of the logistic standard errors (see
+    # l1_pooling.R) into a much larger relative one.
+    half = stats.t.ppf(0.95, as_array(summary["df"])) * as_array(summary["std.error"])
+    ci90 = np.asarray(res.conf_int(alpha=0.10))
+    np.testing.assert_allclose((ci90[:, 1] - ci90[:, 0]) / 2, half, rtol=RTOL, atol=0)
+    np.testing.assert_allclose(ci90.mean(axis=1), as_array(summary["estimate"]), rtol=RTOL, atol=0)
+
+
+def test_pool_summary_shows_df_and_fmi():
+    """``pool(summ=True)`` returns the statsmodels summary; its parameter
+    table holds R's estimates, inference, df and fmi."""
+    summary = MODELS["lm"]["summary"]
+    smry = _fitted_mice(MODELS["lm"]).pool(summ=True)
+    params = smry.tables[1]
+    assert list(params.index) == [_py_term(t) for t in str_list(summary["term"])]
+    columns = {
+        "Coef.": "estimate",
+        "Std.Err.": "std.error",
+        "t": "statistic",
+        "P>|t|": "p.value",
+        "[0.025": "conf.low",
+        "0.975]": "conf.high",
+        "df": "df",
+        "FMI": "fmi",
+    }
+    for py_name, r_name in columns.items():
+        np.testing.assert_allclose(
+            params[py_name].to_numpy(dtype=float),
+            as_array(summary[r_name]),
+            rtol=RTOL,
+            atol=0,
+            err_msg=py_name,
+        )
+    text = str(smry)
+    assert " df " in text and "FMI" in text
+
+
 # ---------------------------------------------------------------------------
-# (c) what holds today for the linear model
+# (c) the other keys of pool() for the linear model
 # ---------------------------------------------------------------------------
 
 
@@ -166,7 +243,6 @@ def test_pool_linear_model_within_and_between_variance_match_r(pooled_lm):
     )
 
 
-@pytest.mark.xfail(strict=True, reason="A4: fraction_missing_info holds lambda, not R's fmi")
 def test_pool_linear_model_fmi_matches_r(pooled_lm):
     np.testing.assert_allclose(
         pooled_lm["fraction_missing_info"], as_array(MODELS["lm"]["pooled"]["fmi"]), rtol=RTOL
