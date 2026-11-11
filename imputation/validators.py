@@ -1,9 +1,18 @@
+import logging
 import pandas as pd
 import warnings
 from typing import Dict, Union, List
 from .constants import ImputationMethod, SUPPORTED_METHODS, DEFAULT_METHOD, InitialMethod, SUPPORTED_INITIAL_METHODS, DEFAULT_INITIAL_METHOD, VisitSequence, SUPPORTED_VISIT_SEQUENCES
 import numpy as np
 import re
+
+logger = logging.getLogger('imputation.validators')
+
+
+def _is_valid_method(method) -> bool:
+    """A supported method, or "" for a column that is not imputed (as in R)."""
+    return method == "" or ImputationMethod.is_valid_method(method)
+
 
 def check_n_imputations(n_imputations: int) -> None:
     """
@@ -61,6 +70,8 @@ def check_method(method: Union[str, Dict[str, str]], columns: List[str]) -> Dict
         Method specification. Can be:
         - str: use the same method for all columns
         - Dict[str, str]: dictionary mapping column names to their methods
+        A method is one of SUPPORTED_METHODS, or "" for a column that is
+        not imputed.
     columns : List[str]
         List of column names in the data
         
@@ -76,7 +87,7 @@ def check_method(method: Union[str, Dict[str, str]], columns: List[str]) -> Dict
     """
     # If method is a string, validate and use for all columns
     if isinstance(method, str):
-        if not ImputationMethod.is_valid_method(method):
+        if not _is_valid_method(method):
             raise ValueError(f"Unsupported method: {method}. Supported methods are: {SUPPORTED_METHODS}")
         return {col: method for col in columns}
     
@@ -88,7 +99,7 @@ def check_method(method: Union[str, Dict[str, str]], columns: List[str]) -> Dict
             raise ValueError(f"Columns not found in data: {invalid_cols}")
         
         # Check if all methods are supported
-        invalid_methods = {col: m for col, m in method.items() if not ImputationMethod.is_valid_method(m)}
+        invalid_methods = {col: m for col, m in method.items() if not _is_valid_method(m)}
         if invalid_methods:
             raise ValueError(f"Unsupported methods: {invalid_methods}. Supported methods are: {SUPPORTED_METHODS}")
         
@@ -207,20 +218,24 @@ def validate_predictor_matrix(predictor_matrix: pd.DataFrame, data_columns: List
         Binary matrix indicating which variables should be used as predictors
         for each target variable. Rows represent target variables, columns represent predictors.
         A 1 indicates that the column variable is used as predictor for the index variable.
+        It may cover a subset of the columns; absent entries count as 0. Every
+        incomplete column needs a row; rows of complete columns are unused.
     data_columns : List[str]
         List of column names in the data to validate against
     data : pd.DataFrame
         The data to check for missing values
-        
+
     Returns
     -------
     pd.DataFrame
         Validated predictor matrix
-        
+
     Raises
     ------
     ValueError
-        If predictor_matrix has invalid structure or column names don't match data
+        If predictor_matrix has invalid structure, column names don't match
+        data, an incomplete column is a predictor without being a target, or
+        an incomplete column has no row
     """
     if not isinstance(predictor_matrix, pd.DataFrame):
         raise ValueError("predictor_matrix must be a pandas DataFrame")
@@ -241,24 +256,31 @@ def validate_predictor_matrix(predictor_matrix: pd.DataFrame, data_columns: List
     if not predictor_matrix.isin([0, 1]).all().all():
         raise ValueError("predictor_matrix must contain only 0s and 1s")
     
-    # Check for columns without missing data that are being imputed (warning)
-    complete_targets = [var for var in target_vars if not data[var].isna().any()]
-    if complete_targets:
-        warnings.warn(f"Target variables without missing data are being imputed: {complete_targets}. This is unnecessary but allowed.")
+    # Rows of complete variables are allowed and unused, as in R: a complete
+    # variable is never imputed.
     
     # Check for columns with missing data that are used as predictors but not imputed (error)
     predictor_only_vars = [col for col in predictor_cols if col not in target_vars]
     incomplete_predictors = [var for var in predictor_only_vars if data[var].isna().any()]
     if incomplete_predictors:
         raise ValueError(f"Predictor variables with missing data are not being imputed: {incomplete_predictors}. All predictors must be complete or included as targets.")
-    
+
+    # Every incomplete column needs a row: it says which predictors impute it
+    without_row = [col for col in data_columns if col not in target_vars and data[col].isna().any()]
+    if without_row:
+        raise ValueError(
+            f"predictor_matrix has no row for the incomplete columns {without_row}. "
+            "Add a row for each (all zeros to impute it without predictors)."
+        )
+
     return predictor_matrix
 
 def validate_columns(data: pd.DataFrame) -> pd.DataFrame:
     """
-    Validate and clean columns in the DataFrame.
+    Validate columns in the DataFrame.
     
-    Checks for columns with only NaN values and drops them with appropriate warnings.
+    Columns that are entirely missing are kept: they are neither imputed
+    nor used as predictors (see :meth:`imputation.MICE.impute`).
     
     Parameters
     ----------
@@ -268,29 +290,16 @@ def validate_columns(data: pd.DataFrame) -> pd.DataFrame:
     Returns
     -------
     pd.DataFrame
-        DataFrame with invalid columns removed
-        
-    Warns
-    -----
-    UserWarning
-        If columns with only NaN values are found and dropped
+        The same DataFrame
         
     Notes
     -----
     Missing data values that are treated as NaN:
     - pandas NaN (numpy.nan)
     """
-    # Check for columns with only NaN values
-    nan_only_cols = []
-    for col in data.columns:
-        if data[col].isna().all():
-            nan_only_cols.append(col)
-    
-    # Drop columns with only NaN values and print warning
-    if nan_only_cols:
-        warnings.warn(f"Found columns with only NaN values: {nan_only_cols}. These columns will be dropped as they cannot be imputed.")
-        print(f"Dropping {len(nan_only_cols)} columns with only NaN values: {nan_only_cols}")
-        data = data.drop(columns=nan_only_cols)
+    empty_cols = [col for col in data.columns if data[col].isna().all()]
+    if empty_cols:
+        logger.info("Columns without any observed value (not imputed, not used as predictors): %s", empty_cols)
     
     return data
 
@@ -340,12 +349,7 @@ def validate_dataframe(data) -> pd.DataFrame:
     if n_dropped > 0:
         print(f"Dropped {n_dropped} fully empty rows")
     
-    # Check for columns with no values
-    empty_cols = data.columns[data.isna().all()].tolist()
-    if empty_cols:
-        warnings.warn(f"Found columns with no values: {empty_cols}. These columns will be dropped as they cannot be imputed.")
-        print(f"Dropping {len(empty_cols)} columns with no values: {empty_cols}")
-        data = data.drop(columns=empty_cols)
+    # Columns with no values are kept; MICE neither imputes nor uses them
     
     return data
 

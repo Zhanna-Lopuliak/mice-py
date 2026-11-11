@@ -77,8 +77,6 @@ def test_default_method_is_pmm_for_numeric_columns(case):
 
 PRED_KNOWN = {
     "nhanes": "A7: default predictor matrix comes from _quickpred, R uses the full matrix",
-    "synthetic": "C6: constant / collinear predictors are not removed (and A7)",
-    "synthetic_dup_target": "C6: constant / collinear predictors are not removed (and A7)",
 }
 
 
@@ -89,6 +87,63 @@ def test_default_predictor_matrix_matches_r(case):
     rows = str_list(case["imputed_variables"])
     got = mice.predictor_matrix.loc[rows, expected.columns].astype(int)
     pd.testing.assert_frame_equal(got, expected.loc[rows], check_names=False)
+
+
+# ---------------------------------------------------------------------------
+# which variables are imputed, setup events (mice.edit.setup)
+# ---------------------------------------------------------------------------
+
+LOG_COLUMNS = ("it", "im", "dep", "meth", "out")
+
+
+def _impute_full(case):
+    """``_impute`` with R's default predictor matrix (all ones, zero diagonal),
+    passed explicitly so that these checks of the setup step do not depend on
+    the port's default (finding A7)."""
+    df = decode_frame(case["data"])
+    full = pd.DataFrame(1, index=df.columns, columns=df.columns)
+    np.fill_diagonal(full.values, 0)
+    return _impute(case, predictor_matrix=full)
+
+
+@pytest.mark.parametrize("case", SETUP["cases"], ids=[c["name"] for c in SETUP["cases"]])
+def test_imputed_variables_match_r(case):
+    """The variables with a method: incomplete ones, minus those the setup step
+    found constant or collinear."""
+    _, mice = _impute_full(case)
+    imputed = [str(col) for col, meth in mice.method.items() if meth != ""]
+    assert imputed == str_list(case["imputed_variables"])
+
+
+@pytest.mark.parametrize("case", SETUP["cases"], ids=[c["name"] for c in SETUP["cases"]])
+def test_setup_logged_events_match_r(case):
+    """R ran maxit = 0, so its log holds the setup events only (it = 0)."""
+    _, mice = _impute_full(case)
+    events = mice.logged_events
+    assert list(events.columns) == list(LOG_COLUMNS)
+    events = events[events["it"] == 0]
+    got = {
+        "it": [int(v) for v in events["it"]],
+        "im": [int(v) for v in events["im"]],
+        "dep": [str(v) for v in events["dep"]],
+        "meth": [str(v) for v in events["meth"]],
+        "out": [str(v) for v in events["out"]],
+    }
+    expected = case["logged_events"] or {name: [] for name in LOG_COLUMNS}
+    expected = {
+        name: [int(v) for v in expected[name]] if name in ("it", "im") else str_list(expected[name])
+        for name in LOG_COLUMNS
+    }
+    assert got == expected
+
+
+@pytest.mark.parametrize("case", SETUP["cases"], ids=[c["name"] for c in SETUP["cases"]])
+def test_incomplete_after_imputation_matches_r(case):
+    """R leaves a variable whose method the setup step set to "" incomplete."""
+    _, mice = _impute_full(case)
+    completed = mice.imputed_datasets[0]
+    still_missing = [str(col) for col in completed.columns if completed[col].isna().any()]
+    assert still_missing == str_list(case["incomplete_after_imputation"])
 
 
 # ---------------------------------------------------------------------------

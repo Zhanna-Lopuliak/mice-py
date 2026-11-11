@@ -51,18 +51,18 @@ class TestValidateDataframe:
         result = validate_dataframe(data)
         assert result.shape[0] == 2  # One row should be dropped
         
-    def test_drop_empty_columns(self):
-        """Test dropping of fully empty columns."""
+    def test_keeps_empty_columns(self, capsys):
+        """Fully empty columns are kept: they are not imputed and not used as predictors."""
         data = pd.DataFrame({
             'A': [1, 2, 3],
             'B': [np.nan, np.nan, np.nan],
             'C': [4, 5, 6]
         })
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+            warnings.simplefilter("error")
             result = validate_dataframe(data)
-        assert 'B' not in result.columns
-        assert result.shape[1] == 2
+        pd.testing.assert_frame_equal(result, data)
+        assert capsys.readouterr().out == ""
 
 
 class TestValidateColumns:
@@ -73,17 +73,15 @@ class TestValidateColumns:
         result = validate_columns(sample_data_missing)
         assert isinstance(result, pd.DataFrame)
         
-    def test_drop_nan_only_columns(self):
-        """Test dropping of columns with only NaN values."""
+    def test_keeps_nan_only_columns(self):
+        """Columns with only NaN values are kept."""
         data = pd.DataFrame({
             'A': [1, 2, 3],
             'B': [np.nan, np.nan, np.nan],
             'C': [4, 5, 6]
         })
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            result = validate_columns(data)
-        assert 'B' not in result.columns
+        result = validate_columns(data)
+        pd.testing.assert_frame_equal(result, data)
 
 
 class TestCheckParameters:
@@ -149,6 +147,11 @@ class TestCheckMethod:
         assert result['A'] == 'pmm'
         assert result['B'] == 'sample'
         
+    def test_check_method_accepts_empty_method(self):
+        """"" marks a column that is not imputed, as in R."""
+        assert check_method({'A': '', 'B': 'pmm'}, ['A', 'B']) == {'A': '', 'B': 'pmm'}
+        assert check_method('', ['A', 'B']) == {'A': '', 'B': ''}
+
     def test_check_method_invalid_column(self):
         """Test method validation with invalid column in dictionary."""
         columns = ['A', 'B']
@@ -200,6 +203,21 @@ class TestValidatePredictorMatrix:
         with pytest.raises(ValueError, match="predictor_matrix contains columns not in data"):
             validate_predictor_matrix(matrix, ['A', 'B'], sample_data_complete)
             
+    def test_rows_of_complete_variables_do_not_warn(self, sample_data_missing):
+        """A row for a complete variable is allowed and unused, as in R."""
+        data = sample_data_missing[['age', 'bmi', 'cholesterol']]
+        matrix = pd.DataFrame(1, index=data.columns, columns=data.columns)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            result = validate_predictor_matrix(matrix, list(data.columns), data)
+        assert result is matrix
+
+    def test_incomplete_column_without_row(self, sample_data_missing):
+        data = sample_data_missing[['age', 'bmi', 'cholesterol']]
+        matrix = pd.DataFrame([[0]], index=['bmi'], columns=['age'])
+        with pytest.raises(ValueError, match=r"no row for the incomplete columns \['cholesterol'\]"):
+            validate_predictor_matrix(matrix, list(data.columns), data)
+
     def test_predictor_matrix_invalid_values(self, sample_data_complete):
         """Test error with invalid values in predictor matrix."""
         matrix = pd.DataFrame([[1, 0.5], [0, 1]], 

@@ -231,10 +231,57 @@ def test_midas_perfect_fit_direct():
     assert np.isin(out, y[ry]).all()
 
 
-def test_midas_perfect_fit_through_impute():
+def _perfect_fit_frame():
+    """``y`` is exactly ``1 + x1 + x2``, but no predictor is collinear with it.
+
+    With a single predictor (as in ``_perfect_fit``) ``y`` would duplicate
+    ``x``: R's setup step then stops imputing ``y`` (and R stops with "No
+    predictors were left"). Two weakly related predictors (correlation 0.37)
+    keep the perfect fit while each correlates 0.83 with ``y``, below the
+    thresholds of ``find_collinear`` and ``remove_lindep``.
+    """
+    x1 = np.arange(1.0, 21.0)
+    x2 = (np.arange(20) * 7 % 20).astype(float)
+    y = 1 + x1 + x2
+    y[[3, 8, 15]] = np.nan
+    return pd.DataFrame({"y": y, "x1": x1, "x2": x2})
+
+
+def test_midas_perfect_fit_through_impute(monkeypatch):
+    import imputation.midas as midas_module
+
+    used = []
+    original = midas_module._donor_probabilities
+
+    def recording(*args, **kwargs):
+        probs, kappa = original(*args, **kwargs)
+        used.append(kappa)
+        return probs, kappa
+
+    monkeypatch.setattr(midas_module, "_donor_probabilities", recording)
+    df = _perfect_fit_frame()
+    _check(df, "midas", midas_ridge=0.0)
+    assert used and all(k == 100 for k in used)  # the fit is perfect in every call
+
+
+def test_target_collinear_with_its_only_predictor_is_not_imputed():
+    """``y = 2x + 1``: the setup step finds ``y`` collinear with ``x`` and stops
+    imputing it, as R's mice.edit.setup does. R then also stops with an error
+    because no predictor is left; the port goes on and logs the event."""
+    from imputation import MICE
+
     y, _, x = _perfect_fit()
     df = pd.DataFrame({"y": y, "x": x[:, 0]})
-    _check(df, "midas", midas_ridge=0.0)
+    mice = MICE(df)
+    with pytest.warns(UserWarning, match=r"Number of logged events: 1\b.*\['y'\]"):
+        out = mice.impute(n_imputations=2, maxit=2, method="midas", predictor_matrix=full_predictor_matrix(df), seed=1)
+    assert mice.method["y"] == ""
+    assert mice.visit_sequence == []
+    assert mice.logged_events.to_dict("list") == {
+        "it": [0], "im": [0], "dep": [""], "meth": ["collinear"], "out": ["y"]
+    }
+    for completed in out:
+        pd.testing.assert_frame_equal(completed, df)
 
 
 def test_midas_perfect_fit_uses_kappa_100():

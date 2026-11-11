@@ -227,20 +227,45 @@ def constant_columns(df):
     """Incomplete columns whose observed values are all equal.
 
     R's setup step treats such a column as constant and leaves it unimputed;
-    filling it with its only observed value is equally acceptable here.
+    filling it with its only observed value is equally acceptable here. R's
+    rule is a variance below ``1000 * eps``, so numeric columns whose
+    observed values differ by less than that count as constant too.
     """
-    return {
-        c for c in df.columns if df[c].isna().any() and df[c].dropna().nunique() == 1
-    }
+    out = set()
+    for c in df.columns:
+        if not df[c].isna().any():
+            continue
+        observed = df[c].dropna()
+        if observed.nunique() <= 1:
+            out.add(c)
+        elif is_numeric_column(df[c]) and observed.astype(float).var() < 1000 * np.finfo(float).eps:
+            out.add(c)
+    return out
+
+
+def setup_skipped_columns(df):
+    """Incomplete columns that R's setup step (mice.edit.setup) does not impute.
+
+    These are the constant columns and, with the full predictor matrix, the
+    incomplete columns that ``find_collinear`` (R's ``find.collinear``,
+    checked against R in test_l1_setup) reports among the other columns.
+    Leaving them missing is R's behaviour; imputing them is also accepted.
+    """
+    from imputation.design import find_collinear
+
+    constant = constant_columns(df)
+    rest = df.drop(columns=list(constant))
+    collinear = {c for c in find_collinear(rest) if df[c].isna().any()} if rest.shape[1] > 1 else set()
+    return constant | collinear
 
 
 def assert_all_invariants(original, before, mice, out, n_imputations, maxit, donor=True, allow_unimputed=()):
-    """Item 1 invariants. Columns in ``allow_unimputed`` and constant columns may
-    keep their missing cells (R's setup step skips them); filled cells must still
-    hold observed values."""
+    """Item 1 invariants. Columns in ``allow_unimputed`` and the columns R's setup
+    step skips (constant or collinear, see ``setup_skipped_columns``) may keep
+    their missing cells; filled cells must still hold observed values."""
     assert len(out) == n_imputations
     pd.testing.assert_frame_equal(original, before)
-    constant = constant_columns(original) | set(allow_unimputed)
+    constant = setup_skipped_columns(original) | set(allow_unimputed)
     regular = [c for c in original.columns if c not in constant]
     for completed in out:
         assert_structure_preserved(original, completed)
@@ -248,7 +273,9 @@ def assert_all_invariants(original, before, mice, out, n_imputations, maxit, don
         assert_observed_unchanged(original, completed)
         assert_no_missing(completed[regular])
         if donor:
-            # NaN left in a constant column is allowed; any filled value must be observed.
-            filler = {c: original[c].dropna().iloc[0] for c in constant}
-            assert_imputed_are_observed(original, completed.fillna(filler))
+            # NaN left in a skipped column is allowed; any filled value must be observed.
+            # (An entirely missing column has nothing to compare with.)
+            filler = {c: original[c].dropna().iloc[0] for c in constant if original[c].notna().any()}
+            checked = [c for c in original.columns if original[c].notna().any()]
+            assert_imputed_are_observed(original, completed.fillna(filler), columns=checked)
     assert_chain_stats(mice, original[regular], n_imputations, maxit)
