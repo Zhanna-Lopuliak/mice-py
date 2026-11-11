@@ -178,11 +178,14 @@ def midas(
 
     Examples
     --------
-    >>> y = np.array([7, np.nan, 9, 10, 11])
+    >>> y = np.array([2.1, 3.9, np.nan, 8.2, 9.8, 12.3, np.nan, 15.7, 18.4, 19.9])
     >>> id_obs = ~np.isnan(y)
-    >>> x = np.array([[1, 2], [3, 4], [5, 6], [7, 13], [11, 10]])
-    >>> midas(y, id_obs, x, rng=np.random.default_rng(1))
-    array([9.])
+    >>> x = np.arange(10.0).reshape(-1, 1)  # one predictor
+    >>> y_imp = midas(y, id_obs, x, rng=np.random.default_rng(1))
+    >>> y_imp.shape  # one value per missing cell
+    (2,)
+    >>> bool(np.isin(y_imp, y[id_obs]).all())  # each one an observed value
+    True
     """
     id_obs = np.asarray(id_obs, dtype=bool)
     id_mis = ~id_obs if id_mis is None else np.asarray(id_mis, dtype=bool)

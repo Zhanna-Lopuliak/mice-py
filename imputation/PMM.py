@@ -98,11 +98,14 @@ def pmm(
 
     Examples
     --------
-    >>> y = np.array([7, np.nan, 9, 10, 11])
+    >>> y = np.array([2.1, 3.9, np.nan, 8.2, 9.8, 12.3, np.nan, 15.7, 18.4, 19.9])
     >>> id_obs = ~np.isnan(y)
-    >>> x = np.array([[1, 2], [3, 4], [5, 7], [7, 8], [9, 10]])
-    >>> pmm(y=y, id_obs=id_obs, x=x, donors=3, rng=np.random.default_rng(1))
-    array([9.])
+    >>> x = np.arange(10.0).reshape(-1, 1)  # one predictor
+    >>> y_imp = pmm(y=y, id_obs=id_obs, x=x, donors=3, rng=np.random.default_rng(1))
+    >>> y_imp.shape  # one value per missing cell
+    (2,)
+    >>> bool(np.isin(y_imp, y[id_obs]).all())  # each one an observed value
+    True
     """
     # Validate predictors (x): numeric or dummy-coded, without missing values
     if isinstance(x, pd.DataFrame):
