@@ -133,7 +133,7 @@ def cmd_generate(args):
     start = time.perf_counter()
     rates = {}
     with _pool(args.jobs) as pool:
-        for sid, rep, rate in pool.imap_unordered(_generate_one, tasks, chunksize=16):
+        for sid, _rep, rate in pool.imap_unordered(_generate_one, tasks, chunksize=16):
             rates.setdefault(sid, []).append(rate)
     for sid in args.scenarios:
         manifest["scenarios"][sid] = scenario_spec(SCENARIOS[sid], args.reps)

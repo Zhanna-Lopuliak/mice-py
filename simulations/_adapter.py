@@ -11,9 +11,9 @@ What it fixes explicitly, so that the study does not depend on defaults:
 - the method, forced for every incomplete column;
 - ``n_imputations`` and ``maxit``.
 
-joblib runs sequentially inside the call (the study parallelises over
-replications instead; rf would otherwise start one thread per core per tree
-fit, which is 2-3 times slower and oversubscribes the machine).
+joblib runs sequentially inside the call: the study parallelises over
+replications instead. rf grows its trees in one job by default anyway; the
+setting only guards against a forest that asks for more.
 
 Seeds: if ``MICE.impute`` has a ``seed`` parameter it receives the per
 replication seed. Otherwise (finding C1: the library hard-codes seed 42 + chain
@@ -143,10 +143,11 @@ def impute(df, method, m, maxit, seed):
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         try:
-            # Validators print to stdout; keep worker output readable. The
-            # study parallelises over replications, so joblib inside the
-            # library (rf uses n_jobs=-1) runs sequentially; with fixed
-            # random_state this does not change any result.
+            # The library does not print; the redirect keeps worker output
+            # readable should that change. The study parallelises over
+            # replications, so joblib inside the library runs sequentially
+            # (rf uses one job by default); with a fixed random_state this
+            # does not change any result.
             with contextlib.redirect_stdout(io.StringIO()), joblib.parallel_config(backend="sequential"):
                 datasets = MICE(df.copy()).impute(**kwargs)
         except Exception as exc:  # recorded, not raised: see docstring

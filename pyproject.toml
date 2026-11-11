@@ -72,6 +72,8 @@ plotting = ["py.typed"]
 [tool.ruff]
 line-length = 120
 target-version = "py39"
+# the simulation scripts import their sibling modules (metrics, scenarios)
+src = [".", "simulations"]
 # docs/ and the Markdown files are rewritten in the docs phase; notebooks are not linted
 extend-exclude = ["docs", "*.ipynb", "*.md"]
 

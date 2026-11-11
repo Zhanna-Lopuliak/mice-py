@@ -76,15 +76,15 @@ Written by `write_fixture(name, payload)` in `r/_common.R` and read by
 |---|---|---|
 | `l1_estimice` | `mice:::estimice(x, y, ls.meth)`, qr / ridge / svd | `imputation.sampler.estimice` |
 | `l1_norm_draw` | `mice:::.norm.draw(y, ry, x)` with `rchisq(1, df)` and `rnorm(p)` captured by re-seeding | `imputation.sampler.norm_draw`, driven by `ScriptedGenerator` |
-| `l1_quantify` | `mice:::quantify(y, ry, x)` | planned `imputation.PMM.quantify` (equal up to sign) |
+| `l1_quantify` | `mice:::quantify(y, ry, x)` | `imputation.PMM.quantify` (equal up to sign) |
 | `l1_pmm_one_donor` | `mice.impute.pmm(y, ry, x, donors = 1, matchtype)` with captured draws | `imputation.PMM.pmm` |
-| `l1_matchindex` | donors reached by 2000 calls of `matchindex(d, t, k)` | planned `imputation.PMM.matchindex`; today `matcherid` |
+| `l1_matchindex` | donors reached by 2000 calls of `matchindex(d, t, k)` | `imputation.PMM.matchindex` |
 | `l1_setup` | `mice(data, maxit = 0)`: method, predictorMatrix, visitSequence, loggedEvents | `MICE.impute`: `.method`, `.predictor_matrix`, `.visit_sequence` |
-| `l1_design` | `mice:::obtain.design`, `mice:::remove.lindep`, `mice:::find.collinear` | planned `imputation.design` |
-| `l1_quickpred` | `quickpred(data, ...)` on nhanes and boys | planned `imputation.quickpred`; today `impute(min_cor=...)` |
+| `l1_design` | `mice:::obtain.design`, `mice:::remove.lindep`, `mice:::find.collinear` | `imputation.design` |
+| `l1_quickpred` | `quickpred(data, ...)` on nhanes and boys | `imputation.quickpred` |
 | `l1_md_pattern` | `md.pattern(data, plot = FALSE)` | `plotting.utils.md_pattern_like` |
-| `l1_pooling` | `pool()`, `summary(pool(), type = "all", conf.int = TRUE)`, `pool.table()`, `mice:::barnard.rubin()` | planned `imputation.pooling.barnard_rubin` / `pool_estimates`; `MICE.fit` / `MICE.pool` on R's completed datasets |
-| `l1_midastouch` | `mice.impute.midastouch()` with a `trace()` exit hook capturing `probs`, `midas.kappa`, `omega` | planned `imputation.midas._donor_probabilities` |
+| `l1_pooling` | `pool()`, `summary(pool(), type = "all", conf.int = TRUE)`, `pool.table()`, `mice:::barnard.rubin()` | `imputation.pooling.barnard_rubin` / `pool_estimates`; `MICE.fit` / `MICE.pool` on R's completed datasets |
+| `l1_midastouch` | `mice.impute.midastouch()` with a `trace()` exit hook capturing `probs`, `midas.kappa`, `omega` | `imputation.midas._donor_probabilities` |
 
 Behaviours of R mice 3.19.0 that the fixtures pin down and that are easy to
 get wrong:
