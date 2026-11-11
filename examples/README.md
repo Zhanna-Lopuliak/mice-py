@@ -1,84 +1,36 @@
-# MICE Examples
+# Examples
 
-This folder contains comprehensive Jupyter notebook examples demonstrating all aspects of the MICE implementation.
+Jupyter notebooks for mice-py 0.2. They use R mice's `nhanes` data (25 rows:
+age group, body mass index, hypertension, cholesterol), in `data/nhanes.csv`,
+and read it relative to this folder.
 
-## 📚 Notebooks
+| Notebook | Content |
+|---|---|
+| [01_basic_imputation.ipynb](01_basic_imputation.ipynb) | Loading data, the missing-data pattern, a first imputation with the default settings, the completed datasets, the trace plot |
+| [02_imputation_methods.ipynb](02_imputation_methods.ipynb) | pmm, cart, rf and midas for all columns, a method per column, comparing the results in plots |
+| [03_advanced_parameters.ipynb](03_advanced_parameters.ipynb) | Method parameters (`pmm_donors`, `cart_max_depth`, ...), predictor matrices and `imputation.quickpred`, number of imputations and iterations, visit sequences, initial values, seeds |
+| [04_analysis_workflow.ipynb](04_analysis_workflow.ipynb) | Fitting a model to every completed dataset with `fit` and pooling with Rubin's rules with `pool` |
+| [05_diagnostic_plots.ipynb](05_diagnostic_plots.ipynb) | Every plot function: pattern, trace, strip, box, density and scatter plots, colors, saving |
+| [06_missing_data_patterns.ipynb](06_missing_data_patterns.ipynb) | Missing-data patterns of simulated MCAR, MAR and MNAR data, and of `nhanes` |
 
-The notebooks are designed to be explored sequentially, building from basic to advanced usage:
+New to MICE: 01, 05, 02, 04, then 03.
 
-### [01_basic_imputation.ipynb](01_basic_imputation.ipynb)
-**Introduction to MICE workflow**
+## Running
 
-Learn the fundamentals:
-- Loading data and inspecting missing values
-- Visualizing missing data patterns
-- Running basic imputation with default settings
-- Accessing and exporting imputed datasets
-- Checking convergence with chain statistics
+From the repository root:
 
----
+```bash
+uv run --extra notebooks jupyter lab examples/
+```
 
-### [02_imputation_methods.ipynb](02_imputation_methods.ipynb)
-**Comparing imputation methods**
+Without uv: `pip install -e ".[notebooks]"`, then `jupyter lab examples/`.
 
-Explore different imputation approaches:
-- PMM (Predictive Mean Matching)
-- CART (Classification and Regression Trees)
-- Random Forest
-- Using the same method for all columns vs different methods per column
-- Visual comparison of results
-- Guidelines for method selection
----
+The stored outputs were produced with mice-py 0.2.0. To check that every
+notebook runs from top to bottom, as the CI does:
 
-### [03_advanced_parameters.ipynb](03_advanced_parameters.ipynb)
-**Advanced parameter tuning**
+```bash
+uv run --extra notebooks pytest --nbmake examples/
+```
 
-Master parameter customization:
-- Method-specific parameters (e.g., `pmm_donors`, `cart_max_depth`)
-- Predictor matrix control (auto-generated vs custom)
-- Imputation control (`n_imputations`, `maxit`, `visit_sequence`)
-- Initial imputation methods
-- Comprehensive example combining multiple parameters
-
-
----
-
-### [04_analysis_workflow.ipynb](04_analysis_workflow.ipynb)
-**Complete statistical analysis workflow**
-
-Learn the full imputation-to-inference pipeline:
-- Imputing missing data
-- Fitting statistical models with `.fit(formula)`
-- Pooling results using Rubin's rules with `.pool()`
-- Interpreting pooled summary tables
----
-
-### [05_diagnostic_plots.ipynb](05_diagnostic_plots.ipynb)
-**Visual diagnostics and plotting**
-
-Comprehensive guide to all plotting capabilities:
-- Missing data pattern visualization
-- Convergence diagnostics
-- Distribution comparison plots (stripplot, boxplot, density)
-- Relationship plots (scatter plots)
-- Customization options and saving plots
-
----
-
-### Dataset
-
-All examples use the NHANES (National Health and Nutrition Examination Survey) dataset, which is included in the `data/` folder. This is a small, well-documented dataset commonly used in missing data literature.
-
-## 📖 Learning Path
-
-**New to MICE?** Start here:
-1. `01_basic_imputation.ipynb` - Learn the basics
-2. `05_diagnostic_plots.ipynb` - Understand how to assess imputation quality
-3. `02_imputation_methods.ipynb` - Learn about different methods
-4. `04_analysis_workflow.ipynb` - Complete analysis from start to finish
-
-**Want to dive deeper?**
-- `03_advanced_parameters.ipynb` - Fine-tune your imputations
-
-**Already familiar with MICE?**
-- Jump directly to `04_analysis_workflow.ipynb` for the complete workflow
+The documentation explains the same topics in more detail:
+[mice-py.readthedocs.io](https://mice-py.readthedocs.io/).
