@@ -5,6 +5,13 @@ This module combines diagnostic plots for analyzing imputed datasets
 and utilities for visualizing missing data patterns.
 """
 
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("mice-py")
+except PackageNotFoundError:  # not installed, e.g. imported from a source tree
+    __version__ = "0+unknown"
+
 from .diagnostics import (
     stripplot,
     bwplot, 

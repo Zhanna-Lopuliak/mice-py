@@ -6,6 +6,12 @@ It follows Python logging best practices and allows users to configure logging a
 """
 
 import logging
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("mice-py")
+except PackageNotFoundError:  # not installed, e.g. imported from a source tree
+    __version__ = "0+unknown"
 
 package_logger = logging.getLogger(__name__)
 package_logger.addHandler(logging.NullHandler())
