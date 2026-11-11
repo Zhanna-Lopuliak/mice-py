@@ -2,13 +2,10 @@
 Tests for the core MICE functionality.
 """
 
-import pytest
 import pandas as pd
-import numpy as np
-from unittest.mock import patch
-import warnings
+import pytest
 
-from imputation import MICE, configure_logging
+from imputation import MICE
 
 
 class TestMICEInitialization:
@@ -115,26 +112,3 @@ class TestMICEMethods:
         mice.impute(n_imputations=2, maxit=2, method=method_dict)
 
         assert mice.imputed_datasets is not None
-
-
-class TestMICELogging:
-    """Test MICE logging functionality."""
-
-    def test_logging_configuration(self, sample_data_missing):
-        """Test that logging can be configured."""
-        logger = configure_logging(level="DEBUG", file_logging=False)
-
-        mice = MICE(sample_data_missing)
-        mice.impute(n_imputations=1, maxit=1)
-
-        assert logger is not None
-
-    def test_logging_warning_without_config(self, sample_data_missing):
-        """Test that warning is shown when logging not configured."""
-        from imputation.logging_config import reset_logging
-
-        reset_logging()
-
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            mice = MICE(sample_data_missing)

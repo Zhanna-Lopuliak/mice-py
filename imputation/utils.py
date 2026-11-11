@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Utility helpers.
 
 This module offers :func:`get_imputer_func`, which maps a string identifying
@@ -7,16 +5,18 @@ an imputation method to the concrete callable that implements that method, and
 :func:`get_imputer_params`, which lists the parameters a user may set for it.
 """
 
+from __future__ import annotations
+
 import inspect
 
+from .cart import cart
 from .constants import ImputationMethod
+from .midas import midas
 
 # Import concrete imputation back-ends
 from .PMM import pmm
-from .midas import midas
-from .cart import cart
-from .sample import sample
 from .rf import rf
+from .sample import sample
 
 # ---------------------------------------------------------------------------
 # Public helpers

@@ -8,7 +8,9 @@ class ImputationMethod(Enum):
 
     Attributes:
         PMM: Predictive Mean Matching
-        MIDAS: Multiple Imputation by Denoising Autoencoders with Swish
+        MIDAS: Multiple Imputation with Distant Average Substitution, R's
+            ``midastouch`` (predictive mean matching with distance-based donor
+            weights)
         CART: Classification and Regression Trees
         SAMPLE: Random sampling from observed values
         RF: Random Forest

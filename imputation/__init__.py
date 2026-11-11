@@ -1,65 +1,70 @@
 """
-Imputation package for Multiple Imputation by Chained Equations (MICE).
+Multiple Imputation by Chained Equations (MICE), a Python port of R's ``mice``.
 
-This package provides robust imputation methods including MICE, PMM, CART, and Random Forest.
-It follows Python logging best practices and allows users to configure logging as needed.
+The main entry point is :class:`MICE`; :func:`quickpred` builds a predictor
+matrix as R's ``quickpred`` does.
+
+Logging
+-------
+Every module logs to a logger named after it (``imputation.MICE``,
+``imputation.pooling``, ...). As a library, the package only adds a
+``logging.NullHandler`` to the ``imputation`` logger, so nothing is shown
+unless the application configures logging, for example with
+``logging.basicConfig(level=logging.INFO)`` or :func:`configure_logging`.
 """
 
 import logging
 from importlib.metadata import PackageNotFoundError, version
+
+from .design import quickpred
+from .logging_config import disable_logging, get_logger, reset_logging, setup_logging
+from .MICE import MICE
 
 try:
     __version__ = version("mice-py")
 except PackageNotFoundError:  # not installed, e.g. imported from a source tree
     __version__ = "0+unknown"
 
-package_logger = logging.getLogger(__name__)
-package_logger.addHandler(logging.NullHandler())
-package_logger.propagate = False
-
-from .MICE import MICE
-from .design import quickpred
-from .logging_config import setup_logging, get_logger, disable_logging, reset_logging
-
-logger = logging.getLogger(__name__)
+logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = ["MICE", "quickpred", "setup_logging", "get_logger", "disable_logging", "reset_logging", "configure_logging"]
 
 
-def configure_logging(**kwargs):
+def configure_logging(**kwargs) -> logging.Logger:
     """
     Configure logging for the imputation package.
 
-    This is a user-friendly wrapper around setup_logging() that provides
-    the same functionality with a more intuitive name.
+    An optional convenience wrapper around :func:`setup_logging`, with the
+    same arguments. It attaches handlers to the ``imputation`` logger only
+    and writes no log file unless ``file_logging=True`` is passed.
 
     Parameters
     ----------
     **kwargs
-        All arguments are passed to setup_logging(). See setup_logging()
-        documentation for full list of parameters.
+        Passed to :func:`setup_logging`; see there for the parameters.
 
     Returns
     -------
     logging.Logger
-        The configured package logger
+        The configured ``imputation`` logger.
 
     Examples
     --------
-    Basic usage:
+    Messages at INFO and above on the console:
+
     >>> import imputation
-    >>> imputation.configure_logging()
+    >>> imputation.configure_logging()  # doctest: +SKIP
 
-    Enable debug logging:
-    >>> imputation.configure_logging(level='DEBUG')
+    Debug messages:
 
-    Custom log directory:
-    >>> imputation.configure_logging(log_dir='my_project/logs')
+    >>> imputation.configure_logging(level="DEBUG", console_level="DEBUG")  # doctest: +SKIP
 
-    Console only (no file logging):
-    >>> imputation.configure_logging(file_logging=False)
+    Also write a rotating log file into ``my_project/logs``:
 
-    Quiet mode (warnings and errors only):
-    >>> imputation.configure_logging(console_level='WARNING')
+    >>> imputation.configure_logging(file_logging=True, log_dir="my_project/logs")  # doctest: +SKIP
+
+    Warnings and errors only:
+
+    >>> imputation.configure_logging(console_level="WARNING")  # doctest: +SKIP
     """
     return setup_logging(**kwargs)

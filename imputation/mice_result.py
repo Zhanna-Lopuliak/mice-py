@@ -74,7 +74,6 @@ class MICEresult(LikelihoodModelResults):
 
     t_test = f_test = wald_test = _no_joint_tests
 
-    # noinspection PyMethodMayBeStatic
     def summary(self, title: str = None, alpha: float = 0.05):  # type: ignore[override]
         """Return a statsmodels summary object with df and FMI columns."""
         smry = summary2.Summary()
@@ -83,9 +82,9 @@ class MICEresult(LikelihoodModelResults):
         scale = getattr(self, "scale", np.nan)
         info = {
             "Dependent variable:": getattr(self.model, "endog_names", "-"),
-            "Sample size:": "%d" % self.model.data.shape[0] if hasattr(self.model, "data") else "-",
-            "Scale": "%.2f" % scale if np.isfinite(scale) else "-",
-            "M": "%d" % getattr(self, "m", len(getattr(self.model, "imputed_datasets", []))),
+            "Sample size:": f"{self.model.data.shape[0]:d}" if hasattr(self.model, "data") else "-",
+            "Scale": f"{scale:.2f}" if np.isfinite(scale) else "-",
+            "M": f"{getattr(self, 'm', len(getattr(self.model, 'imputed_datasets', []))):d}",
         }
         smry.add_dict(info, align="l", float_format=float_fmt)
 

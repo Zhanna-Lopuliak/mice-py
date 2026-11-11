@@ -1,14 +1,13 @@
+import logging
+from typing import Optional, Union
+
 import numpy as np
 import pandas as pd
-from typing import Union, Optional
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-import logging
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
 from .cart import _design_matrix, _draw_pooled_donors, _is_numeric_target, _label_codes
 
-# Get a logger for the current module.
-# This will be a child of the 'imputation' logger configured in MICE.py
-logger = logging.getLogger("imputation.rf")
+logger = logging.getLogger(__name__)
 
 # ranger's default min.node.size: a node is split only if it holds more
 # observations than this (5 for regression, 1 for classification). The

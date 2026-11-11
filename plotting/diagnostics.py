@@ -1,14 +1,15 @@
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
 import logging
 import math
 import warnings
 
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+
 from .utils import _save_or_show
 
-logger = logging.getLogger("imputation.plotting.diagnostics")
+logger = logging.getLogger(__name__)
 
 # Size of one panel in inches, and the largest figure side. Figures with many
 # panels shrink their panels rather than grow without bound.
@@ -260,7 +261,8 @@ def bwplot(
     columns : list of str, optional
         List of column names to plot. If None, plots all columns with missing values.
     merge_imputations : bool, default False
-        If True, combines all imputed values into a single boxplot. If False, shows separate boxplots for each imputation.
+        If True, combines all imputed values into a single boxplot. If False,
+        shows separate boxplots for each imputation.
     observed_color : str, default 'blue'
         Color for observed values
     imputed_color : str, default 'red'
@@ -391,7 +393,7 @@ def bwplot(
                 ax.plot(0, median_val, "o", color=observed_color, alpha=0.6, markersize=6, zorder=3)
 
             # Then add imputed data points
-            for i, df in enumerate(imputed_datasets, 1):
+            for i in range(1, len(imputed_datasets) + 1):
                 imp_data = plot_data[(plot_data["imputation"] == f"Imp {i}") & (plot_data["type"] == "Imputed")]
                 if not imp_data.empty:
                     median_val = imp_data["value"].median()

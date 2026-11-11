@@ -1,64 +1,39 @@
-import warnings
-import numpy as np
-import pandas as pd
+"""The MICE class: multiple imputation by chained equations, as R's ``mice``."""
+
 import logging
 import time
-from typing import Dict, Union, Optional, List
-from datetime import datetime
-import os
+import warnings
+from typing import Dict, List, Optional, Union
+
+import numpy as np
+import pandas as pd
 import statsmodels.formula.api as smf
 
-# Get a logger for this module using the proper package hierarchy
-# This will inherit configuration from the package logger when configured
-logger = logging.getLogger("imputation.mice")
-
-
-# Check if logging has been configured; if not, provide helpful guidance
-def _check_logging_configured():
-    """Check if package logging has been configured and provide guidance if not."""
-    package_logger = logging.getLogger("imputation")
-
-    # Check if the package logger has any handlers (other than NullHandler)
-    has_real_handlers = any(not isinstance(handler, logging.NullHandler) for handler in package_logger.handlers)
-
-    if not has_real_handlers and not package_logger.propagate:
-        # Only show warning once per session
-        if not hasattr(_check_logging_configured, "_warned"):
-            logger.warning(
-                "No logging configured for imputation package. "
-                "Call imputation.configure_logging() to enable logging, "
-                "or imputation.disable_logging() to suppress this warning."
-            )
-            _check_logging_configured._warned = True
-
-
-from .validators import (
-    validate_dataframe,
-    validate_columns,
-    check_n_imputations,
-    check_maxit,
-    check_method,
-    check_initial_method,
-    validate_predictor_matrix,
-    check_visit_sequence,
-    validate_formula,
-)
 from .constants import (
+    DEFAULT_INITIAL_METHOD,
+    DEFAULT_METHOD,
+    DEFAULT_VISIT_SEQUENCE,
     ImputationMethod,
     InitialMethod,
-    DEFAULT_METHOD,
-    DEFAULT_INITIAL_METHOD,
-    DEFAULT_VISIT_SEQUENCE,
     VisitSequence,
 )
-
-# Import concrete imputation functions
-from .utils import get_imputer_func, get_imputer_params
-
-# External helpers
+from .design import _as_numeric, _column_kind, _remove_lindep, find_collinear, obtain_design, quickpred
 from .mice_result import MICEresult
-from .pooling import pool_descriptive_statistics, pool_estimates, _residual_df
-from .design import obtain_design, find_collinear, quickpred, _as_numeric, _column_kind, _remove_lindep
+from .pooling import _residual_df, pool_estimates
+from .utils import get_imputer_func, get_imputer_params
+from .validators import (
+    check_initial_method,
+    check_maxit,
+    check_method,
+    check_n_imputations,
+    check_visit_sequence,
+    validate_columns,
+    validate_dataframe,
+    validate_formula,
+    validate_predictor_matrix,
+)
+
+logger = logging.getLogger(__name__)
 
 # Deprecated keyword arguments of `MICE.impute`, and the matching arguments
 # of `imputation.quickpred`
@@ -209,9 +184,6 @@ class MICE:
         imputed like any other; such a column is not imputed and not used as
         a predictor (see `impute`).
         """
-        # Check if logging has been configured and provide guidance if needed
-        _check_logging_configured()
-
         logger.info("Initializing MICE object")
         self.data = validate_dataframe(data)
         self.data = validate_columns(self.data)
@@ -230,10 +202,6 @@ class MICE:
         logger.debug("Missing value statistics:")
         for col, stats in missing_stats.items():
             logger.debug(f"  {col}: {stats['missing_count']} values ({stats['missing_percentage']:.2f}%) missing")
-
-        # Container for pooled results
-        self.result = None  # Will hold the pooled `MICEresult` instance
-        self.run_output_dir = None
 
         # For storing analysis model results
         self.model_results = []
@@ -431,7 +399,6 @@ class MICE:
                 self.method[col] = ""
         logger.debug(f"Using imputation methods: {self.method}")
 
-        # Store imputation parameters before using them
         self.imputation_params = kwargs
 
         # Warn if user provided method-specific parameters for methods not used
@@ -452,7 +419,6 @@ class MICE:
         self.n_imputations = n_imputations
         self.maxit = maxit
         self.initial = initial
-        self.imputation_params = kwargs
 
         # Edit the model before the chains start, as R's mice.edit.setup
         self._log = []
@@ -513,15 +479,6 @@ class MICE:
         logger.debug(f"  - Initial method: {self.initial}")
         logger.debug(f"  - Method: {self.method}")
         logger.debug(f"  - Visit sequence: {self.visit_sequence}")
-        logger.debug(f"  - Predictor matrix provided: {self.predictor_matrix is not None}")
-
-        # Create a simple result object to hold the imputed datasets for backward compatibility
-        class ImputationResult:
-            def __init__(self, imputed_datasets):
-                self.imputed_datasets = imputed_datasets
-
-        self.result = ImputationResult(self.imputed_datasets)
-        logger.debug("Created result object with imputed datasets")
 
         self._report_logged_events()
 

@@ -1,5 +1,6 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
+
 from .design import obtain_design
 from .sampler import norm_draw
 
@@ -91,7 +92,7 @@ def pmm(y, id_obs, x, id_mis=None, donors=5, matchtype=1, quantify=True, ridge=1
         try:
             x = x.astype(float)
         except Exception:
-            raise ValueError("Predictors must be numeric for pmm. Could not convert 'x' to numeric array.")
+            raise ValueError("Predictors must be numeric for pmm. Could not convert 'x' to numeric array.") from None
         if np.isnan(x).any():
             raise ValueError("Predictors must not contain missing values for pmm.")
     if x.ndim == 1:

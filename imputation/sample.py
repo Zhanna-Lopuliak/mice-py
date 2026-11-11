@@ -1,6 +1,7 @@
+from typing import Optional, Union
+
 import numpy as np
 import pandas as pd
-from typing import Union, Optional
 
 
 def sample(

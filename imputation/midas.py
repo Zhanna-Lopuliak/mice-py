@@ -104,7 +104,8 @@ def midas(y, id_obs, x, id_mis=None, ridge=1e-5, kappa=None, outout=True, rng=No
     -----
     - Based on: Gaffert, P., Meinfelder, F., & van den Bosch, V. (2018).
       "Towards an MI-proper Predictive Mean Matching."
-    - Related: Siddique, J. & Belin, T. R. (2008). "Multiple Imputation Using an Iterative Hot-Deck with Distance-Based Donor Selection."
+    - Related: Siddique, J. & Belin, T. R. (2008). "Multiple Imputation Using an
+      Iterative Hot-Deck with Distance-Based Donor Selection."
     - The donor probabilities for given bootstrap weights are computed by
       :func:`_donor_probabilities`.
 

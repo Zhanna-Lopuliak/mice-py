@@ -1,12 +1,13 @@
+import logging
+import os
+
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import seaborn as sns
 from matplotlib.colors import ListedColormap
-import pandas as pd
-import numpy as np
-import os
-import logging
 
-logger = logging.getLogger("imputation.plotting.utils")
+logger = logging.getLogger(__name__)
 
 
 def _ensure_directory(file_path):

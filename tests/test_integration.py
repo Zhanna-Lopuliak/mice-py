@@ -8,7 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from imputation import MICE, configure_logging
+from imputation import MICE
 from plotting.diagnostics import stripplot, densityplot, xyplot
 from plotting.utils import md_pattern_like, plot_missing_data_pattern
 
@@ -90,22 +90,6 @@ class TestEndToEndWorkflow:
         assert (temp_dir / "integration_missing_pattern.png").exists()
 
         plt.close("all")
-
-
-class TestLoggingIntegration:
-    """Test logging integration with workflows."""
-
-    def test_workflow_without_logging_config(self, sample_data_missing):
-        """Test workflow without explicit logging configuration."""
-        from imputation.logging_config import reset_logging
-
-        reset_logging()
-
-        # Should still work without explicit logging config
-        mice = MICE(sample_data_missing)
-        mice.impute(n_imputations=1, maxit=1, method="sample")
-
-        assert mice.imputed_datasets is not None
 
 
 class TestDataTypeHandling:

@@ -1,101 +1,98 @@
 """
-Logging configuration module for the imputation package.
+Optional logging helpers for the imputation package.
 
-This module provides proper logging setup following Python best practices,
-allowing users to configure logging behavior without affecting the global
-logging state.
+The package itself only adds a ``logging.NullHandler`` to the ``imputation``
+logger (see :mod:`imputation`). These helpers are a convenience for scripts
+and notebooks that want to see the package's messages without configuring
+:mod:`logging` themselves. They only touch the ``imputation`` logger, never
+the root logger; its records still propagate to the root logger as usual.
 """
+
+from __future__ import annotations
 
 import logging
 import os
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
-from typing import Optional, Union
+
+_PACKAGE = "imputation"
+
+
+def _as_level(level: str | int) -> int:
+    """A level name such as ``"DEBUG"`` or a level number, as a number."""
+    if isinstance(level, str):
+        return getattr(logging, level.upper())
+    return level
+
+
+def _reset_handlers(logger: logging.Logger) -> None:
+    """Remove every handler of `logger` and put back a single NullHandler."""
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        handler.close()
+    logger.addHandler(logging.NullHandler())
 
 
 def setup_logging(
-    level: Union[str, int] = "INFO",
-    log_dir: Optional[str] = None,
+    level: str | int = "INFO",
+    log_dir: str | None = None,
     console: bool = True,
-    file_logging: bool = True,
-    format_string: Optional[str] = None,
-    console_level: Optional[Union[str, int]] = None,
-    file_level: Optional[Union[str, int]] = None,
+    file_logging: bool = False,
+    format_string: str | None = None,
+    console_level: str | int | None = None,
+    file_level: str | int | None = None,
     max_bytes: int = 5 * 1024 * 1024,
     backup_count: int = 5,
 ) -> logging.Logger:
     """
-    Configure logging for the imputation package.
+    Configure the ``imputation`` logger.
 
-    This function sets up a package-specific logger without affecting the
-    root logger or other packages. It's safe to call multiple times.
+    Replaces the handlers of the ``imputation`` logger (not of the root
+    logger) by a console handler and, if asked, a rotating log file. Safe to
+    call several times. Records still propagate to the root logger, so an
+    application that also configures the root logger sees them there too.
 
     Parameters
     ----------
-    level : str or int, default="INFO"
-        Base logging level for the package ('DEBUG', 'INFO', 'WARNING', 'ERROR')
-        or logging level constant (e.g., logging.DEBUG)
+    level : str or int, default "INFO"
+        Level of the ``imputation`` logger: a name ("DEBUG", "INFO",
+        "WARNING", "ERROR") or a ``logging`` constant.
     log_dir : str, optional
-        Directory for log files. If None, uses './logs'
-    console : bool, default=True
-        Whether to enable console logging
-    file_logging : bool, default=True
-        Whether to enable file logging
+        Directory of the log file when `file_logging` is True; ``"logs"``
+        (relative to the working directory) if None.
+    console : bool, default True
+        Whether to log to the console (standard error).
+    file_logging : bool, default False
+        Whether to also write a rotating log file
+        ``<log_dir>/mice_<date>.log``. No file is written unless this is True.
     format_string : str, optional
-        Custom format string for log messages. If None, uses default format
+        Format of the messages of both handlers. If None, the console shows
+        ``"<level> - <message>"`` and the file adds the time and logger name.
     console_level : str or int, optional
-        Logging level for console handler. If None, uses 'INFO'
+        Level of the console handler; INFO if None.
     file_level : str or int, optional
-        Logging level for file handler. If None, uses 'DEBUG'
-    max_bytes : int, default=5MB
-        Maximum size of log file before rotation
-    backup_count : int, default=5
-        Number of backup log files to keep
+        Level of the file handler; DEBUG if None.
+    max_bytes : int, default 5 MB
+        Size at which the log file is rotated.
+    backup_count : int, default 5
+        Number of rotated log files to keep.
 
     Returns
     -------
     logging.Logger
-        The configured package logger
+        The ``imputation`` logger.
 
     Examples
     --------
-    Basic usage:
     >>> import imputation
-    >>> logger = imputation.setup_logging()
-
-    Custom configuration:
-    >>> logger = imputation.setup_logging(
-    ...     level='DEBUG',
-    ...     log_dir='my_logs',
-    ...     console_level='WARNING'
-    ... )
-
-    Disable file logging:
-    >>> logger = imputation.setup_logging(file_logging=False)
+    >>> logger = imputation.setup_logging()  # doctest: +SKIP
+    >>> logger = imputation.setup_logging(level="DEBUG", console_level="WARNING",
+    ...                                   file_logging=True, log_dir="my_logs")  # doctest: +SKIP
     """
-    # Convert string levels to logging constants
-    if isinstance(level, str):
-        level = getattr(logging, level.upper())
-    if isinstance(console_level, str):
-        console_level = getattr(logging, console_level.upper())
-    if isinstance(file_level, str):
-        file_level = getattr(logging, file_level.upper())
+    logger = logging.getLogger(_PACKAGE)
+    logger.setLevel(_as_level(level))
+    _reset_handlers(logger)
 
-    # Set defaults for handler levels
-    if console_level is None:
-        console_level = logging.INFO
-    if file_level is None:
-        file_level = logging.DEBUG
-
-    # Get the package logger (not root logger!)
-    logger = logging.getLogger("imputation")
-    logger.setLevel(level)
-
-    # Clear existing handlers to avoid duplicates
-    logger.handlers.clear()
-    logger.propagate = False  # Don't propagate to root logger to avoid interference
-
-    # Set up formatters
     if format_string is None:
         file_format_string = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         console_format_string = "%(levelname)s - %(message)s"
@@ -103,32 +100,20 @@ def setup_logging(
         file_format_string = format_string
         console_format_string = format_string
 
-    file_formatter = logging.Formatter(file_format_string)
-    console_formatter = logging.Formatter(console_format_string)
-
-    # Add console handler
     if console:
         console_handler = logging.StreamHandler()
-        console_handler.setLevel(console_level)
-        console_handler.setFormatter(console_formatter)
+        console_handler.setLevel(_as_level(console_level) if console_level is not None else logging.INFO)
+        console_handler.setFormatter(logging.Formatter(console_format_string))
         logger.addHandler(console_handler)
 
-    # Add file handler
     if file_logging:
         if log_dir is None:
             log_dir = "logs"
-
-        # Create log directory if it doesn't exist
         os.makedirs(log_dir, exist_ok=True)
-
-        # Generate log filename with current date
-        log_filename = f"mice_{datetime.now().strftime('%Y-%m-%d')}.log"
-        log_file_path = os.path.join(log_dir, log_filename)
-
-        # Create rotating file handler
+        log_file_path = os.path.join(log_dir, f"mice_{datetime.now().strftime('%Y-%m-%d')}.log")
         file_handler = RotatingFileHandler(log_file_path, maxBytes=max_bytes, backupCount=backup_count)
-        file_handler.setLevel(file_level)
-        file_handler.setFormatter(file_formatter)
+        file_handler.setLevel(_as_level(file_level) if file_level is not None else logging.DEBUG)
+        file_handler.setFormatter(logging.Formatter(file_format_string))
         logger.addHandler(file_handler)
 
     return logger
@@ -136,70 +121,53 @@ def setup_logging(
 
 def get_logger(name: str) -> logging.Logger:
     """
-    Get a logger for a specific module within the imputation package.
-
-    This function returns a child logger of the main package logger,
-    ensuring proper hierarchy and inheritance of configuration.
+    Return a logger below the ``imputation`` logger.
 
     Parameters
     ----------
     name : str
-        Module name, typically __name__ or a descriptive string
+        A logger name. Names that do not start with ``"imputation"`` are put
+        below it: ``"__main__"`` becomes ``"imputation.main"`` and any other
+        name ``"imputation.<name>"``.
 
     Returns
     -------
     logging.Logger
-        A logger instance for the specified module
+        The logger, which inherits the configuration of the ``imputation``
+        logger.
 
     Examples
     --------
-    In a module file:
     >>> from imputation.logging_config import get_logger
-    >>> logger = get_logger(__name__)
-    >>> logger.info("This is a log message")
-
-    For simulation scripts:
-    >>> logger = get_logger('imputation.simulation.fdgs')
+    >>> get_logger("my_script").name
+    'imputation.my_script'
     """
-    # Ensure the name is under the imputation package
-    if not name.startswith("imputation"):
-        if name == "__main__":
-            name = "imputation.main"
-        elif "." in name and name.split(".")[-1] in ["simulate_fdgs", "simulate_mcar", "simulate_next_data"]:
-            # Handle simulation scripts
-            script_name = name.split(".")[-1]
-            name = f"imputation.simulation.{script_name}"
-        else:
-            name = f"imputation.{name}"
-
+    if not name.startswith(_PACKAGE):
+        name = f"{_PACKAGE}.main" if name == "__main__" else f"{_PACKAGE}.{name}"
     return logging.getLogger(name)
 
 
-def disable_logging():
+def disable_logging() -> None:
     """
-    Disable logging for the imputation package.
+    Silence the ``imputation`` logger.
 
-    This is useful for testing or when logging output is not desired.
+    Removes its handlers (a NullHandler remains) and sets its level above
+    CRITICAL, so that the package emits no log records at all, also not to
+    handlers of the root logger. :func:`reset_logging` undoes this.
     """
-    logger = logging.getLogger("imputation")
-    logger.handlers.clear()
-    logger.addHandler(logging.NullHandler())
-    logger.propagate = False
+    logger = logging.getLogger(_PACKAGE)
+    _reset_handlers(logger)
+    logger.setLevel(logging.CRITICAL + 1)
 
 
-def reset_logging():
+def reset_logging() -> None:
     """
-    Reset logging configuration to default state.
+    Restore the state the ``imputation`` logger has after import.
 
-    This removes all handlers and sets the logger back to default
-    configuration with only a NullHandler.
+    A single NullHandler, no level of its own (``NOTSET``, so the level of
+    the root logger applies) and propagation to the root logger.
     """
-    logger = logging.getLogger("imputation")
-    logger.handlers.clear()
-    logger.addHandler(logging.NullHandler())
-    logger.setLevel(logging.WARNING)
-    logger.propagate = False  # Silent by default
-
-
-# Module-level logger for this configuration module
-_config_logger = logging.getLogger("imputation.config")
+    logger = logging.getLogger(_PACKAGE)
+    _reset_handlers(logger)
+    logger.setLevel(logging.NOTSET)
+    logger.propagate = True

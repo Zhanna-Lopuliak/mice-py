@@ -1,12 +1,13 @@
+import logging
+from typing import Optional, Union
+
 import numpy as np
 import pandas as pd
-from sklearn.tree import DecisionTreeRegressor, DecisionTreeClassifier
-from typing import Union, Optional
-import logging
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from .design import obtain_design
 
-logger = logging.getLogger("imputation.cart")
+logger = logging.getLogger(__name__)
 
 
 def _design_matrix(x) -> np.ndarray:

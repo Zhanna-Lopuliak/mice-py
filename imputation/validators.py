@@ -1,22 +1,23 @@
 import logging
 import numbers
-import pandas as pd
-import warnings
-from typing import Dict, Union, List
-from .constants import (
-    ImputationMethod,
-    SUPPORTED_METHODS,
-    DEFAULT_METHOD,
-    InitialMethod,
-    SUPPORTED_INITIAL_METHODS,
-    DEFAULT_INITIAL_METHOD,
-    VisitSequence,
-    SUPPORTED_VISIT_SEQUENCES,
-)
-import numpy as np
 import re
+import warnings
+from typing import Dict, List, Union
 
-logger = logging.getLogger("imputation.validators")
+import numpy as np
+import pandas as pd
+
+from .constants import (
+    DEFAULT_METHOD,
+    SUPPORTED_INITIAL_METHODS,
+    SUPPORTED_METHODS,
+    SUPPORTED_VISIT_SEQUENCES,
+    ImputationMethod,
+    InitialMethod,
+    VisitSequence,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _is_integer(value) -> bool:
@@ -202,7 +203,8 @@ def check_visit_sequence(
     if isinstance(visit_sequence, str):
         if not VisitSequence.is_valid_sequence(visit_sequence):
             raise ValueError(
-                f"Unsupported visit sequence: {visit_sequence}. Supported visit sequences are: {SUPPORTED_VISIT_SEQUENCES}"
+                f"Unsupported visit sequence: {visit_sequence}. "
+                f"Supported visit sequences are: {SUPPORTED_VISIT_SEQUENCES}"
             )
         return None, []
 
@@ -293,7 +295,8 @@ def validate_predictor_matrix(
     incomplete_predictors = [var for var in predictor_only_vars if data[var].isna().any()]
     if incomplete_predictors:
         raise ValueError(
-            f"Predictor variables with missing data are not being imputed: {incomplete_predictors}. All predictors must be complete or included as targets."
+            f"Predictor variables with missing data are not being imputed: {incomplete_predictors}. "
+            "All predictors must be complete or included as targets."
         )
 
     # Every incomplete column needs a row: it says which predictors impute it
@@ -402,7 +405,7 @@ def validate_dataframe(data) -> pd.DataFrame:
         if not isinstance(data, pd.DataFrame):
             data = pd.DataFrame(data)
     except Exception as e:
-        raise ValueError(f"Input data cannot be converted to DataFrame: {str(e)}")
+        raise ValueError(f"Input data cannot be converted to DataFrame: {str(e)}") from e
 
     # Check for duplicate column names
     duplicate_cols = data.columns[data.columns.duplicated()].tolist()

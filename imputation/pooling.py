@@ -6,15 +6,16 @@ from multiple imputed datasets using Rubin's rules, without requiring coupling
 to any specific imputation framework.
 """
 
+import logging
 import warnings
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
-import logging
-from typing import List, Dict, Optional, Union, Tuple
-from dataclasses import dataclass
 from scipy import stats
 
-logger = logging.getLogger("imputation.pooling")
+logger = logging.getLogger(__name__)
 
 # Columns of the table returned by `pool_estimates`, in this order. They are
 # those of R's `summary(pool(fit), type = "all", conf.int = TRUE)` with
@@ -397,7 +398,7 @@ def validate_imputed_datasets(datasets: List[pd.DataFrame]) -> None:
 
     # Check for missing values (should not exist in imputed datasets)
     for i, df in enumerate(datasets):
-        if df.isnull().any().any():
+        if df.isna().any().any():
             logger.warning(f"Dataset {i} contains missing values. Pooling assumes complete datasets.")
 
 
