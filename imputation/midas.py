@@ -109,6 +109,7 @@ def midas(
 
     ridge : float, default=1e-5
         Ridge penalty used in regularized regression to stabilize the solution in the presence of multicollinearity.
+
         - Set lower (e.g. 1e-6) to reduce bias in noisy data.
         - Set higher (e.g. 1e-4) if collinearity is suspected.
 
@@ -142,6 +143,7 @@ def midas(
 
     Notes
     -----
+
     - Based on: Gaffert, P., Meinfelder, F., & van den Bosch, V. (2018).
       "Towards an MI-proper Predictive Mean Matching."
     - Related: Siddique, J. & Belin, T. R. (2008). "Multiple Imputation Using an

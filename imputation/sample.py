@@ -40,6 +40,7 @@ def sample(
     Notes
     -----
     This is the simplest imputation method that:
+
     1. Takes all observed values in the target variable
     2. Randomly samples from them to fill in missing values
     3. No modeling is involved, just random sampling with replacement
@@ -48,6 +49,7 @@ def sample(
     values of the target variable for imputation.
 
     Edge cases handled (matching R implementation):
+
     - If no observed values: returns random normal values for numeric data,
       None values for categorical data
     - If only one observed value: duplicates it to allow sampling

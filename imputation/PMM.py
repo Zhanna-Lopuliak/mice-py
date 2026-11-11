@@ -56,6 +56,7 @@ def pmm(
 
     matchtype : int, default=1
         Type of matching:
+
         - 0: Predicted value of y_obs vs predicted value of y_mis
         - 1: Predicted value of y_obs vs drawn value of y_mis (default)
         - 2: Drawn value of y_obs vs drawn value of y_mis
@@ -91,6 +92,7 @@ def pmm(
     Notes
     -----
     Based on:
+
     - Rubin, D. B. (1987). *Multiple Imputation for Nonresponse in Surveys*.
     - Van Buuren, S. & Groothuis-Oudshoorn, K. (2011). `mice` R package.
 

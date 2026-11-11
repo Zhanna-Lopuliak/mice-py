@@ -82,6 +82,7 @@ def norm_draw(
     -------
     dict
         Dictionary containing:
+
         - 'coef': Least squares coefficient estimates (numpy array).
         - 'beta': Bayesian drawn regression coefficients (numpy array).
         - 'sigma': Drawn residual standard deviation (float).
@@ -147,6 +148,7 @@ def estimice(x: ArrayLike, y: ArrayLike, ls_meth: str = "qr", ridge: float = 1e-
         Numeric vector of responses to be imputed, with possible missing values.
     ls_meth : str, optional
         Least squares method to use. Options are:
+
         - "qr": QR decomposition (default)
         - "ridge": Ridge regression
         - "svd": Singular Value Decomposition
@@ -158,6 +160,7 @@ def estimice(x: ArrayLike, y: ArrayLike, ls_meth: str = "qr", ridge: float = 1e-
     -------
     dict
         Dictionary containing:
+
         - 'c': Least squares coefficient estimates (numpy array).
         - 'r': Residuals (numpy array). For "svd" these are fitted minus
           observed values, as in R.

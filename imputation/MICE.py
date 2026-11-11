@@ -1103,10 +1103,11 @@ class MICE:
 
         Parameters
         ----------
-        visit_sequence : Union[str, List[str]]
+        visit_sequence : str or list of str
             Visit sequence specification. Can be:
+
             - str: "roman", "arabic", "monotone", "revmonotone" or "random"
-            - List[str]: list of column names specifying the order to visit variables
+            - list of str: column names specifying the order to visit variables
                         Must include all columns that are imputed. Columns that are not
                         imputed (complete, or with method "") are dropped from it.
         rng : np.random.Generator, optional

@@ -188,6 +188,7 @@ def check_visit_sequence(
     -------
     tuple
         (validated_sequence, columns_without_missing) where:
+
         - validated_sequence: the processed visit sequence (only for list input, None for string)
         - columns_without_missing: list of columns in sequence that don't have missing values
 
@@ -202,6 +203,7 @@ def check_visit_sequence(
     MICE._set_visit_sequence() based on the data.
 
     For list visit sequences, this function validates that:
+
     1. All columns exist in the data
     2. No duplicate columns
     3. All columns with missing values are included (if columns_with_missing provided)
@@ -359,6 +361,7 @@ def validate_columns(data: pd.DataFrame) -> pd.DataFrame:
     Notes
     -----
     Missing data values that are treated as NaN:
+
     - pandas NaN (numpy.nan), None and pd.NA
     """
     unsupported = [(col, data[col].dtype) for col in data.columns if not _is_supported_dtype(data[col].dtype)]
@@ -405,6 +408,7 @@ def validate_dataframe(data: Any) -> pd.DataFrame:
     Notes
     -----
     Missing data values that are treated as NaN:
+
     - pandas NaN (numpy.nan), None and pd.NA
     """
     # Try to convert to DataFrame if it's not already one
