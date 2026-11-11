@@ -8,3 +8,5 @@ __pycache__/
 .uv/
 build/
 docs/build/
+.hypothesis/
+simulations/work/

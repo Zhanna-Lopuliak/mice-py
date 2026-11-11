@@ -28,7 +28,8 @@ dependencies = [
 test = [
     "pytest>=6.0",
     "pytest-cov>=2.10",
-    "pytest-timeout>=1.4"
+    "pytest-timeout>=1.4",
+    "hypothesis>=6.0"
 ]
 
 docs = [
@@ -43,7 +44,8 @@ dev = [
     "mypy",
     "pytest>=6.0",
     "pytest-cov>=2.10",
-    "pytest-timeout>=1.4"
+    "pytest-timeout>=1.4",
+    "hypothesis>=6.0"
 ]
 
 [build-system]
@@ -74,6 +76,7 @@ markers = [
     "integration: Integration tests for workflows",
     "plotting: Tests for plotting functionality",
     "slow: Tests that take longer to run",
+    "parity: Comparisons against reference output from R mice",
 ]
 
 timeout = 300
