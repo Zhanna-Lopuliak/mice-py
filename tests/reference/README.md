@@ -11,7 +11,8 @@ fixtures are committed, so the Python tests run without R.
 |---|---|
 | R | 4.6.2 |
 | mice | 3.19.0 (asserted by `r/_common.R`; the scripts stop on any other version) |
-| nnet | 7.3-21 (recorded in `l1_polyreg.json`) |
+| nnet | 7.3-21 (recorded in `l1_polyreg.json` and `l1_polr.json`) |
+| MASS | 7.3-66 (recorded in `l1_polr.json`) |
 | jsonlite | as installed with R 4.6.2 |
 | Random numbers | `RNGkind("Mersenne-Twister", "Inversion", "Rejection")`, R's default, set in `r/_common.R` |
 
@@ -94,6 +95,7 @@ Written by `write_fixture(name, payload)` in `r/_common.R` and read by
 | `l1_logreg` | `mice.impute.logreg()`, `.logreg.boot()` with every draw captured by re-seeding (`rnorm`, `sample` as 0-based indices, `runif`), rebuilt from `augment()`, `glm.fit()` and `summary.glm()`: coefficients, `cov.unscaled`, iterations, convergence, `beta.star`, probabilities, labels; R's errors where the port goes on | `imputation.logreg._logreg` / `_logreg_boot` (the steps of `logreg` / `logreg_boot`), driven by a strict `ScriptedGenerator` |
 | `l1_vmmin` | `optim(par, fn, gr, method = "BFGS")` (R's C function `vmmin`, which `nnet` and `MASS::polr` call too) on a quadratic, Rosenbrock's function, a logistic likelihood, a function that is NaN outside its domain and one started at its minimum, with other `maxit`, `abstol` and `reltol`: parameters, value, function and gradient counts, convergence | `imputation.fitting.vmmin` |
 | `l1_polyreg` | `mice.impute.polyreg()` with its uniform numbers captured by re-seeding, rebuilt from `augment()`, `nnet::multinom()` and `predict()`: objective, convergence, coefficients, probabilities of every imputed cell, labels; R's errors where the port goes on or stops; direct `nnet::multinom()` fits (two classes on separated data, case weights) | `imputation.polyreg._polyreg` (the steps of `polyreg`), driven by a strict `ScriptedGenerator`; `imputation.fitting.multinom_fit` |
+| `l1_polr` | `mice.impute.polr()` with its uniform numbers captured by re-seeding, rebuilt from `augment()`, `MASS::polr()` or `nnet::multinom()` and the cumulative rule: the class of the fit R made and polr's error (the reason for the fallback), coefficients, cut points, deviance (objective), convergence, probabilities of every imputed cell, labels; R's errors or other results where the port goes on or stops; direct `MASS::polr()` fits (case weights, 3 and 5 levels, no predictor, an aliased column) and the conditions under which it stops | `imputation.polr._polr` (the steps of `polr`), driven by a strict `ScriptedGenerator`; `imputation.fitting.polr_fit` |
 
 Behaviours of R mice 3.19.0 that the fixtures pin down and that are easy to
 get wrong:
@@ -136,6 +138,19 @@ get wrong:
   categories with one missing value, on an ordered factor with an unused
   level, and on a level held only by unobserved cells where it does not
   augment; those cases store R's error and the port's result.
+- `MASS::polr` counts every declared level of an ordered factor and gives
+  one without rows a small positive probability (`polr_unused_middle`,
+  `polr_unused_end`). It stops on a target that is not a factor (numeric,
+  logical, and character: mice's `augment()` leaves text as text), on fewer
+  than 3 levels, when the logistic regression behind its start values does
+  not converge, and when its objective is not finite at the start values;
+  `mice.impute.polr` then fits `nnet::multinom` (the `polr_error` of a
+  case). Without predictors both fits fail and mice stops; those cases
+  store the port's result, the model without predictors
+  (`polr_no_predictor`) or its fallback on the intercept
+  (`polr_no_predictor_two_levels`). `mice.impute.polr` draws its uniform numbers after
+  the fit, so where the fallback stops (`polr_too_many_weights`) R has drawn
+  nothing.
 - The function counts of `vmmin` can depend on the last bits of the values
   where a search ends with a restart along the previous gradient; R's C code
   (fused multiply-adds) and NumPy then differ by a few evaluations. The
@@ -146,7 +161,7 @@ get wrong:
 Each `l2_<method>` fixture comes from `l2_method_fixture()` in
 `r/_l2_common.R`: one `set.seed` per input, then many calls of
 `mice.impute.<method>(y, ry, x)` on fixed inputs with 40 observed and 20
-missing values (F1 to F6, defined in that file and stored in the fixture).
+missing values (F1 to F7, defined in that file and stored in the fixture).
 Per input it holds the input, the seed, `n_calls` and statistics whose form
 depends on the kind of the method (`kind` at the top of the fixture; a
 fixture without it is of the donor kind):
@@ -193,6 +208,18 @@ observed rows:
   diverges (not converged or a coefficient above 10). Only `logreg`, which
   augments the data, is run on it.
 
+F7 has an ordered factor target with the levels `a < b < c < d` (the input
+carries `"ordered": true`, which only an ordered target has, and the tests
+rebuild it as an ordered `pd.Categorical`) and two independent standard
+normal predictors `x1`, `x2`. It is drawn from a multinomial model that is
+not a proportional-odds model: `x1` moves the outer levels `a` and `d`
+against the inner ones, `x2` the upper levels against the lower ones. The
+script asserts that each level is observed at least 6 times and that the
+proportional-odds fit of `mice.impute.polr` and the multinomial fit of
+`mice.impute.polyreg` (both on mice's augmented data) predict probabilities
+for the missing rows that differ by at least 0.15 (they differ by up to
+0.50).
+
 | Fixture | Kind | Inputs | R calls per input |
 |---|---|---|---|
 | `l2_pmm` | donor | F1 to F4 | 20,000 |
@@ -206,6 +233,7 @@ observed rows:
 | `l2_logreg` | category | F5, F6 | 20,000 |
 | `l2_logreg_boot` | category | F5 | 20,000 |
 | `l2_polyreg` | category | F3 | 20,000 |
+| `l2_polr` | category | F7 | 20,000 |
 
 `l2_chain` (200 full `mice()` chains with pmm) and `l3_mini_s4` (scenario S4
 of the simulation study with pmm, midastouch and norm, 20,000 replications)

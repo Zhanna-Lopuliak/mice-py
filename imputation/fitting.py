@@ -10,7 +10,12 @@ it can match R's to many digits when they are given R's random numbers:
 - :func:`vmmin`: the variable-metric (BFGS) minimiser of R's
   ``optim(method = "BFGS")``, which ``nnet`` calls too;
 - :func:`multinom_fit`: a multinomial logistic regression as
-  ``nnet::multinom`` fits it with :func:`vmmin` (``polyreg``).
+  ``nnet::multinom`` fits it with :func:`vmmin` (``polyreg``, and ``polr``
+  where ``MASS::polr`` stops);
+- :func:`polr_fit`: a proportional-odds logistic regression as
+  ``MASS::polr`` fits it, with start values from :func:`logit_fit` and the
+  minimiser :func:`vmmin` (``polr``). Where R's ``polr`` stops,
+  :class:`PolrError` names R's condition.
 """
 
 from __future__ import annotations
@@ -44,6 +49,11 @@ _REL_TEST = 10.0
 _SIGMOID_CUT = 15.0
 _NNET_EPS = 1e-80
 _NNET_ZERO_PROB_COST = 1000.0
+
+# MASS::polr's objective clamps the distances between the cut points and the
+# linear predictor at +-100 before the logistic distribution function (the
+# pmin and pmax in polr.fit)
+_POLR_CLAMP = 100.0
 
 
 class LogitFit(NamedTuple):
@@ -670,6 +680,306 @@ def _logistic_objective(
         return ((_nnet_sigmoid(x @ beta) - second) * w) @ x
 
     return fn, gr
+
+
+class PolrError(ValueError):
+    """``MASS::polr`` stops on these data, with the condition `condition`.
+
+    R's mice catches every error of ``polr`` and fits ``nnet::multinom``
+    instead; :func:`imputation.polr.polr` does the same on this exception.
+    The class attributes hold R's messages, one per condition:
+
+    - ``NOT_A_FACTOR``: the target is not a factor (a numeric or logical
+      target in R); :func:`polr_fit` cannot tell, it sees codes, so the
+      imputer raises this one itself;
+    - ``FEW_LEVELS``: the target has fewer than 3 levels;
+    - ``START_NOT_CONVERGED``: the logistic regression that gives the start
+      values did not converge;
+    - ``START_NOT_FINITE``: the objective is not finite at the start values.
+
+    Attributes
+    ----------
+    condition : str
+        One of the four messages above.
+    """
+
+    NOT_A_FACTOR = "response must be a factor"
+    FEW_LEVELS = "response must have 3 or more levels"
+    START_NOT_CONVERGED = "attempt to find suitable starting values failed"
+    START_NOT_FINITE = "initial value in 'vmmin' is not finite"
+
+    def __init__(self, condition: str, detail: str = "") -> None:
+        self.condition = condition
+        super().__init__(f"polr: {detail}{'; ' if detail else ''}R: '{condition}'")
+
+
+class PolrFit(NamedTuple):
+    """The result of :func:`polr_fit`.
+
+    Attributes
+    ----------
+    coef : np.ndarray of shape (n_features,)
+        The coefficients of the predictors, R's ``coef(fit)``; 0 for the
+        columns R drops because they are aliased in the start fit.
+    zeta : np.ndarray of shape (n_levels - 1,)
+        The cut points, increasing, R's ``fit$zeta``.
+    deviance : float
+        Twice the minimised objective, R's ``fit$deviance``.
+    converged : bool
+        False if the minimiser stopped at the iteration limit, R's
+        ``fit$convergence == 0``.
+    fn_count : int
+        Evaluations of the objective, R's ``fit$niter["f.evals"]``.
+    gr_count : int
+        Evaluations of its gradient, R's ``fit$niter["g.evals"]``; the
+        number of iterations.
+    aliased : np.ndarray of bool of shape (n_features,)
+        True for the columns that are aliased in the start fit and left out.
+    """
+
+    coef: np.ndarray
+    zeta: np.ndarray
+    deviance: float
+    converged: bool
+    fn_count: int
+    gr_count: int
+    aliased: np.ndarray
+
+    def predict(self, x: ArrayLike) -> np.ndarray:
+        """Probabilities of the levels for the rows of `x`, as R's ``predict(fit, newdata, type = "probs")``.
+
+        Parameters
+        ----------
+        x : array-like of shape (n_rows, n_features)
+            Predictors without the intercept, as passed to :func:`polr_fit`.
+
+        Returns
+        -------
+        np.ndarray of shape (n_rows, n_levels)
+            The differences of ``0, plogis(zeta - eta), 1`` with
+            ``eta = x @ coef``: every level gets a probability, also a level
+            without rows.
+        """
+        x = np.asarray(x, dtype=float)
+        if x.ndim == 1:
+            x = x.reshape(-1, 1)
+        eta = x @ self.coef
+        cumulative = _plogis(self.zeta[None, :] - eta[:, None])
+        n_rows = cumulative.shape[0]
+        return np.diff(np.c_[np.zeros(n_rows), cumulative, np.ones(n_rows)], axis=1)
+
+
+def polr_fit(
+    x: ArrayLike,
+    y: ArrayLike,
+    weights: ArrayLike | None = None,
+    n_levels: int | None = None,
+    maxit: int = 100,
+) -> PolrFit:
+    """
+    Proportional-odds logistic regression as ``MASS::polr`` fits it.
+
+    Reproduces ``MASS::polr(y ~ x, weights = weights)`` (method
+    ``"logistic"``) as R's mice calls it, with `x` the predictors without
+    the intercept. The model is ``P(y <= k) = plogis(zeta_k - x @ coef)``
+    for the levels ``k = 0, ..., n_levels - 2``. The steps are R's:
+
+    1. Start values: the logistic regression (:func:`logit_fit`, R's
+       ``glm.fit``) of ``y >= n_levels // 2`` on ``[1, x]`` with the
+       weights; R stops if it did not converge. Columns aliased in it are
+       dropped (R warns). With its coefficients ``c`` and
+       ``s = logit((1, ..., q) / (q + 1))`` for ``q = n_levels - 1`` cut
+       points, the start cut points are ``-c_0 + s - s_m``, ``m`` the
+       middle one, and the start coefficients ``c_1, c_2, ...``.
+    2. The cut points are parametrised as ``zeta_1 = theta_1`` and
+       ``zeta_k = zeta_{k-1} + exp(theta_k)``, which keeps them increasing.
+    3. The objective is ``-sum_i w_i log(p_i)``, with ``p_i`` the
+       probability of the level of row ``i``, computed as
+       ``plogis(min(100, zeta_upper - eta)) - plogis(max(-100, zeta_lower - eta))``
+       (infinite cut points beyond the outer levels); it is infinite when
+       any ``p_i`` is not positive. It is minimised from the start values
+       by :func:`vmmin` with R's ``optim(method = "BFGS")`` defaults
+       (``reltol = sqrt(machine epsilon)``, ``abstol = -inf``), at most
+       `maxit` iterations. Reaching `maxit` is not an error (R's
+       ``convergence = 1``).
+
+    Parameters
+    ----------
+    x : array-like of shape (n_samples, n_features)
+        Predictors without the intercept (``polr`` has cut points instead),
+        possibly zero columns for the model without predictors.
+    y : array-like of int of shape (n_samples,)
+        The level of each row, from ``0, ..., n_levels - 1``.
+    weights : array-like of shape (n_samples,), optional
+        Case weights, non-negative; all 1 if None.
+    n_levels : int, optional
+        The number of levels; ``max(y) + 1`` if None. Levels without rows
+        count, as R counts every declared level of a factor.
+    maxit : int, default=100
+        Maximal number of iterations of :func:`vmmin` (R's ``optim``
+        default).
+
+    Returns
+    -------
+    PolrFit
+        The coefficients (0 for dropped columns), the cut points, the
+        deviance, whether the minimiser stopped before `maxit`, the
+        evaluation counts, the dropped columns, and
+        :meth:`PolrFit.predict` for the probabilities of new rows.
+
+    Raises
+    ------
+    PolrError
+        Where R's ``polr`` stops: fewer than 3 levels, a start fit that did
+        not converge, an objective that is not finite at the start values.
+    ValueError
+        If the shapes do not match, `x` has missing values, a weight is
+        negative, or a level is outside ``0, ..., n_levels - 1``.
+
+    Notes
+    -----
+    Where R drops aliased columns of the start fit, its ``predict`` then
+    fails (non-conformable arguments, so mice stops); here those columns get
+    the coefficient 0 and do not enter the fit.
+
+    Examples
+    --------
+    >>> x = np.array([-1.5, -1.0, -0.4, 0.1, 0.3, 0.8, 1.2, 1.9, -0.2, 0.6])
+    >>> fit = polr_fit(x, [0, 0, 1, 0, 2, 1, 2, 2, 1, 1])
+    >>> fit.converged, fit.zeta.shape
+    (True, (2,))
+    >>> fit.predict(x[:2]).sum(axis=1)
+    array([1., 1.])
+    """
+    x = np.asarray(x, dtype=float)
+    if x.ndim == 1:
+        x = x.reshape(-1, 1)
+    codes = np.asarray(y).ravel()
+    n_rows = x.shape[0]
+    w = np.ones(n_rows) if weights is None else np.asarray(weights, dtype=float).ravel()
+    if codes.shape[0] != n_rows or w.shape[0] != n_rows:
+        raise ValueError(f"polr_fit: x has {n_rows} rows, y {codes.shape[0]} and the weights {w.shape[0]} entries.")
+    if np.isnan(x).any():
+        raise ValueError("polr_fit: missing values in 'x'.")
+    if np.any(w < 0) or np.isnan(w).any():
+        raise ValueError("polr_fit: the weights must be non-negative.")
+    if n_levels is None:
+        n_levels = int(codes.max()) + 1 if codes.size else 0
+    if codes.size and (codes.min() < 0 or codes.max() >= n_levels or np.any(codes != np.round(codes))):
+        raise ValueError(f"polr_fit: the levels in y must be integers from 0 to {n_levels - 1}.")
+    codes = codes.astype(np.intp)
+    if n_levels < 3:
+        raise PolrError(PolrError.FEW_LEVELS, f"the target has {n_levels} levels")
+
+    start, kept = _polr_start(x, codes, w, n_levels)
+    fn, gr = _polr_objective(x[:, kept], codes, w, n_levels)
+    if not np.isfinite(fn(start)):
+        raise PolrError(PolrError.START_NOT_FINITE, "the objective is not finite at the start values")
+    res = vmmin(fn, gr, start, maxit=maxit)
+    n_kept = int(kept.sum())
+    coef = np.zeros(x.shape[1])
+    coef[kept] = res.par[:n_kept]
+    return PolrFit(
+        coef=coef,
+        zeta=_cut_points(res.par[n_kept:]),
+        deviance=2 * res.value,
+        converged=res.converged,
+        fn_count=res.fn_count,
+        gr_count=res.gr_count,
+        aliased=~kept,
+    )
+
+
+def _polr_start(x: np.ndarray, codes: np.ndarray, w: np.ndarray, n_levels: int) -> tuple[np.ndarray, np.ndarray]:
+    """``MASS::polr``'s start values in the parametrisation of its optimiser, and the columns it keeps.
+
+    The logistic regression of ``code >= n_levels // 2`` on ``[1, x]``
+    (R's ``y > q1`` for 1-based levels) gives the coefficients and, through
+    its intercept, the location of the cut points, which are spread as the
+    logits of ``1 / (q + 1), ..., q / (q + 1)``. Returns
+    ``(coef, theta_1, log(diff(zeta)))`` and the columns that are not
+    aliased in that regression.
+
+    Raises :class:`PolrError` if the regression did not converge.
+    """
+    q = n_levels - 1
+    middle = n_levels // 2
+    fit = logit_fit(np.c_[np.ones(len(codes)), x], (codes >= middle).astype(float), weights=w)
+    if not fit.converged:
+        raise PolrError(
+            PolrError.START_NOT_CONVERGED,
+            f"the logistic regression of the top {n_levels - middle} of {n_levels} levels against the others "
+            f"(for the start values) did not converge in {fit.iterations} iterations",
+        )
+    coef = fit.coef[~fit.aliased]
+    spacing = _logit(np.arange(1, q + 1) / (q + 1))
+    zeta = -coef[0] + spacing - spacing[middle - 1]
+    return np.r_[coef[1:], zeta[0], np.log(np.diff(zeta))], ~fit.aliased[1:]
+
+
+def _polr_objective(
+    x: np.ndarray, codes: np.ndarray, w: np.ndarray, n_levels: int
+) -> tuple[Callable[[np.ndarray], float], Callable[[np.ndarray], np.ndarray]]:
+    """``MASS::polr``'s objective and gradient (``fmin`` and ``gmin`` of ``polr.fit``, logistic method).
+
+    The parameters are the coefficients of the columns of `x`, then
+    ``theta`` (see :func:`_cut_points`). The gradient with respect to
+    ``theta`` is that with respect to the cut points times the Jacobian of
+    the parametrisation, as R computes it.
+    """
+    n_coef = x.shape[1]
+    q = n_levels - 1
+    # R's .polrY1 and .polrY2: the cut point above and below each row's level
+    above = (codes[:, None] == np.arange(q)).astype(float)
+    below = (codes[:, None] == np.arange(1, q + 1)).astype(float)
+
+    def parts(par: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        theta = par[n_coef:]
+        cuts = np.r_[-np.inf, _cut_points(theta), np.inf]
+        eta = x @ par[:n_coef]
+        upper = np.minimum(_POLR_CLAMP, cuts[codes + 1] - eta)
+        lower = np.maximum(-_POLR_CLAMP, cuts[codes] - eta)
+        return theta, upper, lower, _plogis(upper) - _plogis(lower)
+
+    def fn(par: np.ndarray) -> float:
+        prob = parts(par)[3]
+        if not np.all(prob > 0):
+            return np.inf
+        return float(-np.sum(w * np.log(prob)))
+
+    def gr(par: np.ndarray) -> np.ndarray:
+        theta, upper, lower, prob = parts(par)
+        d_upper, d_lower = _dlogis(upper), _dlogis(lower)
+        g_coef = x.T @ (w * (d_upper - d_lower) / prob)
+        g_cuts = -((above * d_upper[:, None] - below * d_lower[:, None]).T @ (w / prob))
+        # d zeta / d theta: column 1 all ones, column k exp(theta_k) from row k on
+        jacobian = np.tril(np.ones((q, q))) * np.r_[1.0, np.exp(theta[1:])]
+        return np.r_[g_coef, g_cuts @ jacobian]
+
+    return fn, gr
+
+
+def _cut_points(theta: np.ndarray) -> np.ndarray:
+    """``MASS::polr``'s cut points ``cumsum(c(theta_1, exp(theta_2), ..., exp(theta_q)))``."""
+    return np.cumsum(np.r_[theta[:1], np.exp(theta[1:])])
+
+
+def _logit(p: np.ndarray) -> np.ndarray:
+    """``log(p / (1 - p))``, as ``MASS::polr`` writes it."""
+    return np.log(p / (1 - p))
+
+
+def _plogis(z: np.ndarray) -> np.ndarray:
+    """R's ``plogis``: ``1 / (1 + exp(-z))``, 0 at ``-inf`` (and where ``exp`` overflows), 1 at ``inf``."""
+    with np.errstate(over="ignore"):
+        return 1 / (1 + np.exp(-z))
+
+
+def _dlogis(z: np.ndarray) -> np.ndarray:
+    """R's ``dlogis``: ``e / (1 + e)^2`` with ``e = exp(-|z|)``."""
+    e = np.exp(-np.abs(z))
+    f = 1.0 + e
+    return e / (f * f)
 
 
 def _least_squares(x: np.ndarray, z: np.ndarray, tol: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

@@ -133,7 +133,7 @@ def test_univariate_imputer_is_reproducible_with_rng(method):
     ry = np.ones(n, dtype=bool)
     ry[::5] = False
     y[~ry] = np.nan
-    if method == "polyreg":  # a three-category target
+    if method in ("polyreg", "polr"):  # a three-category target
         y = np.where(ry, np.digitize(y, [-0.5, 0.5]), None)
     elif method in CATEGORICAL_METHODS:  # a two-category target
         y = np.where(ry, y > 0, None)

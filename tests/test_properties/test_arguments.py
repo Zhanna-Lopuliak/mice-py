@@ -253,6 +253,7 @@ DOTTED_PARAMS = {
     "logreg": [],
     "logreg.boot": [],
     "polyreg": ["maxit", "max_weights"],
+    "polr": ["maxit", "max_weights", "log_fallback"],
 }
 
 
@@ -266,6 +267,8 @@ DOTTED_PARAMS = {
         ("logreg_boot_x", ("logreg.boot", "x")),
         ("norm_boot_donors", ("norm.boot", "donors")),
         ("polyreg_max_weights", ("polyreg", "max_weights")),
+        ("polr_log_fallback", ("polr", "log_fallback")),
+        ("polr_maxit", ("polr", "maxit")),
         ("foo_bar", None),
         ("norm", None),
         # the prefix has underscores where the name has dots

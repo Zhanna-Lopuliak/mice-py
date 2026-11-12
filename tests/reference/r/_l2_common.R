@@ -3,7 +3,7 @@
 # Layer 2 compares the distribution of imputed values, not the values
 # themselves, because R and NumPy use different random number generators.
 # Each l2_<method>.R script calls one exported mice.impute.<method> function
-# many times on fixed inputs (F1 to F6, defined below) and stores sufficient
+# many times on fixed inputs (F1 to F7, defined below) and stores sufficient
 # statistics per missing cell, plus the moments of the OLS coefficients of
 # the completed y. What is stored per cell depends on the kind of the method
 # (see "Kinds of methods" below): donor counts for a method that imputes
@@ -169,10 +169,46 @@ make_f6 <- function() {
   inp
 }
 
+# F7: ordered target with the levels a < b < c < d, two numeric predictors,
+# drawn from a multinomial model that is not a proportional-odds model:
+# x1 moves the outer levels (a, d) against the inner ones (b, c), x2 the
+# upper levels against the lower ones. The proportional-odds fit of
+# mice.impute.polr and the multinomial fit of mice.impute.polyreg (both on
+# mice's augmented data) then predict clearly different probabilities for
+# the missing rows.
+make_f7 <- function() {
+  set.seed(20257)
+  x <- cbind(x1 = rnorm(60), x2 = rnorm(60))
+  eta <- cbind(0, 0.7 - 1.5 * x[, 1], 0.5 - 1.5 * x[, 1] + 0.9 * x[, 2], 0.9 * x[, 2])
+  p <- exp(eta) / rowSums(exp(eta))
+  lev <- c("a", "b", "c", "d")
+  y <- factor(apply(p, 1, function(pr) sample(lev, 1, prob = pr)), levels = lev, ordered = TRUE)
+  ry <- rep(c(TRUE, FALSE), c(40, 20))
+  inp <- finish_input("F7", y, ry, x, paste(
+    "40 observed, 20 missing; ordered target with levels a < b < c < d from",
+    "a multinomial model (x1 moves a and d against b and c, x2 c and d",
+    "against a and b); two numeric predictors"
+  ))
+  aug <- mice:::augment(inp$y, inp$ry, inp$x, !inp$ry)
+  xy <- cbind.data.frame(y = aug$y, x = aug$x)
+  obs <- xy[aug$ry, , drop = FALSE]
+  w <- aug$w[aug$ry]
+  prop_odds <- suppressWarnings(MASS::polr(formula(xy), data = obs, weights = w))
+  multinomial <- nnet::multinom(formula(xy), data = obs, weights = w, trace = FALSE)
+  gap <- max(abs(
+    predict(prop_odds, xy[aug$wy, ], type = "probs") - predict(multinomial, xy[aug$wy, ], type = "probs")
+  ))
+  stopifnot(
+    "each level observed at least 6 times" = all(table(inp$y[inp$ry]) >= 6),
+    "polr and multinom probabilities differ by at least 0.15" = gap >= 0.15
+  )
+  inp
+}
+
 l2_inputs <- function() {
   list(
     F1 = make_f1(), F2 = make_f2(), F3 = make_f3(), F4 = make_f4(),
-    F5 = make_f5(), F6 = make_f6()
+    F5 = make_f5(), F6 = make_f6(), F7 = make_f7()
   )
 }
 
@@ -182,9 +218,11 @@ donor_values <- function(inp) {
   if (is.factor(inp$y)) levels(inp$y) else sort(unique(inp$y[inp$ry]))
 }
 
+# `ordered` is written for an ordered factor only, so that the payloads of
+# the other inputs keep their bytes; its levels are then the order.
 input_payload <- function(inp) {
   is_fac <- is.factor(inp$y)
-  list(
+  payload <- list(
     name = inp$name,
     description = inp$description,
     type = if (is_fac) "factor" else "numeric",
@@ -194,6 +232,8 @@ input_payload <- function(inp) {
     x_names = I(colnames(inp$x)),
     donor_values = I(donor_values(inp))
   )
+  if (is.ordered(inp$y)) payload <- append(payload, list(ordered = TRUE), after = 3L)
+  payload
 }
 
 # ---------------------------------------------------------------------------

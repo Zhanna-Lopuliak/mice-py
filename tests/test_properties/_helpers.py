@@ -13,17 +13,20 @@ import pytest
 
 from .._logged_events import impute_checking_log_warning
 
-# The methods by kind. CATEGORICAL_METHODS grows in the phases of 0.3 that
-# add the methods: polr (phase 5).
+# The methods by kind.
 # Donor methods impute observed values or labels.
 DONOR_METHODS = ("pmm", "cart", "rf", "midas", "sample")
 # Model-based methods for numeric targets only; they impute new floats.
 NUMERIC_MODEL_METHODS = ("norm", "norm.nob", "norm.boot", "norm.predict", "mean")
 # Model-based methods for categorical targets only; they impute labels of
 # the column. logreg and logreg.boot impute columns with two categories
-# (TWO_CATEGORY_METHODS), polyreg columns with any number of categories.
+# (TWO_CATEGORY_METHODS), polyreg and polr columns with any number of
+# categories (polr boolean, two-category and numeric ones through its
+# fallback to the model of polyreg). polr can also impute a declared
+# category of an ordered Categorical that is not observed (see
+# `assert_imputed_are_observed`).
 TWO_CATEGORY_METHODS = ("logreg", "logreg.boot")
-CATEGORICAL_METHODS = (*TWO_CATEGORY_METHODS, "polyreg")
+CATEGORICAL_METHODS = (*TWO_CATEGORY_METHODS, "polyreg", "polr")
 # Methods whose univariate imputer draws no random number; a subset of the
 # others. Inside a chain, norm.predict still depends on the seed through the
 # (random) imputations of the other incomplete columns; mean does not.
@@ -69,7 +72,8 @@ def has_two_categories(series):
 def can_impute(method, series):
     """True if the categorical ``method`` takes ``series`` as its target:
     logreg and logreg.boot a boolean, categorical or text column with two
-    categories, polyreg every boolean, categorical or text column."""
+    categories, polyreg and polr every boolean, categorical or text column
+    (polr where its model does not apply through its fallback)."""
     if method in TWO_CATEGORY_METHODS:
         return has_two_categories(series)
     return not is_numeric_column(series)
@@ -96,7 +100,9 @@ def imputes_observed_values(method):
     """True if every cell imputed with ``method_spec(method, df)`` holds a value observed in its column.
 
     So for the donor methods, and for the categorical methods, which impute
-    labels of the column and leave the other columns to pmm.
+    labels of the column and leave the other columns to pmm; under polr an
+    ordered Categorical column may also get a declared category that is not
+    observed (`assert_imputed_are_observed` with ``mice`` allows that).
     """
     return method in DONOR_METHODS or method in CATEGORICAL_METHODS
 
@@ -328,13 +334,29 @@ def assert_model_imputations(original, completed, mice):
             np.testing.assert_allclose(imputed, observed.mean(), rtol=100 * eps, atol=0, err_msg=str(col))
 
 
-def assert_imputed_are_observed(original, completed, columns=None):
-    """Donor property: every imputed cell holds a value observed in that column."""
+def declares_unobserved_categories(method, series):
+    """True if ``method`` may impute a category of ``series`` that is not observed:
+    polr on an ordered Categorical, which gives every declared level a
+    positive probability, as R's ``MASS::polr``."""
+    return method == "polr" and isinstance(series.dtype, pd.CategoricalDtype) and series.dtype.ordered
+
+
+def assert_imputed_are_observed(original, completed, columns=None, mice=None):
+    """Donor property: every imputed cell holds a value observed in that column.
+
+    With ``mice``, a column that ``mice.method`` imputes with polr and that
+    is an ordered Categorical may also hold any of its declared categories
+    (see `declares_unobserved_categories`).
+    """
     for col in columns if columns is not None else original.columns:
         mis = original[col].isna().to_numpy()
         if not mis.any():
             continue
-        observed = {label_key(v) for v in original[col][~mis].tolist()}
+        method = mice.method.get(col, "") if mice is not None else ""
+        if declares_unobserved_categories(method, original[col]):
+            observed = {label_key(v) for v in original[col].cat.categories}
+        else:
+            observed = {label_key(v) for v in original[col][~mis].tolist()}
         imputed = [label_key(v) for v in completed[col][mis].tolist()]
         strangers = [v for v in imputed if v not in observed]
         assert not strangers, (col, strangers[:5])
@@ -393,9 +415,10 @@ def setup_skipped_columns(df):
 def assert_all_invariants(original, before, mice, out, n_imputations, maxit, donor=True, allow_unimputed=()):
     """Item 1 invariants. Columns in ``allow_unimputed`` and the columns R's setup
     step skips (constant or collinear, see ``setup_skipped_columns``) may keep
-    their missing cells. With ``donor`` (pass ``method in DONOR_METHODS``),
-    filled cells must hold observed values. Columns imputed by a
-    numeric-model method are checked by `assert_model_imputations`."""
+    their missing cells. With ``donor`` (pass ``imputes_observed_values(method)``),
+    filled cells must hold observed values, or under polr declared categories
+    of an ordered Categorical (`assert_imputed_are_observed`). Columns imputed
+    by a numeric-model method are checked by `assert_model_imputations`."""
     assert len(out) == n_imputations
     pd.testing.assert_frame_equal(original, before)
     constant = setup_skipped_columns(original) | set(allow_unimputed)
@@ -411,5 +434,5 @@ def assert_all_invariants(original, before, mice, out, n_imputations, maxit, don
             # (An entirely missing column has nothing to compare with.)
             filler = {c: original[c].dropna().iloc[0] for c in constant if original[c].notna().any()}
             checked = [c for c in original.columns if original[c].notna().any()]
-            assert_imputed_are_observed(original, completed.fillna(filler), columns=checked)
+            assert_imputed_are_observed(original, completed.fillna(filler), columns=checked, mice=mice)
     assert_chain_stats(mice, original[regular], n_imputations, maxit)

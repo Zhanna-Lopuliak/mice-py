@@ -2,6 +2,7 @@
 Tests for the core MICE functionality.
 """
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -106,9 +107,10 @@ class TestMICEMethods:
         assert mice.imputed_datasets is not None
         assert len(mice.imputed_datasets) == 2
 
-    @pytest.mark.parametrize("method", ["logreg", "logreg.boot", "polyreg"])
+    @pytest.mark.parametrize("method", ["logreg", "logreg.boot", "polyreg", "polr"])
     def test_methods_for_two_categories(self, sample_data_missing, method):
-        """smoker holds 0 and 1: logistic and multinomial regression impute 0 or 1."""
+        """smoker holds 0 and 1: logistic and multinomial regression impute 0 or 1
+        (polr through its fallback to the multinomial model)."""
         mice = MICE(sample_data_missing)
 
         mice.impute(n_imputations=2, maxit=2, method={"smoker": method}, seed=1)
@@ -116,6 +118,37 @@ class TestMICEMethods:
         missing = sample_data_missing["smoker"].isna()
         for dataset in mice.imputed_datasets:
             assert set(dataset.loc[missing, "smoker"]) <= {0.0, 1.0}
+
+    @staticmethod
+    def _two_level_ordered_frame():
+        """An ordered column with two levels, which polr fits by its fallback, and a complete predictor."""
+        rng = np.random.default_rng(3)
+        x = rng.normal(size=40)
+        grade = np.where(x + rng.normal(size=40) > 0, "hi", "lo")
+        df = pd.DataFrame({"grade": pd.Categorical(grade, categories=["lo", "hi"], ordered=True), "x": x})
+        df.loc[[1, 5, 9, 13, 20], "grade"] = np.nan
+        return df
+
+    def test_polr_fallback_is_logged_with_polr_log_fallback(self):
+        """With ``polr_log_fallback=True`` every fallback of polr to multinom is
+        a row of logged_events (R's polr.to.loggedEvents = TRUE), one per
+        iteration and imputation; without it nothing is logged."""
+        df = self._two_level_ordered_frame()
+        mice = MICE(df)
+        impute_checking_log_warning(
+            mice, n_imputations=2, maxit=3, method={"grade": "polr"}, seed=1, polr_log_fallback=True
+        )
+        events = mice.logged_events
+        assert sorted(zip(events["it"], events["im"])) == [(it, im) for it in (1, 2, 3) for im in (1, 2)]
+        assert set(events["dep"]) == {"grade"}
+        assert set(events["meth"]) == {"polr"}
+        assert set(events["out"]) == {"polr falls back to multinom"}
+
+        quiet = MICE(df)
+        impute_checking_log_warning(quiet, n_imputations=2, maxit=3, method={"grade": "polr"}, seed=1)
+        assert quiet.logged_events.empty
+        for logged, unlogged in zip(mice.imputed_datasets, quiet.imputed_datasets):
+            pd.testing.assert_frame_equal(logged, unlogged)
 
     def test_method_dictionary(self, sample_data_missing):
         """Test using method dictionary for different columns."""

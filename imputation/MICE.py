@@ -352,6 +352,14 @@ class MICE:
               any number of categories (up to 50), which imputes their
               labels: ``"polyreg"`` (on data augmented as in R, fitted as
               R's ``nnet::multinom``);
+            - proportional-odds logistic regression for ordered
+              categorical columns, which imputes their labels: ``"polr"``
+              (on data augmented as in R, fitted as R's ``MASS::polr``).
+              Text and unordered categorical columns are taken as ordered
+              by their sorted labels; where the model cannot be fitted
+              (boolean or numeric columns, two categories, start values
+              that cannot be found), it falls back to the fit of
+              ``"polyreg"``, as in R;
             - ``""`` for a column that is not imputed.
 
             The argument is:
@@ -394,7 +402,9 @@ class MICE:
             ``donors=3`` to `imputation.PMM.pmm`, ``norm_boot_ridge=1e-4``
             passes ``ridge=1e-4`` to `imputation.norm.norm_boot`,
             ``polyreg_maxit=200`` passes ``maxit=200`` to
-            `imputation.polyreg.polyreg` (R's ``nnet.maxit``). The
+            `imputation.polyreg.polyreg` (R's ``nnet.maxit``),
+            ``polr_log_fallback=True`` passes ``log_fallback=True`` to
+            `imputation.polr.polr` (R's ``polr.to.loggedEvents``). The
             parameter must exist in that imputer's signature; any other
             keyword argument raises ``TypeError``.
 
@@ -459,6 +469,10 @@ class MICE:
           (`imputation.design.remove_lindep`); ``out`` names the dropped
           columns. In the first iteration, a model with fewer observed
           cases than parameters logs "df set to 1".
+        - An imputer may log events itself: with ``polr_log_fallback=True``
+          each fallback of ``"polr"`` to the multinomial model logs
+          "polr falls back to multinom" (``meth`` "polr"), as R's
+          ``polr.to.loggedEvents = TRUE``.
         """
         logger.info("Starting imputation process")
         logger.debug(

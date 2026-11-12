@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 import numpy as np
+import pandas as pd
 
 from ._helpers import as_array, load_fixture
 from ._l2_stats import P_MIN, Z_MAX, chi2_homogeneity, moments, z_logvar, z_mean
@@ -49,6 +50,7 @@ N_CALLS = {
     "logreg": 3000,
     "logreg.boot": 3000,
     "polyreg": 3000,
+    "polr": 2000,
 }
 
 # Offset between the R seed stored in a fixture and the Python seed
@@ -61,7 +63,9 @@ class L2Input:
 
     name: str
     type: str  # "numeric" or "factor"
-    y: np.ndarray  # float with NaN, or object with NaN, at the missing cells
+    # float with NaN, or object with NaN, at the missing cells; an ordered
+    # Categorical for an ordered factor
+    y: np.ndarray
     ry: np.ndarray  # bool, True where y is observed
     x: np.ndarray  # float, n x p, no intercept
     x_names: tuple
@@ -77,11 +81,18 @@ class L2Input:
 
 
 def load_input(payload):
-    """Build an :class:`L2Input` from the ``input`` entry of a fixture."""
+    """Build an :class:`L2Input` from the ``input`` entry of a fixture.
+
+    A factor target is an object array of its labels, or, where the payload
+    says ``ordered``, an ordered ``pd.Categorical`` whose categories are its
+    levels in R's order (``donor_values``).
+    """
     ry = np.array(payload["ry"], dtype=bool)
     if payload["type"] == "factor":
         y = np.array([np.nan if v is None else v for v in payload["y"]], dtype=object)
         donor_values = np.array(payload["donor_values"], dtype=object)
+        if payload.get("ordered", False):
+            y = pd.Categorical(payload["y"], categories=list(donor_values), ordered=True)
     else:
         y = as_array(payload["y"])
         donor_values = as_array(payload["donor_values"])
@@ -177,6 +188,10 @@ def imputer(method):
         from imputation.polyreg import polyreg
 
         return polyreg
+    if method == "polr":
+        from imputation.polr import polr
+
+        return polr
     raise ValueError(method)
 
 

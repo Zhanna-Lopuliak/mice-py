@@ -43,6 +43,13 @@ Each mutant is written so that it is valid once the library is fixed:
   1e-294 and below 1e-8 in every cell, T3 largest |z| about 284 (mean) and
   7,300 (log-variance; the coefficients no longer vary). The test asserts
   p < 1e-12 and |z| > 8.
+* ``polr`` replaced by the multinomial model: the Python ``polyreg``
+  compared with R's ``polr`` on F7, an ordered target drawn from a model
+  that is not a proportional-odds model. The multinomial fit predicts other
+  probabilities (up to 0.5 apart in R). Measured with 1,000 calls (fewer
+  than the 2,000 of the parity test; the effect is large): T1 p below 1e-12
+  in all 20 cells (the smallest 0), T3 largest |z| about 114 (mean) and 26
+  (log-variance). The test asserts p < 1e-12 and |z| > 8.
 """
 
 import functools
@@ -224,5 +231,34 @@ def test_polyreg_taking_the_most_probable_category_is_flagged_by_t1():
 def test_polyreg_taking_the_most_probable_category_is_flagged_by_t3():
     comp, n_calls = polyreg_most_probable_category_comparison()
     assert n_calls > 0, "mutant not applied: polyreg no longer calls imputation.polyreg._draw_categories"
+    assert np.abs(comp.t3_z_mean).max() > 8, "T3 (mean) does not flag the mutant clearly: " + comp.t3_message()
+    assert np.abs(comp.t3_z_var).max() > 8, "T3 (log-variance) does not flag the mutant clearly: " + comp.t3_message()
+
+
+@functools.cache
+def polr_replaced_by_polyreg_comparison():
+    """The Python polyreg in place of polr, against R's polr on F7."""
+    from imputation.polyreg import polyreg
+
+    calls = []
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return polyreg(*args, **kwargs)
+
+    inp, r_sum, py_sum = run_python("polr", "F7", func=counting, n_calls=1000)
+    return compare(r_sum, py_sum, inp), len(calls)
+
+
+def test_polr_replaced_by_polyreg_is_flagged_by_t1():
+    comp, n_calls = polr_replaced_by_polyreg_comparison()
+    assert n_calls > 0, "mutant not applied: polyreg was not called"
+    assert comp.kind == "category"
+    assert comp.t1_min_p < 1e-12, "T1 does not flag the mutant clearly: " + comp.t1_message()
+
+
+def test_polr_replaced_by_polyreg_is_flagged_by_t3():
+    comp, n_calls = polr_replaced_by_polyreg_comparison()
+    assert n_calls > 0, "mutant not applied: polyreg was not called"
     assert np.abs(comp.t3_z_mean).max() > 8, "T3 (mean) does not flag the mutant clearly: " + comp.t3_message()
     assert np.abs(comp.t3_z_var).max() > 8, "T3 (log-variance) does not flag the mutant clearly: " + comp.t3_message()

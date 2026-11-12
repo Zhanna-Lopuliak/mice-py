@@ -8,7 +8,7 @@ For each method and input: smallest T1 p-value over cells, largest |z| of T2
 (cell mean and log-variance) and T3 (coefficient mean and log-variance), and
 for the tree methods the weaker measures used by test_l2_trees. T1 compares
 donor counts, for the norm family (continuous kind) the counts in R's decile
-bins, for logreg, logreg.boot and polyreg (category kind) the level counts;
+bins, for logreg, logreg.boot, polyreg and polr (category kind) the level counts;
 their T3 is on the coefficients of the level indicators and they have no T2. A crash
 is reported with its exception. Pass rules: p >= 1e-7, |z| <= 5.5.
 """
@@ -44,6 +44,7 @@ ROWS = [
     ("logreg", "F6", {}),
     ("logreg.boot", "F5", {}),
     ("polyreg", "F3", {}),
+    ("polr", "F7", {}),
 ]
 
 

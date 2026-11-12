@@ -108,10 +108,11 @@ def test_input_not_mutated(dataset, method):
 @pytest.mark.parametrize("dataset,method", OBSERVED_VALUE_CASES)
 def test_imputed_values_are_observed_values(dataset, method):
     """Donor methods impute observed values or labels; so do the categorical
-    methods (labels of their columns) with pmm for the other columns."""
-    df, _, _, out = _run(dataset, method)
+    methods (labels of their columns) with pmm for the other columns, except
+    that polr may give an ordered Categorical any declared category."""
+    df, _, mice, out = _run(dataset, method)
     for completed in out:
-        assert_imputed_are_observed(df, completed)
+        assert_imputed_are_observed(df, completed, mice=mice)
 
 
 # The columns of the typed frame each categorical method imputes
@@ -119,16 +120,20 @@ TYPED_COLUMNS = {
     "logreg": ["flag", "two"],
     "logreg.boot": ["flag", "two"],
     "polyreg": ["flag", "two", "three", "grade"],
+    "polr": ["flag", "two", "three", "grade"],
 }
 
 
 @pytest.mark.parametrize("method", CATEGORICAL_METHODS)
 def test_categorical_method_imputes_its_columns(method):
     """On the typed frame logreg and logreg.boot impute the boolean and the
-    two-level column, polyreg also the three-category text column and the
-    ordered column, with labels observed there."""
+    two-level column, polyreg and polr also the three-category text column
+    and the ordered column (polr the boolean and the two-level column
+    through its fallback), with labels observed there: every declared level
+    of the ordered column is observed."""
     df, _, mice, out = _run("typed", method)
     assert [c for c in df.columns if mice.method[c] == method] == TYPED_COLUMNS[method]
+    assert set(df["grade"].dropna()) == set(df["grade"].cat.categories)
     for completed in out:
         assert_imputed_are_observed(df, completed, columns=TYPED_COLUMNS[method])
 
@@ -155,15 +160,15 @@ def test_chain_statistics_shape_and_finite(dataset, method):
 
 def _univariate_problem(seed=7, n=40, x_as_frame=False, method=None):
     """(y, ry, x); y is numeric, or for a categorical method an object array of
-    labels (three for polyreg, two for the others) with None where it is
-    missing, as MICE passes a text column."""
+    labels (three for polyreg and polr, two for the others) with None where
+    it is missing, as MICE passes a text column."""
     rng = np.random.default_rng(seed)
     x = rng.normal(size=(n, 2))
     y = x @ np.array([1.0, -0.5]) + rng.normal(scale=0.5, size=n)
     ry = np.ones(n, dtype=bool)
     ry[[0, 3, 8, 15, 22, 31]] = False
     y[~ry] = np.nan
-    if method == "polyreg":
+    if method in ("polyreg", "polr"):
         y = np.where(ry, np.where(y > 0.5, "hi", np.where(y > -0.5, "mid", "lo")), None)
     elif method in CATEGORICAL_METHODS:
         y = np.where(ry, np.where(y > 0, "yes", "no"), None)

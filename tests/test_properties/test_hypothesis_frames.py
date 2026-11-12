@@ -7,7 +7,8 @@ and at least one observed value per row (all-empty rows are C4, tested in
 test_edge_cases). The full predictor matrix is used, as planned.
 
 A few frames with categorical columns (text, Categorical, ordered
-Categorical; two to four categories) check polyreg the same way.
+Categorical; two to four categories) check polyreg the same way, and a few
+with ordered Categoricals check polr.
 """
 
 import numpy as np
@@ -58,11 +59,12 @@ def numeric_frames(draw, min_observed=2, values="hypothesis"):
 
 
 @st.composite
-def categorical_frames(draw):
+def categorical_frames(draw, kinds=("text", "category", "ordered")):
     """A complete predictor ``x``, an incomplete numeric column ``v`` and one
-    or two incomplete categorical columns related to them, each text, an
-    unordered or an ordered Categorical with 2 to 4 categories; 12 to 30
-    rows, at least two observed values per column."""
+    or two incomplete categorical columns related to them, each of one of
+    `kinds`: text, an unordered or an ordered Categorical with 2 to 4
+    categories, declared in reverse order (a category may not occur); 12 to
+    30 rows, at least two observed values per column."""
     n = draw(st.integers(12, 30))
     rng = np.random.default_rng(draw(st.integers(0, 2**32 - 1)))
     latent = rng.normal(size=n)
@@ -72,7 +74,7 @@ def categorical_frames(draw):
         labels = np.array([f"c{i}" for i in range(k)])
         noise = draw(st.sampled_from([0.3, 1.0, 3.0]))
         codes = np.digitize(latent + rng.normal(scale=noise, size=n), np.linspace(-1, 1, k + 1)[1:-1])
-        kind = draw(st.sampled_from(["text", "category", "ordered"]))
+        kind = draw(st.sampled_from(kinds))
         if kind == "text":
             data[f"g{j}"] = pd.Series(labels[codes], dtype=object)
         else:
@@ -128,6 +130,19 @@ def test_polyreg_invariants_on_random_categorical_frames():
     @given(categorical_frames())
     def check(df):
         _check_frame(df, "polyreg")
+
+    check()
+
+
+def test_polr_invariants_on_random_ordered_frames():
+    """polr imputes the ordered columns (by its fallback where they have two
+    levels), pmm the numeric one; every imputed cell holds a declared
+    category of its column, or an observed value."""
+
+    @_settings(8)
+    @given(categorical_frames(kinds=("ordered",)))
+    def check(df):
+        _check_frame(df, "polr")
 
     check()
 

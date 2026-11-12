@@ -1003,7 +1003,7 @@ def test_norm_boot_ridge_and_norm_ridge_reach_their_own_method(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# The categorical methods: logreg, logreg.boot and polyreg
+# The categorical methods: logreg, logreg.boot, polyreg and polr
 # ---------------------------------------------------------------------------
 
 
@@ -1191,3 +1191,137 @@ def test_polyreg_column_types_keep_their_dtype(kind):
     df.loc[[2, 6, 11, 30, 33], "zcol"] = None
     mice, _ = _check(df, "polyreg")
     assert mice.method["zcol"] == "polyreg"
+
+
+def test_polr_imputes_one_observed_category_everywhere():
+    """R stops on an unordered target and fits a degenerate model to an
+    ordered one; the port imputes the category without a fit, after drawing
+    one uniform number per cell where R draws them. (Through impute such a
+    column is constant and not imputed, as in R.)"""
+    from imputation.polr import polr
+
+    from ..test_parity._helpers import ScriptedGenerator
+
+    x = np.random.default_rng(3).normal(size=(12, 2))
+    for ordered in (True, False):
+        y = pd.Categorical(["b"] * 9 + [None] * 3, categories=["a", "b", "c", "d"], ordered=ordered)
+        scripted = ScriptedGenerator(uniforms=[0.1, 0.5, 0.9], strict=True)
+        assert polr(y, y.notna(), x, rng=scripted).tolist() == ["b"] * 3
+        scripted.assert_exhausted()
+        assert scripted.order == [("uniform", 3)]
+
+
+def _polr_fallback_frame():
+    """A two-level ordered column and a boolean column, which polr imputes by
+    its fallback to the multinomial model, and complete predictors."""
+    rng = np.random.default_rng(31)
+    df = regression_frame()
+    latent = df["x1"] + rng.normal(scale=0.7, size=len(df))
+    df["level"] = pd.Categorical(np.where(latent > 0, "high", "low"), categories=["low", "high"], ordered=True)
+    df["flag"] = pd.Series(latent + rng.normal(size=len(df)) > 0.3, dtype=object)
+    df.loc[[0, 4, 9, 17, 26], "level"] = np.nan
+    df.loc[[2, 9, 15, 33], "flag"] = np.nan
+    return df
+
+
+def test_polr_two_levels_and_booleans_through_the_fallback():
+    """R's MASS::polr refuses both (fewer than 3 levels, not a factor) and
+    mice falls back to nnet::multinom; with ``polr_log_fallback`` every call
+    logs "polr falls back to multinom", as R's ``polr.to.loggedEvents``."""
+    df = _polr_fallback_frame()
+    mice, out = _check(df, {"level": "polr", "flag": "polr"}, polr_log_fallback=True)
+    assert mice.method["level"] == mice.method["flag"] == "polr"
+    for completed in out:
+        assert completed["level"].dtype == df["level"].dtype
+        assert set(completed["flag"]) <= {False, True}
+    events = mice.logged_events[mice.logged_events["meth"] == "polr"]
+    assert len(events) == 2 * N_IMP * MAXIT  # two columns, every call
+    assert set(events["dep"]) == {"level", "flag"} and set(events["out"]) == {"polr falls back to multinom"}
+    quiet, _ = _check(df, {"level": "polr", "flag": "polr"})
+    assert not (quiet.logged_events["meth"] == "polr").any()
+
+
+def test_polr_keywords_reach_the_fallback(monkeypatch):
+    """``polr_maxit`` and ``polr_max_weights`` are R's ``nnet.maxit`` and
+    ``nnet.MaxNWts``: they apply to the fallback fit."""
+    import imputation.polr
+
+    seen = []
+    original = imputation.polr.multinom_fit
+
+    def recording(*args, **kwargs):
+        seen.append((kwargs["maxit"], kwargs["max_weights"]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(imputation.polr, "multinom_fit", recording)
+    impute(typed_frame(), {"flag": "polr", "grade": "polr"}, polr_maxit=7, polr_max_weights=99)
+    assert len(seen) == N_IMP * MAXIT and set(seen) == {(7, 99)}  # only the boolean column falls back
+
+
+def test_polr_more_than_50_categories_raise():
+    """R's augment stops: "Maximum number of categories (50) exceeded"."""
+    from imputation.polr import polr
+
+    y = np.array([f"l{i % 51:02d}" for i in range(110)], dtype=object)
+    ry = np.arange(110) % 10 != 0
+    y[~ry] = None
+    x = np.random.default_rng(0).normal(size=(110, 1))
+    with pytest.raises(ValueError, match=r"51 categories, more than the maximum of 50 .*exceeded"):
+        polr(y, ry, x, rng=np.random.default_rng(1))
+
+
+def test_polr_without_predictors_imputes():
+    """R's mice.impute.polr stops without predictors (both of its fits see
+    no response); the port fits the model without predictors, and for a
+    two-level column the fallback on the intercept, which it logs."""
+    df = _polr_fallback_frame()
+    levels = ["low", "mid", "high", "top"]
+    grades = np.array(levels)[np.digitize(df["x2"], [-0.7, 0.0, 0.7])]
+    df["grade"] = pd.Categorical(grades, categories=levels, ordered=True)
+    df.loc[[1, 3, 8, 21], "grade"] = np.nan
+    pm = full_predictor_matrix(df)
+    pm.loc[["grade", "level"], :] = 0
+    mice, out = _check(df, {"grade": "polr", "level": "polr"}, predictor_matrix=pm, polr_log_fallback=True)
+    assert mice.method["grade"] == mice.method["level"] == "polr"
+    assert isinstance(df["grade"].dtype, pd.CategoricalDtype) and df["grade"].dtype.ordered
+    for completed in out:
+        assert completed["grade"].dtype == df["grade"].dtype
+    events = mice.logged_events[mice.logged_events["meth"] == "polr"]
+    assert set(events["dep"]) == {"level"} and len(events) == N_IMP * MAXIT
+
+
+@pytest.mark.parametrize("method", CATEGORICAL_METHODS)
+def test_categorical_method_without_predictors(method):
+    """Every categorical method imputes labels without predictors (the
+    intercept-only model; polr the cut points alone), whatever form the
+    empty predictors take; R's polr stops there."""
+    from imputation.utils import get_imputer_func
+
+    imputer = get_imputer_func(method)
+    rng = np.random.default_rng(5)
+    labels = ["lo", "hi"] if method in TWO_CATEGORY_METHODS else ["lo", "mid", "hi"]
+    ry = np.arange(30) % 3 != 0
+    y = pd.Categorical(np.where(ry, rng.choice(labels, size=30), None), categories=labels, ordered=True)
+    for x in (np.empty((30, 0)), pd.DataFrame(index=range(30)), None):
+        out = imputer(y, ry, x, rng=np.random.default_rng(2))
+        assert out.shape == (10,) and set(out) <= set(labels)
+
+
+def test_polr_ordered_column_keeps_its_dtype_and_category_order():
+    """An ordered ``category`` column declared in an order that is not
+    alphabetical, with an unused level: the completed column has the same
+    dtype (categories, their order, ordered), and its imputations are
+    declared categories (the unused one has a small positive probability)."""
+    rng = np.random.default_rng(29)
+    df = regression_frame()
+    grades = np.array(["low", "high", "top"])[np.digitize(df["x1"] + rng.normal(scale=0.5, size=len(df)), [-0.5, 0.5])]
+    df["grade"] = pd.Categorical(grades, categories=["low", "mid", "high", "top"], ordered=True)
+    mis = [0, 5, 12, 18, 27, 35]
+    df.loc[mis, "grade"] = np.nan
+    mice, out = _check(df, {"grade": "polr"}, n_imputations=4)
+    assert mice.method["grade"] == "polr"
+    for completed in out:
+        assert completed["grade"].dtype == df["grade"].dtype
+        assert list(completed["grade"].cat.categories) == ["low", "mid", "high", "top"]
+        assert completed["grade"].cat.ordered
+        assert set(completed.loc[mis, "grade"]) <= {"low", "mid", "high", "top"}

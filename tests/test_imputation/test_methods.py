@@ -749,6 +749,154 @@ class TestPolyregImputation:
         assert 0 < out[2] and out[4] < 1
 
 
+class TestPolrImputation:
+    """Input handling and building blocks of polr and polr_fit."""
+
+    @staticmethod
+    def _problem(n=30):
+        x = np.random.default_rng(0).normal(size=(n, 2))
+        score = x[:, 0] - 0.5 * x[:, 1] + np.cos(np.arange(n))
+        labels = np.array(["low", "mid", "high", "top"])[np.digitize(score, [-0.8, 0.0, 0.8])]
+        id_obs = np.arange(n) % 4 != 0
+        y = pd.Categorical(np.where(id_obs, labels, None), categories=["low", "mid", "high", "top"], ordered=True)
+        return y, id_obs, x
+
+    def test_invalid_inputs(self):
+        from imputation.polr import polr
+
+        y, id_obs, x = self._problem()
+        with pytest.raises(ValueError, match="Predictors must be numeric for polr"):
+            polr(y, id_obs, np.full((30, 2), "a"))
+        x_nan = x.copy()
+        x_nan[3, 1] = np.nan
+        with pytest.raises(ValueError, match="Predictors must not contain missing values for polr"):
+            polr(y, id_obs, x_nan)
+        with pytest.raises(ValueError, match="polr: y is missing in entries that id_obs marks as observed"):
+            polr(y, np.ones(30, dtype=bool), x)
+
+    def test_without_predictors_the_cut_points_alone_are_fitted(self):
+        """R stops (both of its fits see no response); the port fits the
+        model without predictors, and multinom on the intercept where polr
+        does not apply."""
+        from imputation.fitting import MultinomFit, PolrFit
+        from imputation.polr import _polr
+
+        y, id_obs, _ = self._problem()
+        for x in (None, np.empty((30, 0)), pd.DataFrame(index=range(30))):
+            steps = _polr(y, id_obs, x, None, 100, 1500, False, np.random.default_rng(1), None)
+            assert isinstance(steps.fit, PolrFit) and steps.fit.coef.shape == (0,)
+            assert steps.prob.shape == (8, 4) and np.all(steps.prob == steps.prob[0])
+            assert set(steps.labels) <= {"low", "mid", "high", "top"}
+        two = np.where(id_obs, np.where(np.asarray(y) == "low", "low", "high"), None)
+        steps = _polr(two, id_obs, None, None, 100, 1500, False, np.random.default_rng(1), None)
+        assert isinstance(steps.fit, MultinomFit) and steps.fit.coef.shape == (1, 1)
+        assert set(steps.labels) <= {"low", "high"}
+
+    def test_x_as_data_frame_and_default_generator(self):
+        """A DataFrame predictor is dummy-coded as MICE does; without `rng` a fresh generator is used."""
+        from imputation.polr import polr
+
+        y, id_obs, x = self._problem()
+        frame = pd.DataFrame({"u": x[:, 0], "g": np.where(x[:, 1] > 0, "p", "q")})
+        coded = np.c_[x[:, 0], (x[:, 1] <= 0).astype(float)]
+        first = polr(y, id_obs, frame, rng=np.random.default_rng(4))
+        np.testing.assert_array_equal(first, polr(y, id_obs, coded, rng=np.random.default_rng(4)))
+        assert set(polr(y, id_obs, x)) <= {"low", "mid", "high", "top"}
+
+    def test_nothing_observed_and_nothing_to_impute(self):
+        from imputation.polr import polr
+
+        y, _, x = self._problem()
+        none = np.zeros(30, dtype=bool)
+        assert polr(y, none, x, id_mis=none).shape == (0,)
+        with pytest.raises(ValueError, match="polr: the target has no observed value"):
+            polr(y, none, x)
+
+    def test_fallback_parameters_reach_multinom_fit_only(self, monkeypatch):
+        """``maxit`` and ``max_weights`` are R's nnet.maxit and nnet.MaxNWts: they
+        reach the fallback; the proportional-odds fit keeps R's 100 iterations."""
+        import imputation.polr
+
+        seen = []
+        original_multinom, original_polr = imputation.polr.multinom_fit, imputation.polr.polr_fit
+
+        def recording_multinom(*args, **kwargs):
+            seen.append(("multinom", kwargs["maxit"], kwargs["max_weights"]))
+            return original_multinom(*args, **kwargs)
+
+        def recording_polr(*args, **kwargs):
+            seen.append(("polr", sorted(kwargs)))
+            return original_polr(*args, **kwargs)
+
+        monkeypatch.setattr(imputation.polr, "multinom_fit", recording_multinom)
+        monkeypatch.setattr(imputation.polr, "polr_fit", recording_polr)
+        y, id_obs, x = self._problem()
+        imputation.polr.polr(y, id_obs, x, maxit=7, max_weights=50, rng=np.random.default_rng(1))
+        numeric = np.where(id_obs, y.codes.astype(float), np.nan)
+        imputation.polr.polr(numeric, id_obs, x, maxit=7, max_weights=50, rng=np.random.default_rng(1))
+        assert seen == [("polr", ["n_levels", "weights"]), ("multinom", 7, 50)]
+
+    def test_targets_that_are_no_factor_in_r(self):
+        """Booleans and numbers go to the fallback (R: not a factor); text and Categoricals do not."""
+        from imputation.polr import _is_factor
+
+        assert _is_factor(pd.Categorical(["a", "b"]))
+        assert _is_factor(np.array(["a", None, "b"], dtype=object))
+        assert not _is_factor(np.array([True, None, False], dtype=object))
+        assert not _is_factor(np.array([1.0, np.nan, 2.0]))
+        assert not _is_factor(np.array([True, False]))
+
+    def test_polr_fit_rejects_invalid_input(self):
+        from imputation.fitting import PolrError, polr_fit
+
+        x = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
+        y = [0, 1, 2, 0, 1, 2]
+        with pytest.raises(ValueError, match="x has 6 rows, y 5"):
+            polr_fit(x, y[:5])
+        with pytest.raises(ValueError, match="missing values in 'x'"):
+            polr_fit(np.where(x == 3.0, np.nan, x), y)
+        with pytest.raises(ValueError, match="weights must be non-negative"):
+            polr_fit(x, y, weights=[1, 1, -1, 1, 1, 1])
+        with pytest.raises(ValueError, match="integers from 0 to 1"):
+            polr_fit(x, y, n_levels=2)
+        with pytest.raises(ValueError, match="integers from 0 to 2"):
+            polr_fit(x, [0, 1, 2, 0, 1.5, 2])
+        with pytest.raises(PolrError, match="response must have 3 or more levels") as info:
+            polr_fit(x, [0, 1, 1, 0, 1, 0])
+        assert info.value.condition == PolrError.FEW_LEVELS
+
+    def test_polr_gradient_is_that_of_the_objective(self):
+        """The analytic gradient of polr's objective agrees with central differences."""
+        from imputation.fitting import _polr_objective
+
+        rng = np.random.default_rng(2)
+        x = rng.normal(size=(25, 2))
+        codes = np.digitize(x @ [1.0, -0.7] + rng.logistic(size=25), [-1.0, 0.0, 1.0])
+        fn, gr = _polr_objective(x, codes, rng.uniform(0.5, 2.0, size=25), 4)
+        par = np.array([0.8, -0.5, -0.9, -0.1, 0.2])
+        h = 1e-6
+        numeric = [(fn(par + h * e) - fn(par - h * e)) / (2 * h) for e in np.eye(5)]
+        np.testing.assert_allclose(gr(par), numeric, rtol=1e-6, atol=1e-7)
+
+    def test_polr_objective_is_infinite_where_a_probability_is_zero(self):
+        """R's ``Inf`` when any probability is not positive: a middle level far
+        from its cut points has probability exactly 0."""
+        from imputation.fitting import _polr_objective
+
+        fn, _ = _polr_objective(np.array([[-60.0], [0.0], [1.0]]), np.array([1, 0, 2]), np.ones(3), 3)
+        assert fn(np.array([1.0, 0.0, 0.0])) == np.inf
+        assert np.isfinite(fn(np.array([0.0, 0.0, 0.0])))
+
+    def test_plogis_and_dlogis_are_rs(self):
+        from imputation.fitting import _dlogis, _plogis
+
+        z = np.array([-np.inf, -800.0, -100.0, 0.0, 2.0, 100.0, np.inf])
+        np.testing.assert_array_equal(_plogis(z)[[0, 1, 3, 5, 6]], [0.0, 0.0, 0.5, 1.0, 1.0])
+        np.testing.assert_allclose(_plogis(z[[2, 4]]), [np.exp(-100.0), 1 / (1 + np.exp(-2.0))], rtol=1e-15)
+        density = np.exp(-2) / (1 + np.exp(-2)) ** 2
+        np.testing.assert_allclose(_dlogis(np.array([0.0, 2.0, -2.0])), [0.25, density, density])
+
+
 class TestMethodConsistency:
     """Test consistency across imputation methods."""
 
@@ -771,7 +919,7 @@ class TestMethodConsistency:
 
         # the categorical methods impute a target with two categories
         y01 = np.array([0.0, 1.0, np.nan, 1.0, 0.0, 1.0, 0.0, 1.0])
-        for method_name in ["logreg", "logreg.boot", "polyreg"]:
+        for method_name in ["logreg", "logreg.boot", "polyreg", "polr"]:
             result = get_imputer_func(method_name)(y01, id_obs, x, rng=np.random.default_rng(6))
 
             assert isinstance(result, np.ndarray)

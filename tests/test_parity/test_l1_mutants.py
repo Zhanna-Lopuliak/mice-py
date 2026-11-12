@@ -60,6 +60,31 @@ test_l1_polyreg:
 * (v) the softmax used for two classes instead of nnet's logistic unit with
   its cut-off at 15: invisible where polyreg augments, caught by the direct
   multinom fit of separated data.
+
+The mutants of ``polr`` and ``polr_fit`` run the checks of test_l1_polr:
+
+* (w) the proportional-odds model replaced by the multinomial one: the fit
+  is of the wrong class, and the probabilities differ.
+* (x) no fallback: the error of ``polr_fit`` (or the refusal of a target
+  that is no factor) propagates where R fits ``multinom``.
+* (y) the fallback taken although R's ``polr`` succeeds: the fit is of the
+  wrong class, and the probabilities differ.
+* (z) the start fit not required to converge: where R falls back because it
+  did not, the port goes on to the next condition (the objective is not
+  finite at those start values), so the reason of the fallback differs;
+  the direct fit that R refuses for that reason is refused for another.
+* (aa) other start values (cut points at -1, 0, 1, coefficients 0): the
+  minimiser stops elsewhere, about 1e-5 away in the coefficients and cut
+  points.
+* (ab) an ordered target in sorted instead of declared level order: on
+  (low, mid, high, top) the model has another order, so the fit and the
+  probabilities differ.
+* (ac) an unused declared level dropped: the fit has a cut point fewer and
+  the probabilities a column fewer.
+* (ad) the uniform numbers drawn before the fit instead of after: the fits
+  draw nothing, so the numbers are the same wherever the fit succeeds; only
+  where the fit stops (the fallback with too many weights, before which R
+  draws nothing) the port draws numbers R did not.
 """
 
 import numpy as np
@@ -69,11 +94,13 @@ import pytest
 import imputation.fitting
 import imputation.logreg
 import imputation.norm
+import imputation.polr
 import imputation.polyreg
 import imputation.sampler
+from imputation.fitting import PolrError
 
 from ..test_imputation import test_methods
-from . import test_l1_augment, test_l1_logreg, test_l1_polyreg
+from . import test_l1_augment, test_l1_logreg, test_l1_polr, test_l1_polyreg
 from .test_l1_norm import CASES, check_draws, check_imputations, replay
 
 pytestmark = pytest.mark.parity
@@ -511,3 +538,186 @@ def test_softmax_for_two_classes_is_caught_on_separated_data(monkeypatch):
     assert not fit.logistic
     with pytest.raises(AssertionError, match="Not equal to tolerance"):
         test_l1_polyreg.check_multinom(case, fit)
+
+
+# ---------------------------------------------------------------------------
+# polr and polr_fit
+# ---------------------------------------------------------------------------
+
+POLR = test_l1_polr.CASES
+
+
+def test_polr_replaced_by_the_multinomial_model_is_caught(monkeypatch):
+    calls = []
+
+    def multinomial(x, codes, weights, n_levels, factor):
+        model = np.c_[np.ones(len(codes)), x]
+        return imputation.fitting.multinom_fit(model, codes, weights=weights, n_classes=n_levels)
+
+    monkeypatch.setattr(imputation.polr, "_fit_polr", _counted(calls, multinomial))
+    case = POLR["polr_seed1"]
+    steps, rng = test_l1_polr.replay(case)
+    assert calls, "mutant not applied: polr does not call imputation.polr._fit_polr"
+    with pytest.raises(AssertionError, match=r"assert 'multinom' == 'polr'"):
+        test_l1_polr.check_fit(case, steps)
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_polr.check_prediction(case, steps)
+    test_l1_polr.check_draws(case, rng)
+
+
+def test_polr_without_fallback_is_caught(monkeypatch):
+    calls = []
+
+    def polr_only(x, codes, weights, n_levels, factor, maxit, max_weights, log):
+        return imputation.polr._fit_polr(x, codes, weights, n_levels, factor), None
+
+    monkeypatch.setattr(imputation.polr, "_fit_model", _counted(calls, polr_only))
+    test_l1_polr.check_case(POLR["polr_seed1"])  # invisible where polr succeeds
+    assert calls, "mutant not applied: polr does not call imputation.polr._fit_model"
+    for name, condition in [
+        ("polr_numeric", PolrError.NOT_A_FACTOR),
+        ("polr_two_levels", PolrError.FEW_LEVELS),
+        ("polr_separated", PolrError.START_NOT_CONVERGED),
+    ]:
+        with pytest.raises(PolrError) as info:
+            test_l1_polr.replay(POLR[name])
+        assert info.value.condition == condition
+
+
+def test_polr_falling_back_although_polr_succeeds_is_caught(monkeypatch):
+    calls = []
+    original = imputation.polr._fit_polr
+
+    def failing(*args):
+        original(*args)  # R's reason, where polr fails anyway
+        raise PolrError(PolrError.START_NOT_CONVERGED)
+
+    monkeypatch.setattr(imputation.polr, "_fit_polr", _counted(calls, failing))
+    test_l1_polr.check_case(POLR["polr_numeric"])  # invisible where R falls back for another reason too
+    case = POLR["polr_seed1"]
+    steps, _ = test_l1_polr.replay(case)
+    assert calls, "mutant not applied: polr does not call imputation.polr._fit_polr"
+    with pytest.raises(AssertionError, match=r"assert 'multinom' == 'polr'"):
+        test_l1_polr.check_fit(case, steps)
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_polr.check_prediction(case, steps)
+
+
+def test_polr_start_fit_not_required_to_converge_is_caught(monkeypatch):
+    calls = []
+    original = imputation.fitting.logit_fit
+
+    def always_converged(*args, **kwargs):
+        return original(*args, **kwargs)._replace(converged=True)
+
+    monkeypatch.setattr(imputation.fitting, "logit_fit", _counted(calls, always_converged))
+    test_l1_polr.check_case(POLR["polr_seed1"])  # its start fit converges anyway
+    case = POLR["polr_separated"]
+    steps, _ = test_l1_polr.replay(case)
+    assert calls, "mutant not applied: polr_fit does not call imputation.fitting.logit_fit"
+    assert steps.fallback == PolrError.START_NOT_FINITE
+    with pytest.raises(AssertionError, match="initial value in 'vmmin' is not finite"):
+        test_l1_polr.check_fit(case, steps)
+    direct = test_l1_polr.DIRECT["start_not_converged"]
+    with pytest.raises(PolrError) as info:
+        test_l1_polr.fit_direct(direct)
+    assert info.value.condition != direct["r_error"]
+
+
+def test_polr_with_other_start_values_is_caught(monkeypatch):
+    """Cut points at -1, 0, 1 and coefficients 0: the same model, but the
+    minimiser stops elsewhere."""
+    calls = []
+    original = imputation.fitting._polr_start
+
+    def spread_around_zero(x, codes, w, n_levels):
+        _, kept = original(x, codes, w, n_levels)
+        q = n_levels - 1
+        return np.r_[np.zeros(int(kept.sum())), -(q - 1) / 2, np.zeros(q - 1)], kept
+
+    monkeypatch.setattr(imputation.fitting, "_polr_start", _counted(calls, spread_around_zero))
+    case = POLR["polr_seed1"]
+    steps, rng = test_l1_polr.replay(case)
+    assert calls, "mutant not applied: polr_fit does not call imputation.fitting._polr_start"
+    np.testing.assert_allclose(steps.fit.zeta, test_l1_polr.as_array(case["zeta"]), rtol=0, atol=1e-3)
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_polr.check_fit(case, steps)
+    test_l1_polr.check_labels(case, steps)  # the labels are R's
+    test_l1_polr.check_draws(case, rng)
+
+
+def _polr_categories_mutant(monkeypatch, calls, change):
+    """Make polr's `target_categories` see ``change(y)`` and call it with ``keep_unused`` replaced."""
+    original = imputation.polr.target_categories
+
+    def mutant(y, keep_unused=False):
+        y, keep_unused = change(y, keep_unused)
+        return original(y, keep_unused)
+
+    monkeypatch.setattr(imputation.polr, "target_categories", _counted(calls, mutant))
+
+
+def test_polr_with_sorted_instead_of_declared_order_is_caught(monkeypatch):
+    calls = []
+
+    def sorted_order(y, keep_unused):
+        if isinstance(getattr(y, "dtype", None), pd.CategoricalDtype) and y.dtype.ordered:
+            y = pd.Categorical(y, categories=sorted(y.dtype.categories), ordered=True)
+        return y, keep_unused
+
+    _polr_categories_mutant(monkeypatch, calls, sorted_order)
+    test_l1_polr.check_case(POLR["polr_seed1"])  # declared (a, b, c, d): sorted already
+    case = POLR["polr_declared_order"]
+    steps, _ = test_l1_polr.replay(case)
+    assert calls, "mutant not applied: polr does not call imputation.polr.target_categories"
+    with pytest.raises(AssertionError, match=r"assert \[.*\] == \["):
+        test_l1_polr.check_labels(case, steps)
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_polr.check_fit(case, steps)
+
+
+def test_polr_dropping_an_unused_level_is_caught(monkeypatch):
+    calls = []
+    _polr_categories_mutant(monkeypatch, calls, lambda y, keep_unused: (y, False))
+    test_l1_polr.check_case(POLR["polr_seed1"])  # every level is used
+    case = POLR["polr_unused_middle"]
+    steps, _ = test_l1_polr.replay(case)
+    assert calls, "mutant not applied: polr does not call imputation.polr.target_categories"
+    assert steps.prob.shape == (10, 3) and steps.fit.zeta.shape == (2,)
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):  # the deviance of another model
+        test_l1_polr.check_fit(case, steps)
+    with pytest.raises(AssertionError, match=r"\(shapes \(10, 3\), \(10, 4\) mismatch\)"):
+        test_l1_polr.check_prediction(case, steps)
+
+
+def test_polr_drawing_before_the_fit_is_caught_where_the_fit_stops(monkeypatch):
+    """The fits draw nothing, so where they succeed the same uniform numbers
+    reach the same cells. Where the fallback stops (too many weights), R has
+    drawn nothing, and the strict generator refuses the early draw."""
+    calls = []
+    drawn = []
+    current = {}
+    original = imputation.polr._fit_model
+
+    def drawing_first(*args, **kwargs):
+        rng, n = current["rng_and_n"]
+        drawn.append(rng.random(n))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(imputation.polr, "_fit_model", _counted(calls, drawing_first))
+    monkeypatch.setattr(imputation.polr, "_uniforms", lambda rng, n: drawn.pop())
+
+    def run(case):
+        y, ry, wy, x = test_l1_polr._inputs(case)
+        rng = test_l1_polr._scripted(case)
+        current["rng_and_n"] = (rng, case["n_imp"])
+        steps = imputation.polr._polr(y, ry, x, wy, case["maxit"], case["max_weights"], False, rng, None)
+        return steps, rng
+
+    case = POLR["polr_seed1"]
+    steps, rng = run(case)
+    assert calls, "mutant not applied: polr does not call imputation.polr._fit_model"
+    test_l1_polr.check_labels(case, steps)  # invisible where the fit succeeds
+    test_l1_polr.check_draws(case, rng)
+    with pytest.raises(AssertionError, match="code asked for 10 random draws, only 0 scripted left"):
+        run(POLR["polr_too_many_weights"])
