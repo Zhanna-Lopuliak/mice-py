@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ._helpers import MAXIT, N_IMP, assert_all_invariants, full_predictor_matrix, impute
+from ._helpers import MAXIT, N_IMP, assert_all_invariants, full_predictor_matrix, impute, register_imputer
 
 LOG_COLUMNS = ["it", "im", "dep", "meth", "out"]
 
@@ -103,7 +103,7 @@ def test_logged_events_check_df_and_rank_deficient_design():
     assert messages == ["Number of logged events: 6. See MICE.logged_events."]
 
 
-@pytest.mark.parametrize("method", ["pmm", "cart", "rf", "midas", "sample"])
+@pytest.mark.parametrize("method", ["pmm", "cart", "rf", "midas", "sample", "norm"])
 def test_no_events_no_warning(method):
     from ._helpers import numeric_frame
 
@@ -148,6 +148,66 @@ def test_entirely_missing_column_is_kept_not_imputed_and_logged():
 
 
 # ---------------------------------------------------------------------------
+# events logged by an imputer (R: polr falling back to multinom)
+# ---------------------------------------------------------------------------
+
+
+def _mean_of_observed(y, id_obs, id_mis):
+    return np.full(int(np.sum(id_mis)), np.asarray(y, dtype=float)[id_obs].mean())
+
+
+def _logging_imputer(y, id_obs, x, id_mis=None, rng=None, log_event=None):
+    """Logs one event per call."""
+    log_event(f"{int(np.sum(id_mis))} cells")
+    return _mean_of_observed(y, id_obs, id_mis)
+
+
+def _frame():
+    """``a``, ``b`` and ``c`` incomplete: 12 calls with two chains and two iterations."""
+    from ._helpers import numeric_frame
+
+    return numeric_frame(n=40)
+
+
+def test_imputer_with_log_event_adds_rows_to_logged_events(monkeypatch):
+    register_imputer(monkeypatch, "fake", _logging_imputer)
+    df = _frame()
+    mice, _, messages = _run(df, "fake")
+    n_mis = {col: int(df[col].isna().sum()) for col in ["a", "b", "c"]}
+    # sorted by iteration, then imputation, as R's loggedEvents
+    assert _events(mice) == {
+        "it": [1] * 6 + [2] * 6,
+        "im": [1, 1, 1, 2, 2, 2] * 2,
+        "dep": ["a", "b", "c"] * 4,
+        "meth": ["fake"] * 12,
+        "out": [f"{n_mis[col]} cells" for col in ["a", "b", "c"]] * 4,
+    }
+    assert messages == ["Number of logged events: 12. See MICE.logged_events."]
+
+
+def test_imputer_without_log_event_does_not_get_it(monkeypatch):
+    received = []
+
+    def imputer(y, id_obs, x, id_mis=None, rng=None, **kwargs):
+        received.append(sorted(kwargs))
+        return _mean_of_observed(y, id_obs, id_mis)
+
+    register_imputer(monkeypatch, "fake", imputer)
+    mice, _, messages = _run(_frame(), "fake")
+    assert received == [[]] * 12
+    assert mice.logged_events.empty and not [m for m in messages if "logged events" in m]
+
+
+def test_log_event_is_not_a_user_parameter(monkeypatch):
+    from imputation.utils import get_imputer_params
+
+    register_imputer(monkeypatch, "fake", _logging_imputer)
+    assert get_imputer_params("fake") == []
+    with pytest.raises(TypeError, match="Method 'fake' takes no parameters"):
+        impute(_frame(), "fake", n_imputations=1, maxit=1, fake_log_event=print)
+
+
+# ---------------------------------------------------------------------------
 # a predictor that is not imputed
 # ---------------------------------------------------------------------------
 
@@ -164,7 +224,7 @@ def _empty_method_predictor_frame():
     return df
 
 
-@pytest.mark.parametrize("method", ["pmm", "cart", "rf", "midas", "sample"])
+@pytest.mark.parametrize("method", ["pmm", "cart", "rf", "midas", "sample", "norm", "mean"])
 def test_predictor_with_empty_method_leaves_its_missing_rows_untouched(method, monkeypatch):
     """``z`` has method "" but predicts ``y``. As in R's sampler.univ, a row
     whose design has a missing value is left out of the model (also as a
@@ -202,7 +262,13 @@ def test_predictor_with_empty_method_leaves_its_missing_rows_untouched(method, m
         assert completed.loc[df["y"].isna() & ~both, "y"].notna().all()
         assert completed["z"].isna().sum() == df["z"].isna().sum()
         imputed = completed.loc[df["y"].isna() & ~both, "y"]
-        assert imputed.isin(df["y"].dropna()).all()
+        if method == "mean":
+            # the mean of the 50 rows in the model, not of all observed y
+            np.testing.assert_allclose(imputed, df.loc[df["y"].notna() & df["z"].notna(), "y"].mean(), rtol=1e-12)
+        elif method == "norm":
+            assert np.isfinite(imputed).all()
+        else:
+            assert imputed.isin(df["y"].dropna()).all()
         pd.testing.assert_frame_equal(completed[df.notna()], df[df.notna()])
 
 
@@ -307,7 +373,7 @@ def _direct_problem():
     return y, ry, x
 
 
-@pytest.mark.parametrize("method", ["pmm", "midas", "cart", "rf"])
+@pytest.mark.parametrize("method", ["pmm", "midas", "cart", "rf", "norm"])
 def test_direct_call_with_categorical_dataframe_equals_design_matrix(method):
     """A DataFrame with non-numeric predictors goes through obtain_design, so a
     direct call gives what a call with the design matrix gives."""
@@ -321,7 +387,10 @@ def test_direct_call_with_categorical_dataframe_equals_design_matrix(method):
     from_frame = imputer(y, ry, x, rng=np.random.default_rng(4))
     from_design = imputer(y, ry, design.to_numpy(), rng=np.random.default_rng(4))
     np.testing.assert_array_equal(from_frame, from_design)
-    assert np.isin(from_frame, y[ry]).all()
+    if method == "norm":
+        assert np.isfinite(from_frame).all()
+    else:
+        assert np.isin(from_frame, y[ry]).all()
 
 
 @pytest.mark.parametrize("method", ["cart", "rf"])
@@ -419,9 +488,10 @@ def test_complete_rows_in_predictor_matrix_do_not_warn():
 
 
 def test_defaults_follow_r():
-    """Without arguments: pmm for every incomplete column (R uses pmm for
-    numeric columns; the port has no logreg / polyreg, so categorical columns
-    get pmm too), five iterations, data order and the full predictor matrix."""
+    """Without arguments: the method of each column's type as R's make.method
+    (pmm for numeric columns, polyreg for the text column and the unordered
+    Categorical with three categories), five iterations, data order and the
+    full predictor matrix."""
     from imputation import MICE
 
     from ._helpers import mixed_frame
@@ -431,7 +501,7 @@ def test_defaults_follow_r():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
         out = mice.impute(n_imputations=1, seed=1)
-    assert mice.method == {"a": "pmm", "b": "pmm", "g": "pmm", "h": "pmm", "d": ""}
+    assert mice.method == {"a": "pmm", "b": "pmm", "g": "polyreg", "h": "polyreg", "d": ""}
     assert mice.maxit == 5
     assert mice.chain_mean["a"].shape == (5, 1)
     assert mice.visit_sequence == ["a", "b", "g", "h"]
@@ -439,12 +509,16 @@ def test_defaults_follow_r():
     assert not out[0].isna().any().any()
 
 
-def test_method_dict_fills_unlisted_columns_with_pmm():
-    from ._helpers import numeric_frame
+def test_method_dict_fills_unlisted_columns_with_their_default():
+    """Numeric columns get pmm; other columns the default of their type."""
+    from ._helpers import numeric_frame, typed_frame
 
     df = numeric_frame(n=40)
     mice, _ = impute(df, {"a": "sample"}, n_imputations=1, maxit=1)
     assert mice.method == {"a": "sample", "b": "pmm", "c": "pmm", "d": "", "k": ""}
+    df = typed_frame()
+    mice, _ = impute(df, {"num": "norm", "three": "pmm"}, n_imputations=1, maxit=1)
+    assert mice.method == {"num": "norm", "flag": "logreg", "two": "logreg", "three": "pmm", "grade": "polr", "x": ""}
 
 
 def _visit_frame():

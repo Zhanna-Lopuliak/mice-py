@@ -1,0 +1,81 @@
+{
+  "description": "make.method(data) and make.method(data, defaultMethod = other_default) on one column of each type assign.method tells apart. types holds class(column)[1]; the Python test builds integer columns as Int64, logical ones as boolean, factors as Categoricals.",
+  "data": {
+    "columns": ["num", "int01", "lgl", "f2", "f3", "o2", "o4", "f3_unused", "f1", "chr", "complete"],
+    "nrow": 12,
+    "data": {
+      "num": [0.5, null, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6],
+      "int01": [0, 1, null, 1, 0, 1, 0, 1, 0, 1, 0, 1],
+      "lgl": [true, false, false, null, false, false, true, false, false, true, false, false],
+      "f2": ["no", "yes", "no", "yes", null, "yes", "no", "yes", "no", "yes", "no", "yes"],
+      "f3": ["a", "b", "c", "a", "b", null, "a", "b", "c", "a", "b", "c"],
+      "o2": ["lo", "hi", "lo", "hi", "lo", "hi", null, "hi", "lo", "hi", "lo", "hi"],
+      "o4": ["p", "q", "r", "s", "p", "q", "r", null, "p", "q", "r", "s"],
+      "f3_unused": ["a", "c", "a", "c", "a", "c", "a", "c", null, "c", "a", "c"],
+      "f1": ["only", "only", "only", "only", "only", "only", "only", "only", "only", null, "only", "only"],
+      "chr": ["u", "v", "w", "u", "v", "w", "u", "v", "w", "u", null, "w"],
+      "complete": [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.25, 2.5, 2.75, 3]
+    },
+    "levels": {
+      "f2": ["no", "yes"],
+      "f3": ["a", "b", "c"],
+      "o2": ["lo", "hi"],
+      "o4": ["p", "q", "r", "s"],
+      "f3_unused": ["a", "b", "c"],
+      "f1": ["only"]
+    },
+    "ordered": {
+      "f2": false,
+      "f3": false,
+      "o2": true,
+      "o4": true,
+      "f3_unused": false,
+      "f1": false
+    }
+  },
+  "types": {
+    "num": "numeric",
+    "int01": "integer",
+    "lgl": "logical",
+    "f2": "factor",
+    "f3": "factor",
+    "o2": "ordered",
+    "o4": "ordered",
+    "f3_unused": "factor",
+    "f1": "factor",
+    "chr": "character",
+    "complete": "numeric"
+  },
+  "default_method": ["pmm", "logreg", "polyreg", "polr"],
+  "method": {
+    "num": "pmm",
+    "int01": "pmm",
+    "lgl": "logreg",
+    "f2": "logreg",
+    "f3": "polyreg",
+    "o2": "logreg",
+    "o4": "polr",
+    "f3_unused": "polyreg",
+    "f1": "pmm",
+    "chr": "pmm",
+    "complete": ""
+  },
+  "other_default_method": ["norm", "logreg.boot", "cart", "polyreg"],
+  "method_other": {
+    "num": "norm",
+    "int01": "norm",
+    "lgl": "logreg.boot",
+    "f2": "logreg.boot",
+    "f3": "cart",
+    "o2": "logreg.boot",
+    "o4": "polyreg",
+    "f3_unused": "cart",
+    "f1": "norm",
+    "chr": "norm",
+    "complete": ""
+  },
+  "meta": {
+    "r": "R version 4.6.2 (2026-10-29)",
+    "mice": "3.19.0"
+  }
+}

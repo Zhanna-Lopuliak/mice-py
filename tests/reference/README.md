@@ -11,6 +11,8 @@ fixtures are committed, so the Python tests run without R.
 |---|---|
 | R | 4.6.2 |
 | mice | 3.19.0 (asserted by `r/_common.R`; the scripts stop on any other version) |
+| nnet | 7.3-21 (recorded in `l1_polyreg.json` and `l1_polr.json`) |
+| MASS | 7.3-66 (recorded in `l1_polr.json`) |
 | jsonlite | as installed with R 4.6.2 |
 | Random numbers | `RNGkind("Mersenne-Twister", "Inversion", "Rejection")`, R's default, set in `r/_common.R` |
 
@@ -47,6 +49,9 @@ uv run pytest tests/test_parity -m parity                      # all parity test
 | Fixture | `fixtures/l<layer>_<topic>[_<part>].json` | `fixtures/l1_pmm_one_donor.json` |
 | Python test | `tests/test_parity/test_l<layer>_<topic>.py` | `test_l1_pmm.py` |
 
+A topic named after a mice method with dots uses underscores instead:
+`r/l2_norm_nob.R` writes `fixtures/l2_norm_nob.json` for `norm.nob`.
+
 Layers: `l1` exact parity on deterministic pieces, `l2` distribution parity,
 `l3` the in-suite part of the simulation study. Files starting with `_` are
 helpers and are not run by `generate_all.R`.
@@ -79,16 +84,28 @@ Written by `write_fixture(name, payload)` in `r/_common.R` and read by
 | `l1_quantify` | `mice:::quantify(y, ry, x)` | `imputation.PMM.quantify` (equal up to sign) |
 | `l1_pmm_one_donor` | `mice.impute.pmm(y, ry, x, donors = 1, matchtype)` with captured draws | `imputation.PMM.pmm` |
 | `l1_matchindex` | donors reached by 2000 calls of `matchindex(d, t, k)` | `imputation.PMM.matchindex` |
-| `l1_setup` | `mice(data, maxit = 0)`: method, predictorMatrix, visitSequence, loggedEvents | `MICE.impute`: `.method`, `.predictor_matrix`, `.visit_sequence` |
+| `l1_setup` | `mice(data, maxit = 0)`: method, predictorMatrix, visitSequence, loggedEvents | `MICE.impute`: `.method`, `.predictor_matrix`, `.visit_sequence`; `imputation.make_method` |
+| `l1_make_method` | `make.method(data)` and `make.method(data, defaultMethod = ...)` on one column of each type `assign.method` tells apart (numeric, integer 0/1, logical, factors with 1, 2 and 3 levels, a factor with 3 declared and 2 observed levels, ordered factors with 2 and 4 levels, character, complete), with `class()` of each column | `imputation.make_method` |
 | `l1_design` | `mice:::obtain.design`, `mice:::remove.lindep`, `mice:::find.collinear` | `imputation.design` |
 | `l1_quickpred` | `quickpred(data, ...)` on nhanes and boys | `imputation.quickpred` |
 | `l1_md_pattern` | `md.pattern(data, plot = FALSE)` | `plotting.utils.md_pattern_like` |
 | `l1_pooling` | `pool()`, `summary(pool(), type = "all", conf.int = TRUE)`, `pool.table()`, `mice:::barnard.rubin()` | `imputation.pooling.barnard_rubin` / `pool_estimates`; `MICE.fit` / `MICE.pool` on R's completed datasets |
 | `l1_midastouch` | `mice.impute.midastouch()` with a `trace()` exit hook capturing `probs`, `midas.kappa`, `omega` | `imputation.midas._donor_probabilities` |
+| `l1_norm` | `mice.impute.norm()`, `.norm.nob()`, `.norm.boot()`, `.norm.predict()`, `.mean()` with every draw captured by re-seeding (`rchisq`, `rnorm`, `sample` as 0-based indices) and the expected order of the draws | `imputation.norm.norm` / `norm_nob` / `norm_boot` / `norm_predict`, `imputation.mean.mean`, driven by a strict `ScriptedGenerator` |
+| `l1_augment` | `mice:::augment(y, ry, x, wy)`: the added rows, their targets and weights, `ry`, `wy`, the level order afterwards | `imputation.logreg.augment` on the codes R sees, `imputation.logreg.target_categories` |
+| `l1_logreg` | `mice.impute.logreg()`, `.logreg.boot()` with every draw captured by re-seeding (`rnorm`, `sample` as 0-based indices, `runif`), rebuilt from `augment()`, `glm.fit()` and `summary.glm()`: coefficients, `cov.unscaled`, iterations, convergence, `beta.star`, probabilities, labels; R's errors where the port goes on | `imputation.logreg._logreg` / `_logreg_boot` (the steps of `logreg` / `logreg_boot`), driven by a strict `ScriptedGenerator` |
+| `l1_vmmin` | `optim(par, fn, gr, method = "BFGS")` (R's C function `vmmin`, which `nnet` and `MASS::polr` call too) on a quadratic, Rosenbrock's function, a logistic likelihood, a function that is NaN outside its domain and one started at its minimum, with other `maxit`, `abstol` and `reltol`: parameters, value, function and gradient counts, convergence | `imputation.fitting.vmmin` |
+| `l1_polyreg` | `mice.impute.polyreg()` with its uniform numbers captured by re-seeding, rebuilt from `augment()`, `nnet::multinom()` and `predict()`: objective, convergence, coefficients, probabilities of every imputed cell, labels; R's errors where the port goes on or stops; direct `nnet::multinom()` fits (two classes on separated data, case weights) | `imputation.polyreg._polyreg` (the steps of `polyreg`), driven by a strict `ScriptedGenerator`; `imputation.fitting.multinom_fit` |
+| `l1_polr` | `mice.impute.polr()` with its uniform numbers captured by re-seeding, rebuilt from `augment()`, `MASS::polr()` or `nnet::multinom()` and the cumulative rule: the class of the fit R made and polr's error (the reason for the fallback), coefficients, cut points, deviance (objective), convergence, probabilities of every imputed cell, labels; R's errors or other results where the port goes on or stops; direct `MASS::polr()` fits (case weights, 3 and 5 levels, no predictor, an aliased column) and the conditions under which it stops | `imputation.polr._polr` (the steps of `polr`), driven by a strict `ScriptedGenerator`; `imputation.fitting.polr_fit` |
 
 Behaviours of R mice 3.19.0 that the fixtures pin down and that are easy to
 get wrong:
 
+- `make.method()` counts the declared levels of a factor (`nlevels`), unused
+  ones included, and gives a character column the first default method
+  whatever its values (`l1_make_method`); `mice()` then finds that column
+  constant and does not impute it. mice-py treats text as an unordered
+  factor of its distinct values.
 - `visitSequence` from `mice()` can list variables that are never imputed:
   complete variables for the default order and for `"monotone"` /
   `"revmonotone"`, and variables whose method `mice.edit.setup()` set to `""`
@@ -106,9 +123,132 @@ get wrong:
   `several_dependencies` pin that result.
 - `estimice(ls.meth = "svd")` fails in R for a one-column `x`; that case is
   not in the fixture.
+- `norm.nob` and `norm.boot` divide the residual sum of squares by
+  `n1 - q - 1`, one less than the usual df, and return `Inf` when that is 0
+  (case `norm_nob_tiny`); `norm.boot` without predictors stops with
+  `'x' must be a matrix` after drawing its bootstrap sample (case
+  `norm_boot_no_predictor`, which stores the intercept-only result that
+  mice-py computes instead).
 - `vcov()` of a `glm` fitted with the default `epsilon = 1e-8` is about 1e-5
   (relative) away from the inverse information at the MLE. The logistic model
   in `l1_pooling` uses `glm.control(epsilon = 1e-14)`.
+- `nnet::multinom` stops where `vmmin`'s tolerances (`abstol = 1e-4`,
+  `reltol = 1e-8`) or `maxit` stop it, 1e-5 to 1e-4 (in the probabilities)
+  away from the maximum of the likelihood, without an error at the
+  iteration limit (case `polyreg_maxit`). Two classes are fitted with one
+  logistic unit whose output is exactly 0 or 1 beyond an activation of 15
+  (`two_classes_separated`). Without predictors mice adds a constant column
+  next to the intercept (`polyreg_no_predictor`).
+- `mice.impute.polyreg` draws its uniform numbers before it checks for a
+  single observed category (`polyreg_one_category`), and stops on two
+  categories with one missing value, on an ordered factor with an unused
+  level, and on a level held only by unobserved cells where it does not
+  augment; those cases store R's error and the port's result.
+- `MASS::polr` counts every declared level of an ordered factor and gives
+  one without rows a small positive probability (`polr_unused_middle`,
+  `polr_unused_end`). It stops on a target that is not a factor (numeric,
+  logical, and character: mice's `augment()` leaves text as text), on fewer
+  than 3 levels, when the logistic regression behind its start values does
+  not converge, and when its objective is not finite at the start values;
+  `mice.impute.polr` then fits `nnet::multinom` (the `polr_error` of a
+  case). Without predictors both fits fail and mice stops; those cases
+  store the port's result, the model without predictors
+  (`polr_no_predictor`) or its fallback on the intercept
+  (`polr_no_predictor_two_levels`). `mice.impute.polr` draws its uniform numbers after
+  the fit, so where the fallback stops (`polr_too_many_weights`) R has drawn
+  nothing.
+- The function counts of `vmmin` can depend on the last bits of the values
+  where a search ends with a restart along the previous gradient; R's C code
+  (fused multiply-adds) and NumPy then differ by a few evaluations. The
+  cases of `l1_vmmin` avoid that ending (see the script).
+
+## Layer 2 fixtures
+
+Each `l2_<method>` fixture comes from `l2_method_fixture()` in
+`r/_l2_common.R`: one `set.seed` per input, then many calls of
+`mice.impute.<method>(y, ry, x)` on fixed inputs with 40 observed and 20
+missing values (F1 to F7, defined in that file and stored in the fixture).
+Per input it holds the input, the seed, `n_calls` and statistics whose form
+depends on the kind of the method (`kind` at the top of the fixture; a
+fixture without it is of the donor kind):
+
+- **donor** (the imputations are observed values or levels): `counts`, the
+  number of times each observed value (or level) was drawn per missing cell;
+  for a numeric target also `cell` (mean, variance, kurtosis of the imputed
+  value per cell) and `coef` (the same for each OLS coefficient of the
+  completed y on `[1, x]`, one fit per call).
+- **continuous** (the imputations are new numbers): `cell` and `coef` as
+  above, and `bins`: per cell the nine decile edges of R's draws
+  (`quantile(type = 7)`) and the number of R's draws in each of the ten bins
+  `[edge j-1, edge j)` as `findInterval()` counts them. The raw draws are not
+  stored.
+- **category** (the imputations are labels drawn from a fitted model, for a
+  factor target): `counts`, the number of times each level was drawn per
+  missing cell (as for a donor method on a factor target), and `coef`: per
+  call, the 0/1 indicator of each level but the first in the completed
+  target is regressed on `[1, x]` by OLS, and the mean, variance and
+  kurtosis of every coefficient over the calls are stored with its name
+  `<level>:<term>` (for example `yes:x1`). The coefficients see the
+  dependence between the cells of one call that a shared parameter draw or
+  bootstrap sample creates; there are no moments per cell. The donor
+  fixtures with a factor target (F3) keep the donor kind and only `counts`;
+  `l2_polyreg` on F3 is of the category kind.
+
+The inputs F5 and F6 have a binary factor target with the levels `no` and
+`yes` (lowercase ASCII, so their sort order does not depend on the locale)
+and two numeric predictors `x1`, `x2`, independent standard normal in the
+observed rows:
+
+- **F5**: `P(yes) = plogis(-0.3 + 1.5 x1 - x2)`. Ten of the missing rows lie
+  in the bulk; the other ten lie far out near the line where that linear
+  predictor is 0 (`|x1|` between 1 and 2, on both sides), where the labels
+  depend on the poorly determined slopes. The script asserts that each level
+  is observed at least 12 times and that the plain logistic fit of the
+  observed rows (`glm.fit`, no augmentation) converges with coefficients
+  below 5 in absolute value, so the observed rows are not separated.
+- **F6**: `yes` exactly where `x1 > 0`, so the observed rows are perfectly
+  separated by `x1`; `x2` is noise. Eight of the missing rows lie within 0.3
+  of the boundary, the others spread out. The script asserts the separation
+  (after rounding), at least 12 observations per level, at least 5 missing
+  rows on each side, and that the plain logistic fit of the observed rows
+  diverges (not converged or a coefficient above 10). Only `logreg`, which
+  augments the data, is run on it.
+
+F7 has an ordered factor target with the levels `a < b < c < d` (the input
+carries `"ordered": true`, which only an ordered target has, and the tests
+rebuild it as an ordered `pd.Categorical`) and two independent standard
+normal predictors `x1`, `x2`. It is drawn from a multinomial model that is
+not a proportional-odds model: `x1` moves the outer levels `a` and `d`
+against the inner ones, `x2` the upper levels against the lower ones. The
+script asserts that each level is observed at least 6 times and that the
+proportional-odds fit of `mice.impute.polr` and the multinomial fit of
+`mice.impute.polyreg` (both on mice's augmented data) predict probabilities
+for the missing rows that differ by at least 0.15 (they differ by up to
+0.50).
+
+| Fixture | Kind | Inputs | R calls per input |
+|---|---|---|---|
+| `l2_pmm` | donor | F1 to F4 | 20,000 |
+| `l2_midastouch` | donor | F1, F2, F4 | 20,000 |
+| `l2_cart` | donor, plus the donors reached in the first 2,000 calls | F1 to F4 | 20,000 |
+| `l2_rf` | donor | F1 to F4 | 5,000 |
+| `l2_sample` | donor | F1, F3 | 20,000 |
+| `l2_norm` | continuous | F1, F4 | 20,000 |
+| `l2_norm_nob` | continuous | F1 | 20,000 |
+| `l2_norm_boot` | continuous | F1 | 20,000 |
+| `l2_logreg` | category | F5, F6 | 20,000 |
+| `l2_logreg_boot` | category | F5 | 20,000 |
+| `l2_polyreg` | category | F3 | 20,000 |
+| `l2_polr` | category | F7 | 20,000 |
+
+`l2_chain` (200 full `mice()` chains with pmm), `l2_chain_default` (200 full
+`mice()` chains with the default methods pmm, logreg, polyreg and polr on a
+mixed frame of 100 rows: per statistic of the last iteration, the mean,
+variance and kurtosis over the chains of the mean and variance of the
+imputed numeric values and of the share of each level but the first among
+the imputed labels) and `l3_mini_s4` (scenario S4 of the simulation study
+with pmm, midastouch and norm, 20,000 replications) have their own formats,
+described at the top of their scripts.
 
 ## Licence
 

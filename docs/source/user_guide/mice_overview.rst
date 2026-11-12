@@ -13,8 +13,9 @@ from the others, and cycles through the variables several times. mice-py
 follows R's ``mice()``:
 
 1. **Setup.** Variables that are constant or collinear are removed from the
-   imputation model (details below). Each incomplete column gets a method;
-   complete columns get ``""``.
+   imputation model (details below). Each incomplete column gets a method,
+   by default the one R chooses for its type (``"pmm"``, ``"logreg"``,
+   ``"polyreg"`` or ``"polr"``); complete columns get ``""``.
 2. **Initial values.** Each chain fills the missing values of every column it
    imputes with random draws from that column's observed values
    (``initial="sample"``).
@@ -23,7 +24,8 @@ follows R's ``mice()``:
    design matrix of its predictors from the current completed data (dummy
    coding categorical predictors as R's ``model.matrix``), drops predictors
    that are constant or linearly dependent, and calls the method, which
-   draws new values for the missing cells from the observed rows.
+   fits its model to the observed rows and draws new values for the missing
+   cells.
 4. **Several chains.** Steps 2 and 3 run ``n_imputations`` times, each chain
    with its own random stream. The final state of each chain is one
    completed dataset.
@@ -58,10 +60,13 @@ Arguments of ``impute``
      - Iterations per chain; at least 1.
    * - ``method``
      - ``None``
-     - ``"pmm"``, ``"midas"``, ``"cart"``, ``"rf"``, ``"sample"`` or ``""``
-       (do not impute); a string for all columns or a dict per column.
-       ``None`` and columns left out of a dict mean ``"pmm"``. See
-       :doc:`imputation_methods`.
+     - A method name (``"pmm"``, ``"norm"``, ``"logreg"``, ``"polyreg"``,
+       ...; R's names, dots included) or ``""`` (do not impute); a string
+       for all columns or a dict per column. ``None`` and columns left out
+       of a dict get the default of their type: ``"pmm"`` for numeric,
+       ``"logreg"`` for boolean or two categories, ``"polyreg"`` for
+       unordered categorical or text, ``"polr"`` for ordered categorical
+       columns. See :doc:`imputation_methods`.
    * - ``predictor_matrix``
      - ``None``
      - 0/1 data frame, rows are targets, columns predictors. ``None`` means
@@ -82,10 +87,16 @@ Arguments of ``impute``
      - Seed of the random number generators. ``None``: different results on
        every call. With a seed the call is reproducible, and chain *k* gets
        the same stream whatever ``n_imputations`` is.
+   * - ``default_method``
+     - ``("pmm", "logreg", "polyreg", "polr")``
+     - The defaults by column type, in the order above (R's
+       ``defaultMethod``).
    * - ``<method>_<parameter>``
      -
-     - A parameter of a method, for example ``pmm_donors=3`` or
-       ``rf_n_estimators=50``. An unknown name raises ``TypeError``.
+     - A parameter of a method, for example ``pmm_donors=3``,
+       ``rf_n_estimators=50`` or ``norm_boot_ridge=1e-4`` (a dot in the
+       method name becomes an underscore). An unknown name raises
+       ``TypeError``.
 
 .. code-block:: python
 
@@ -112,7 +123,8 @@ After a run
      - The completed datasets, a list of data frames with the original
        columns, dtypes and index.
    * - ``method``
-     - The method of each column (``""`` for columns not imputed).
+     - The method of each column (``""`` for columns not imputed), in R's
+       names.
    * - ``predictor_matrix``
      - The predictor matrix after the setup step: square, in data order.
    * - ``visit_sequence``
@@ -171,9 +183,12 @@ Supported column types
 
 Numeric (including pandas ``Int64`` and ``Float64``), boolean, categorical
 (ordered or not), object and string columns. Object and string columns are
-treated as categorical, with their sorted values as levels. Other dtypes
-(dates, durations, complex numbers) raise ``TypeError`` in ``MICE()``;
-convert them first. Imputed columns keep their dtype.
+treated as unordered categorical, with their sorted values as levels.
+Other dtypes (dates, durations, complex numbers) raise ``TypeError`` in
+``MICE()``; convert them first. Imputed columns keep their dtype, except
+that a nullable integer column (``Int64``, ...) imputed with ``"norm"``,
+``"norm.nob"``, ``"norm.boot"``, ``"norm.predict"`` or ``"mean"`` becomes
+``Float64``: these methods impute new values, not observed ones.
 
 Imputation model and analysis model
 -----------------------------------

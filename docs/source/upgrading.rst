@@ -1,14 +1,133 @@
+Upgrading
+=========
+
+This page lists what an existing user has to know when moving from one
+version to the next; the complete list is in the `changelog
+<https://github.com/Zhanna-Lopuliak/mice-py/blob/main/CHANGELOG.md>`_. To
+move from 0.1 to 0.3, read both sections.
+
+Upgrading from 0.2 to 0.3
+-------------------------
+
+Version 0.3.0 adds nine of R mice's model-based methods (``norm``,
+``norm.nob``, ``norm.boot``, ``norm.predict``, ``mean``, ``logreg``,
+``logreg.boot``, ``polyreg``, ``polr``; see
+:doc:`user_guide/imputation_methods`) and, as R does, chooses the default
+method of a column by its type. Code written for 0.2 still runs, but **its
+results change** when the data have incomplete boolean, categorical or text
+columns whose method the call does not name. Data whose incomplete columns
+are all numeric give the same results as in 0.2.
+
+Default methods by column type
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 46 18 36
+
+   * - Incomplete column
+     - 0.2
+     - 0.3 (R's default)
+   * - numeric (also ``Int64``, ``Float64``)
+     - ``"pmm"``
+     - ``"pmm"``
+   * - boolean, or with two categories
+     - ``"pmm"``
+     - ``"logreg"``
+   * - unordered categorical, object or string, more than two categories
+     - ``"pmm"``
+     - ``"polyreg"``
+   * - ordered categorical, more than two categories
+     - ``"pmm"``
+     - ``"polr"``
+   * - categorical with a single category
+     - ``"pmm"``
+     - ``"pmm"``
+
+The categories of a ``category`` column are its declared categories, unused
+ones included, as R counts the levels of a factor; those of an object or
+string column are its distinct observed values. ``imputation.make_method(df)``
+shows the method each column gets, and ``mice.method`` the methods a run used.
+
+The defaults apply to ``impute()`` without ``method``, **and also to the
+columns a method dict leaves out**. A ``method`` string (``method="cart"``) still
+applies to every column. With the :ref:`example data <example-data>` the
+text column ``sex`` (``"f"``, ``"m"``) is now imputed with ``logreg``.
+
+To keep the methods of 0.2:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 45 55
+
+   * - Call in 0.2
+     - Call in 0.3 with the methods of 0.2
+   * - ``impute()``
+     - ``impute(method="pmm")``
+   * - ``impute(method={"chl": "midas"})``
+     - ``impute(method={"chl": "midas"}, default_method=("pmm",) * 4)``
+
+``default_method`` is R's ``defaultMethod``: the methods of numeric columns,
+of columns with two categories, of unordered and of ordered categorical
+columns with more categories, in this order. With the same seed these calls
+give the imputations of 0.2 (checked on the example data).
+
+Other changes that can affect a 0.2 script
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- **More than 50 categories.** A text or categorical column with more than
+  50 distinct observed values, for example a column of names or
+  identifiers, now gets ``polyreg`` (``polr`` if it is ordered) by default,
+  and R limits these methods to 50 categories. ``impute`` raises
+  ``ValueError`` naming the column before the chains start (0.2 imputed it
+  with ``pmm``). Give the column a donor method,
+  ``method={"name": "pmm"}``, or remove it from the data if it only
+  identifies the rows.
+- **Text columns are unordered categorical variables**, as everywhere in
+  mice-py, so an incomplete text column gets ``logreg`` or ``polyreg`` by its
+  number of distinct values. R gives a character column ``pmm`` and then
+  does not impute it (its setup step finds the column constant); see
+  :doc:`r_mice/differences`.
+- **Nullable integer columns.** A column of dtype ``Int64`` (or another
+  nullable integer dtype) imputed with ``norm``, ``norm.nob``, ``norm.boot``,
+  ``norm.predict`` or ``mean`` comes back as ``Float64``, because these
+  methods impute new values, not observed ones; R turns an integer column
+  into double as well. Float columns keep their dtype, and the default
+  ``pmm`` keeps integers.
+- **polr can impute a level that never occurs.** Under ``polr`` an ordered
+  column may receive any of its declared categories, also one that has no
+  observed value: the model gives such a level a small positive probability,
+  as R's ``MASS::polr`` does. Remove unused categories
+  (``Series.cat.remove_unused_categories()``) if that is not wanted.
+- **Checks before the chains start.** ``norm``, ``norm.nob``, ``norm.boot``,
+  ``norm.predict`` or ``mean`` on a boolean, categorical or text column,
+  and ``logreg`` or ``logreg.boot`` on a column with more than two distinct
+  observed values, raise ``ValueError`` with the column named.
+- **Errors inside a chain name the column.** A ``ValueError`` raised by a
+  method starts with "Column 'c', method 'm' (iteration i, imputation k):".
+  Code that matches the text of such an error has to allow for the prefix.
+
+New warning: ``logreg``, ``logreg.boot``, ``polyreg`` or ``polr`` on a
+numeric column is allowed, with R's ``UserWarning`` "Type mismatch for
+variable(s): <column>", followed on a second line by "Imputation method
+<method> is for categorical data.". The imputations are the column's own
+values.
+
+Method parameters of the new methods carry the method name with every dot
+replaced by an underscore: ``norm_boot_ridge=1e-4``, ``polyreg_maxit=200``,
+``polr_log_fallback=True``. The deprecated arguments ``min_cor``,
+``min_puc``, ``include``, ``exclude`` and ``correlation_method`` of
+``impute`` still work in 0.3 and will be removed in version 0.4.
+
 Upgrading from 0.1 to 0.2
-=========================
+-------------------------
 
 Version 0.2.0 aligns mice-py with R mice 3.19.0. Code written for 0.1 mostly
 still runs, but **its results change**, a few names moved, and some arguments
-that were silently ignored now raise an error. This page lists what an
-existing user has to know; the complete list is in the `changelog
-<https://github.com/Zhanna-Lopuliak/mice-py/blob/main/CHANGELOG.md>`_.
+that were silently ignored now raise an error.
 
 Results change
---------------
+~~~~~~~~~~~~~~
 
 Expect different imputations, and therefore different pooled estimates, for
 the same code. Three things cause it.
@@ -87,7 +206,7 @@ fraction of missing information is now R's ``fmi``; the value 0.1 reported
 under that name is R's ``lambda``, now in the ``"table"`` under that name.
 
 Names that moved or were removed
---------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. list-table::
    :header-rows: 1
@@ -131,7 +250,7 @@ Names that moved or were removed
      - ``uv sync`` (the ``dev`` extra is now a dependency group)
 
 Arguments that now raise
-------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~
 
 Calls that 0.1 accepted, and often ignored, now fail:
 
@@ -173,7 +292,7 @@ value and for ``pool()`` with a single imputation; ``DeprecationWarning``
 for the deprecated arguments above.
 
 Logging and plots
------------------
+~~~~~~~~~~~~~~~~~
 
 - The package's log records now propagate to the root logger (0.1 stopped
   them at the ``imputation`` logger). An application that configures the root
@@ -195,7 +314,7 @@ Logging and plots
   twice (once drawn, once as the returned value); end the line with ``;``.
 
 Licence
--------
+~~~~~~~
 
 mice-py 0.2 is licensed under the GNU General Public License, version 2 or
 later (``GPL-2.0-or-later``), the licence of R mice, from which it is ported;
@@ -206,7 +325,7 @@ it, under a licence that is not compatible with the GPL: from 0.2 the
 conditions of the GPL apply to that distribution.
 
 A 0.1 script in 0.2
--------------------
+~~~~~~~~~~~~~~~~~~~
 
 A typical 0.1 call:
 

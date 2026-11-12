@@ -383,7 +383,8 @@ def _numeric_target(y: Any, id_obs: np.ndarray) -> np.ndarray:
     if kind not in ("floating", "integer", "mixed-integer-float", "boolean"):
         raise ValueError(
             f"Target y must be numeric for midas, got {kind} values. midas (R's midastouch) "
-            "predicts the target by linear regression; impute categorical or text columns "
-            "with pmm, cart, rf or sample."
+            "predicts the target by linear regression; impute a categorical or text column with "
+            "logreg or logreg.boot (two categories), polyreg (polr if it is ordered), or pmm, cart, "
+            "rf or sample."
         )
     return observed.astype(float)

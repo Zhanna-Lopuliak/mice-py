@@ -9,7 +9,8 @@ Multiple imputation and MICE
 
 **Rubin, D. B. (1987)**
    *Multiple Imputation for Nonresponse in Surveys*. New York: John Wiley &
-   Sons.
+   Sons. (p. 167: the Bayesian linear regression draw of ``pmm`` and
+   ``norm``.)
 
 **Barnard, J., & Rubin, D. B. (1999)**
    Small-sample degrees of freedom with multiple imputation. *Biometrika*,
@@ -29,7 +30,8 @@ Multiple imputation and MICE
 
 **Little, R. J. A., & Rubin, D. B. (2019)**
    *Statistical Analysis with Missing Data* (3rd ed.). Hoboken, NJ: John
-   Wiley & Sons.
+   Wiley & Sons. (The 2nd edition, 2002, pp. 61-62, is the reference of R's
+   ``mean`` method.)
 
 Imputation methods
 ------------------
@@ -51,6 +53,22 @@ Imputation methods
    interaction effects. *Computational Statistics & Data Analysis*, 72,
    92-104. (``cart`` and ``rf``)
 
+**White, I. R., Daniel, R., & Royston, P. (2010)**
+   Avoiding bias due to perfect prediction in multiple imputation of
+   incomplete categorical variables. *Computational Statistics & Data
+   Analysis*, 54, 2267-2275. (The augmentation of ``logreg``, ``polyreg``
+   and ``polr``.)
+
+**Venables, W. N., & Ripley, B. D. (2002)**
+   *Modern Applied Statistics with S* (4th ed.). New York: Springer. (The
+   book of the R packages MASS and nnet, whose ``polr`` and ``multinom``
+   are the fits of ``polr`` and ``polyreg``.)
+
+**Nash, J. C. (1990)**
+   *Compact Numerical Methods for Computers: Linear Algebra and Function
+   Minimisation* (2nd ed.). Adam Hilger. (The variable-metric
+   minimiser of R's ``optim``, ``imputation.fitting.vmmin``.)
+
 Citing mice-py
 --------------
 
@@ -61,7 +79,7 @@ Citing mice-py
      author = {Lopuliak, Zhanna and Vu, The Anh and Haensch, Anna-Carolina},
      year = {2025},
      url = {https://github.com/Zhanna-Lopuliak/mice-py},
-     version = {0.2.0}
+     version = {0.3.0}
    }
 
 and R mice, which mice-py ports:

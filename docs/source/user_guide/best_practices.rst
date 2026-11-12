@@ -13,7 +13,11 @@ Before imputing
 - Think about the mechanism: which observed variables could explain the
   missingness? Include them in the data.
 - Drop identifiers and columns that should not predict anything; convert
-  dates to numbers; give categorical variables a categorical dtype.
+  dates to numbers; give categorical variables a categorical dtype, and
+  declare ordered ones as ordered (``pd.Categorical(..., ordered=True)``),
+  so that they get R's default method for their type. A text column with
+  more than 50 distinct values, such as names, cannot be imputed with its
+  default ``polyreg``.
 - Create derived variables (sums, ratios, transformations) **after**
   imputation from the imputed variables, rather than imputing them as
   separate columns: a derived column and its sources would be imputed
@@ -22,13 +26,17 @@ Before imputing
 Imputing
 --------
 
-- Start with the defaults, which are R's: pmm, full predictor matrix,
-  ``maxit=5`` (:doc:`mice_overview`).
+- Start with the defaults, which are R's: the method by column type (pmm
+  for numeric, logreg, polyreg or polr for categorical columns), full
+  predictor matrix, ``maxit=5`` (:doc:`mice_overview`).
 - Pass a ``seed`` so that the analysis can be reproduced.
 - Read the warnings. "Number of logged events" means a variable was removed
-  from the model; see ``mice.logged_events``.
-- Choose methods per column where pmm is not suitable
-  (:doc:`imputation_methods`); midas does not take categorical targets.
+  from the model; see ``mice.logged_events``. "Type mismatch" means a
+  categorical method imputes a numeric column.
+- Choose methods per column where the default is not suitable
+  (:doc:`imputation_methods`); midas and the norm methods do not take
+  categorical targets. Avoid the improper methods ``norm.nob``,
+  ``norm.predict`` and ``mean`` for analyses.
 - With many variables, restrict the predictors (:doc:`predictor_matrices`).
 
 Checking

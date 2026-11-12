@@ -3,14 +3,18 @@
 Scenario S4 of the L3 study (``simulations/scenarios.py``): x1 and x2 standard
 normal with correlation 0.5, y = 0.5 + x1 + 0.5 x2 + e, n = 50, x1 missing
 completely at random with probability 0.5. Every replication draws a new
-dataset and imputes x1 m = 5 times through ``imputation.PMM.pmm`` and
-``imputation.midas.midas`` directly (x1 is the only incomplete column, so this
-is one MICE iteration). Analysis: OLS of y on x1 and x2.
+dataset and imputes x1 m = 5 times through ``imputation.PMM.pmm``,
+``imputation.midas.midas`` and ``imputation.norm.norm`` directly (x1 is the
+only incomplete column, so this is one MICE iteration). Analysis: OLS of y on
+x1 and x2.
 
 The reference ``l3_mini_s4`` holds the same quantities from 20,000 R
-replications through ``mice.impute.pmm`` and ``mice.impute.midastouch``
-(``tests/reference/r/l3_mini_s4.R``). Python runs 200 replications with fixed
-seeds, in about two seconds. Checks, per method:
+replications through ``mice.impute.pmm``, ``mice.impute.midastouch`` and
+``mice.impute.norm`` (``tests/reference/r/l3_mini_s4.R``). Python runs 200
+replications with fixed seeds, in about two seconds. Each method has its own
+generator per replication, ``default_rng([SEED, rep, method_index])``, so a
+method is added at the end of ``METHODS`` and the others keep their numbers.
+Checks, per method:
 
 - between-imputation variance B of the x1 coefficient:
   |log(mean B Python / mean B R)| <= 5 standard errors of the log ratio;
@@ -30,6 +34,7 @@ import numpy as np
 import pytest
 
 from imputation.midas import midas
+from imputation.norm import norm
 from imputation.PMM import pmm
 
 from ._helpers import load_fixture
@@ -42,10 +47,12 @@ REPS = 200
 SEED = 20261111
 TOLERANCE = 5.0  # standard errors
 
-#: Python function and R method name per study method.
+#: Python function and R method name per study method. Append new methods: the
+#: position is the method_index of the generator.
 METHODS = {
     "pmm": (pmm, "pmm"),
     "midas": (midas, "midastouch"),
+    "norm": (norm, "norm"),
 }
 
 

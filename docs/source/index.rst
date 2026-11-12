@@ -21,10 +21,16 @@ statsmodels.
 
 What it has:
 
-- **Imputation** with five of R mice's methods: predictive mean matching
-  (``pmm``, the default), ``midas`` (R's ``midastouch``), classification and
-  regression trees (``cart``), random forests (``rf``) and random draws
-  (``sample``); numeric, boolean and categorical columns.
+- **Imputation** with fourteen of R mice's methods, and R's default method
+  for each column type: predictive mean matching (``pmm``, the default for
+  numeric columns), ``midas`` (R's ``midastouch``), classification and
+  regression trees (``cart``), random forests (``rf``), random draws
+  (``sample``), linear regression (``norm``, ``norm.boot``, ``norm.nob``,
+  ``norm.predict``), the mean (``mean``), logistic regression (``logreg``,
+  ``logreg.boot``; the default for two categories), multinomial logistic
+  regression (``polyreg``; the default for unordered categories) and the
+  proportional-odds model (``polr``; the default for ordered categories);
+  numeric, boolean, categorical and text columns.
 - **R's model set-up**: full predictor matrix by default, ``quickpred``,
   removal of constant and collinear variables with logged events, R's dummy
   coding of categorical predictors.
@@ -34,12 +40,13 @@ What it has:
   density and scatter plots of observed and imputed values, trace plots.
 
 **Validated against R mice 3.19.0**: exact comparisons of the deterministic
-parts, the distribution of imputed values per method, and a simulation study
-in which both engines impute the same datasets. Every comparison agrees with
-R (the random ones within Monte Carlo error) except random forests with
-categorical predictors; see
-:doc:`r_mice/validation`. Version 0.2 changes results for users of 0.1; see
-:doc:`upgrading`.
+parts and, with R's random numbers replayed, of the model-based methods; the
+distribution of imputed values per method; and a simulation study in which
+both engines impute the same datasets. Every comparison agrees with R (within
+the tolerances of the tests, the random ones within Monte Carlo error)
+except random forests with categorical predictors; see
+:doc:`r_mice/validation`. Version 0.3 changes results for data with
+categorical columns, version 0.2 for users of 0.1; see :doc:`upgrading`.
 
 A first example is on :doc:`quickstart`.
 

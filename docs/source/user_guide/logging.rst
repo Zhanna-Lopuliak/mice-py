@@ -104,8 +104,9 @@ Warnings
 --------
 
 Independent of logging, ``impute`` issues a ``UserWarning`` when the setup
-step changed the model ("Number of logged events"), for rows without any
-observed value, and for more than 100 imputations or 50 iterations;
+step or a method changed the model ("Number of logged events"), for rows
+without any observed value, for a categorical method on a numeric column
+("Type mismatch"), and for more than 100 imputations or 50 iterations;
 ``pool`` warns for a single imputation; the plot functions warn when there
 is nothing to plot. Control them with the :mod:`warnings` module, for
 example ``warnings.simplefilter("ignore", UserWarning)`` inside a

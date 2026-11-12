@@ -10,10 +10,16 @@ frames, checked against R mice 3.19.0.
 
 ## What it does
 
-- **Imputation** with five of R mice's methods: predictive mean matching
-  (`pmm`, the default), `midas` (R's `midastouch`), classification and
-  regression trees (`cart`), random forests (`rf`) and random draws
-  (`sample`). Numeric, boolean and categorical columns.
+- **Imputation** with fourteen of R mice's methods, and R's default method
+  for each column type: predictive mean matching (`pmm`, the default for
+  numeric columns), `midas` (R's `midastouch`), classification and
+  regression trees (`cart`), random forests (`rf`), random draws (`sample`),
+  linear regression (`norm`, `norm.boot`, `norm.nob`, `norm.predict`), the
+  mean (`mean`), logistic regression (`logreg`, `logreg.boot`; the default
+  for two categories), multinomial logistic regression (`polyreg`; the
+  default for unordered categories) and the proportional-odds model (`polr`;
+  the default for ordered categories). Numeric, boolean, categorical and
+  text columns.
 - **R's model set-up**: full predictor matrix by default, `quickpred`,
   removal of constant and collinear variables (with R's logged events), R's
   dummy coding of categorical predictors.
@@ -24,18 +30,23 @@ frames, checked against R mice 3.19.0.
 
 ## Relation to R mice
 
-mice-py 0.2 was compared with R mice 3.19.0 (R 4.6.2) in four layers: exact
-comparisons of the deterministic parts, the distribution of the imputed
-values of each method, a simulation study in which both engines impute the
-same datasets, and tests of invariants. Every comparison with R agrees (the
-random ones within Monte Carlo error) except random forests with categorical
-predictors, where scikit-learn and ranger grow different trees. Details:
+mice-py 0.3 was compared with R mice 3.19.0 (R 4.6.2) in four layers: exact
+comparisons of the deterministic parts and, with R's random numbers
+replayed, of the model-based methods; the distribution of the imputed values
+of each method; a simulation study in which both engines impute the same
+datasets; and tests of invariants. Every comparison with R agrees (within
+the tolerances of the tests, the random ones within Monte Carlo error)
+except random forests with categorical predictors, where scikit-learn and
+ranger grow different trees. Where R stops or imputes unusable values,
+mice-py deliberately does something else. Details:
 [Validation against R mice](https://mice-py.readthedocs.io/en/latest/r_mice/validation.html)
 and [Differences from R mice](https://mice-py.readthedocs.io/en/latest/r_mice/differences.html).
 
-**Upgrading from 0.1:** version 0.2 uses R's defaults and corrects several
-methods, so results change. See
-[Upgrading from 0.1 to 0.2](https://mice-py.readthedocs.io/en/latest/upgrading.html)
+**Upgrading:** version 0.3 imputes boolean, categorical and text columns
+with R's default methods (`logreg`, `polyreg`, `polr`) instead of `pmm`, so
+results change for data with such columns; `method="pmm"` gives the methods
+of 0.2. Version 0.2 used R's defaults and corrected several methods of 0.1.
+See [Upgrading](https://mice-py.readthedocs.io/en/latest/upgrading.html)
 and the [changelog](CHANGELOG.md).
 
 ## Installation
@@ -61,7 +72,7 @@ df["y"] = 0.5 + df["x1"] + 0.5 * df["x2"] + rng.normal(size=n)
 df.loc[rng.random(n) < 0.3, "x1"] = np.nan
 
 mice = MICE(df)
-datasets = mice.impute(n_imputations=5, seed=1)  # pmm, 5 iterations: R's defaults
+datasets = mice.impute(n_imputations=5, seed=1)  # pmm (numeric data), 5 iterations: R's defaults
 mice.fit("y ~ x1 + x2")                          # OLS on each completed dataset
 print(mice.pool(summ=True))                      # Rubin's rules, Barnard-Rubin df
 ```
@@ -78,7 +89,7 @@ intervals) as a data frame.
 [quick start](https://mice-py.readthedocs.io/en/latest/quickstart.html) with
 diagnostics, the
 [user guide](https://mice-py.readthedocs.io/en/latest/user_guide/index.html)
-(methods and their parameters, predictor matrices, convergence, plots,
+(methods, their defaults and parameters, predictor matrices, convergence, plots,
 pooling, logging) and the
 [API reference](https://mice-py.readthedocs.io/en/latest/api/index.html). The
 sources are in `docs/source/`; example notebooks are in `examples/`.

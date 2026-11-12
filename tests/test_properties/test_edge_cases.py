@@ -5,22 +5,30 @@ Unless a test says otherwise, ``impute`` runs with the full predictor matrix
 datasets must satisfy every invariant of item 1.
 """
 
+import re
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from .._logged_events import impute_checking_log_warning
 from ._helpers import (
+    CATEGORICAL_METHODS,
     MAXIT,
     METHODS,
     N_IMP,
+    NUMERIC_MODEL_METHODS,
+    TWO_CATEGORY_METHODS,
     assert_all_invariants,
     full_predictor_matrix,
     impute,
+    imputes_observed_values,
     method_params,
     numeric_frame,
     pmm_reference_frame,
     regression_frame,
+    typed_frame,
 )
 
 NON_MIDAS = ("pmm", "cart", "rf", "sample")
@@ -29,7 +37,7 @@ NON_MIDAS = ("pmm", "cart", "rf", "sample")
 def _check(df, method, n_imputations=N_IMP, maxit=MAXIT, **kwargs):
     before = df.copy(deep=True)
     mice, out = impute(df, method, n_imputations=n_imputations, maxit=maxit, **kwargs)
-    assert_all_invariants(df, before, mice, out, n_imputations, maxit)
+    assert_all_invariants(df, before, mice, out, n_imputations, maxit, donor=imputes_observed_values(method))
     return mice, out
 
 
@@ -196,17 +204,27 @@ def test_incomplete_duplicated_column(method):
     df["x1_copy"] = df["x1"]
     before = df.copy(deep=True)
     mice, out = impute(df, method)
-    assert_all_invariants(df, before, mice, out, N_IMP, MAXIT, allow_unimputed={"x1_copy"})
+    assert_all_invariants(
+        df, before, mice, out, N_IMP, MAXIT, donor=imputes_observed_values(method), allow_unimputed={"x1_copy"}
+    )
 
 
 @pytest.mark.parametrize("method", METHODS)
 def test_more_predictors_than_observed_rows(method):
-    """Six complete predictors, five observed ``y`` values."""
+    """Six complete predictors, five observed ``y`` values.
+
+    norm.nob and norm.boot divide by ``n_obs - q - 1``, which is not positive
+    here even after remove_lindep (R imputes non-finite values): they raise.
+    """
     rng = np.random.default_rng(8)
     n = 30
     df = pd.DataFrame({f"p{i}": rng.normal(size=n) for i in range(6)})
     df.insert(0, "y", df.sum(axis=1) + rng.normal(size=n))
     df.loc[5:, "y"] = np.nan
+    if method in ("norm.nob", "norm.boot"):
+        with pytest.raises(ValueError, match=rf"{re.escape(method)} needs more than \d+ observed values"):
+            impute(df, method, check_log_warning=False)
+        return
     _check(df, method)
 
 
@@ -408,7 +426,7 @@ def _boolean_target_frame(n=40, seed=7):
     return df
 
 
-@pytest.mark.parametrize("method", method_params(methods=NON_MIDAS))
+@pytest.mark.parametrize("method", method_params(methods=NON_MIDAS + CATEGORICAL_METHODS))
 def test_boolean_target(method):
     _check(_boolean_target_frame(), method)
 
@@ -532,7 +550,7 @@ def _works_or_names_dtype(df, method, dtype_name, column="zcol"):
         clear = isinstance(exc, (ValueError, TypeError)) and dtype_name in message and column in message
         assert clear, repr(exc)
         return
-    assert_all_invariants(df, before, mice, out, N_IMP, MAXIT)
+    assert_all_invariants(df, before, mice, out, N_IMP, MAXIT, donor=imputes_observed_values(method))
 
 
 def _nullable_column(dtype, n, rng):
@@ -747,10 +765,11 @@ def test_tree_method_without_observed_target_raises_value_error(method, kind):
         get_imputer_func(method)(y, np.zeros(10, dtype=bool), x, rng=rng)
 
 
-@pytest.mark.parametrize("method", ["pmm", "midas"])
+@pytest.mark.parametrize("method", ["pmm", "midas", *NUMERIC_MODEL_METHODS, *CATEGORICAL_METHODS])
 @pytest.mark.parametrize("kind", ["numeric", "categorical"])
 def test_pmm_midas_without_observed_target_raise_value_error(method, kind):
-    """Like cart and rf: a clear error, not a crash deep inside the method."""
+    """Like cart and rf: a clear error, not a crash deep inside the method
+    (R's mean imputes NaN here)."""
     from imputation.utils import get_imputer_func
 
     rng = np.random.default_rng(0)
@@ -760,7 +779,7 @@ def test_pmm_midas_without_observed_target_raise_value_error(method, kind):
         get_imputer_func(method)(y, np.zeros(10, dtype=bool), x, rng=rng)
 
 
-@pytest.mark.parametrize("method", ["pmm", "midas", "cart", "rf"])
+@pytest.mark.parametrize("method", ["pmm", "midas", "cart", "rf", *NUMERIC_MODEL_METHODS, *CATEGORICAL_METHODS])
 def test_no_observed_target_and_nothing_to_impute_returns_empty(method):
     from imputation.utils import get_imputer_func
 
@@ -769,13 +788,16 @@ def test_no_observed_target_and_nothing_to_impute_returns_empty(method):
     assert len(out) == 0
 
 
-@pytest.mark.parametrize("method", ["pmm", "midas", *TREE_METHODS])
+@pytest.mark.parametrize("method", ["pmm", "midas", *TREE_METHODS, "norm", "logreg"])
 def test_tree_method_without_usable_observed_row_through_impute(method):
     """``x`` has method "" and is missing wherever ``y`` is observed, so no row
-    with an observed ``y`` has a complete design."""
+    with an observed ``y`` has a complete design. (For logreg ``y`` holds two
+    labels: on a numeric column with more than two values it would be refused
+    before the chains start.)"""
     n = 20
     i = np.arange(n, dtype=float)
-    df = pd.DataFrame({"y": np.sin(i), "x": np.cos(i), "z": np.sin(2 * i)})
+    y = np.where(np.sin(i) > 0, "a", "b").astype(object) if method == "logreg" else np.sin(i)
+    df = pd.DataFrame({"y": y, "x": np.cos(i), "z": np.sin(2 * i)})
     df.loc[: n // 2 - 1, "y"] = np.nan
     df.loc[n // 2 :, "x"] = np.nan
     pm = full_predictor_matrix(df)
@@ -841,7 +863,7 @@ def test_meanobs_initial_imputation_of_non_numeric_columns():
     assert data.dtypes.to_dict() == df.dtypes.to_dict()
 
 
-@pytest.mark.parametrize("method", NON_MIDAS)
+@pytest.mark.parametrize("method", NON_MIDAS + CATEGORICAL_METHODS)
 def test_meanobs_initial_through_impute(method):
     df = _meanobs_frame()
     _check(df, method, initial="meanobs")
@@ -854,3 +876,459 @@ def test_sample_with_one_observed_value_and_a_series_target():
     y = pd.Series([np.nan, 5.0, np.nan], index=[10, 11, 12])
     out = sample(y, np.array([False, True, False]), None, rng=np.random.default_rng(0))
     assert list(out) == [5.0, 5.0]
+
+
+# ---------------------------------------------------------------------------
+# The numeric-model methods: norm, norm.nob, norm.boot, norm.predict, mean
+# ---------------------------------------------------------------------------
+
+
+def test_norm_turns_nullable_integer_column_into_float64():
+    """R turns an integer column imputed by norm into double: Int64 becomes
+    Float64, without a pandas warning, and the observed integers are kept."""
+    rng = np.random.default_rng(13)
+    df = regression_frame()
+    df["count"] = pd.array(np.round(10 + 3 * df["x1"] + rng.normal(size=len(df))).astype(int), dtype="Int64")
+    df.loc[[0, 7, 19, 33], "count"] = pd.NA
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _, out = _check(df, "norm")
+    for completed in out:
+        assert completed["count"].dtype == pd.Float64Dtype()
+        imputed = completed.loc[[0, 7, 19, 33], "count"].to_numpy(dtype=float)
+        assert (imputed != np.round(imputed)).any()  # real floats were written
+
+
+def test_norm_keeps_float32_column():
+    df = regression_frame()
+    df["y"] = df["y"].astype(np.float32)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # pandas warns when it has to upcast float32
+        _, out = _check(df, "norm")
+    for completed in out:
+        assert completed["y"].dtype == np.float32
+
+
+@pytest.mark.parametrize("method", ["norm.nob", "norm.boot"])
+def test_norm_nob_and_boot_need_more_observed_values_than_coefficients_plus_one(method):
+    """They divide by ``n_obs - q - 1`` (R imputes infinite values where it is
+    not positive). Two predictors, so q = 3: 3 and 4 observed values raise, 5
+    are enough."""
+    from imputation.utils import get_imputer_func
+
+    imputer = get_imputer_func(method)
+    df = regression_frame()
+    y, x = df["y"].to_numpy(), df[["x1", "x2"]].to_numpy()
+    observed = np.flatnonzero(~np.isnan(y))
+    for n_obs in (3, 4, 5):
+        ry = np.zeros(len(y), dtype=bool)
+        ry[observed[:n_obs]] = True
+        if n_obs <= 4:
+            with pytest.raises(ValueError, match=rf"{re.escape(method)} needs more than 4 observed values"):
+                imputer(y, ry, x, rng=np.random.default_rng(0))
+        else:
+            assert np.isfinite(imputer(y, ry, x, rng=np.random.default_rng(0))).all()
+
+
+def _non_numeric_target(kind, n, rng):
+    """A categorical or boolean target as MICE passes it, missing every fourth cell."""
+    ry = np.arange(n) % 4 != 0
+    if kind == "categorical":
+        y = pd.Categorical(np.where(ry, rng.choice(["a", "b", "c"], size=n), None))
+    else:
+        y = np.where(ry, rng.random(n) > 0.5, None)
+    return y, ry
+
+
+@pytest.mark.parametrize("kind, label", [("categorical", "categorical or text"), ("boolean", "boolean")])
+@pytest.mark.parametrize("method", NUMERIC_MODEL_METHODS)
+def test_numeric_model_method_rejects_non_numeric_target(method, kind, label):
+    """R's versions impute NA there (with warnings); the port refuses."""
+    from imputation.utils import get_imputer_func
+
+    rng = np.random.default_rng(0)
+    y, ry = _non_numeric_target(kind, 20, rng)
+    with pytest.raises(ValueError, match=rf"numeric for {re.escape(method)}, got {label} values"):
+        get_imputer_func(method)(y, ry, rng.normal(size=(20, 2)), rng=np.random.default_rng(1))
+
+
+def test_norm_rejects_categorical_target_through_impute():
+    """Before the chains start, with the column named."""
+    df = _categorical_target_frame()
+    with pytest.raises(ValueError, match=r"Column 'g' is categorical or text .* norm imputes numeric columns only"):
+        impute(df, {"g": "norm"}, n_imputations=1, maxit=1)
+
+
+@pytest.mark.parametrize("method", NUMERIC_MODEL_METHODS)
+def test_numeric_model_method_without_predictors(method):
+    """The intercept-only model, also for norm.boot (where R stops with an
+    error): norm.predict then imputes the observed mean, as mean does."""
+    from imputation.utils import get_imputer_func
+
+    imputer = get_imputer_func(method)
+    rng = np.random.default_rng(3)
+    y = rng.normal(loc=5.0, size=30)
+    ry = np.arange(30) % 3 != 0
+    for x in (np.empty((30, 0)), pd.DataFrame(index=range(30)), None):
+        out = imputer(y, ry, x, rng=np.random.default_rng(2))
+        assert out.shape == (10,) and np.isfinite(out).all()
+        if method in ("norm.predict", "mean"):
+            np.testing.assert_allclose(out, y[ry].mean(), rtol=1e-12)
+
+
+def test_norm_boot_ridge_and_norm_ridge_reach_their_own_method(monkeypatch):
+    """``norm_boot_ridge`` starts with the prefix of norm too; it must reach
+    norm.boot only, and ``norm_ridge`` and ``norm_ls_meth`` norm only."""
+    import imputation.norm
+    import imputation.sampler
+
+    seen = []
+
+    def recording(where, original):
+        def wrapper(x, y, ls_meth="qr", ridge=1e-5):
+            seen.append((where, ls_meth, ridge))
+            return original(x, y, ls_meth=ls_meth, ridge=ridge)
+
+        return wrapper
+
+    # norm fits through norm_draw (imputation.sampler), norm.boot directly
+    monkeypatch.setattr(imputation.sampler, "estimice", recording("norm", imputation.sampler.estimice))
+    monkeypatch.setattr(imputation.norm, "estimice", recording("norm.boot", imputation.norm.estimice))
+    df = numeric_frame(n=30)
+    impute(
+        df,
+        {"a": "norm", "b": "norm.boot", "c": "sample"},
+        norm_ls_meth="ridge",
+        norm_ridge=0.25,
+        norm_boot_ridge=0.5,
+    )
+    calls = N_IMP * MAXIT
+    assert sorted(seen) == [("norm", "ridge", 0.25)] * calls + [("norm.boot", "qr", 0.5)] * calls
+
+
+# ---------------------------------------------------------------------------
+# The categorical methods: logreg, logreg.boot, polyreg and polr
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("method", TWO_CATEGORY_METHODS)
+def test_logreg_on_three_categories_raises_naming_polyreg(method):
+    """R stops with "invalid 'labels'"; the port refuses clearly."""
+    df = typed_frame()
+    with pytest.raises(ValueError, match=rf"{re.escape(method)} imputes a target with two categories, .*polyreg"):
+        impute(df, {"three": method}, check_log_warning=False)
+
+
+@pytest.mark.parametrize("method", TWO_CATEGORY_METHODS)
+def test_one_observed_category_is_imputed_without_random_numbers(method):
+    """R imputes invented labels (logreg) or fits anyway (logreg.boot); the
+    port imputes the one category and draws nothing. (Through impute such a
+    column is constant and not imputed, as in R.)"""
+    from imputation.utils import get_imputer_func
+
+    from ..test_parity._helpers import ScriptedGenerator
+
+    rng = np.random.default_rng(3)
+    x = rng.normal(size=(12, 2))
+    y = pd.Categorical(["no"] * 9 + [None] * 3, categories=["no", "yes"])
+    scripted = ScriptedGenerator(strict=True)
+    out = get_imputer_func(method)(y, y.notna(), x, rng=scripted)
+    assert out.tolist() == ["no"] * 3
+    assert scripted.calls == []
+
+
+def _two_category_column(kind, n, rng):
+    """A two-category column of the given dtype, related to nothing."""
+    flags = rng.random(n) > 0.4
+    if kind == "object_bool":
+        return pd.Series(flags, dtype=object)
+    if kind == "boolean":
+        return pd.Series(flags, dtype="boolean")
+    labels = np.where(flags, "yes", "no")
+    if kind == "string":
+        return pd.Series(labels, dtype="string")
+    return pd.Series(pd.Categorical(labels, categories=["yes", "no"]))
+
+
+@pytest.mark.parametrize("kind", ["object_bool", "boolean", "string", "category"])
+@pytest.mark.parametrize("method", CATEGORICAL_METHODS)
+def test_two_category_column_types_keep_their_dtype(method, kind):
+    rng = np.random.default_rng(17)
+    df = regression_frame()
+    df["zcol"] = _two_category_column(kind, len(df), rng)
+    df.loc[[2, 6, 11, 30], "zcol"] = None
+    mice, _ = _check(df, method)
+    assert mice.method["zcol"] == method
+
+
+@pytest.mark.parametrize("method", CATEGORICAL_METHODS)
+def test_numeric_zero_one_column(method):
+    """R's logreg takes a numeric 0/1 target and imputes 0 and 1; polyreg
+    imputes the two values too (R's returns them as text). As R, impute warns
+    about a categorical method on a numeric column."""
+    df = regression_frame()
+    df["z01"] = (df["x1"] + np.random.default_rng(2).normal(size=len(df)) > 0).astype(float)
+    df.loc[[3, 8, 14, 27, 33], "z01"] = np.nan
+    mismatch = rf"Type mismatch for variable\(s\): z01\nImputation method {re.escape(method)} is for categorical"
+    with pytest.warns(UserWarning, match=mismatch):
+        mice, out = _check(df, {"z01": method})
+    assert mice.method["z01"] == method
+    for completed in out:
+        assert completed["z01"].dtype == np.float64
+        assert set(completed.loc[[3, 8, 14, 27, 33], "z01"]) <= {0.0, 1.0}
+
+
+@pytest.mark.parametrize("method", CATEGORICAL_METHODS)
+def test_unused_declared_category_is_never_imputed(method):
+    """A two-level Categorical with a third declared category that does not
+    occur: two categories to impute, the declared categories kept."""
+    rng = np.random.default_rng(23)
+    df = regression_frame()
+    labels = np.where(df["x1"] + rng.normal(size=len(df)) > 0, "yes", "no")
+    df["zcol"] = pd.Categorical(labels, categories=["maybe", "no", "yes"])
+    mis = [1, 4, 9, 16, 25, 36]
+    df.loc[mis, "zcol"] = np.nan
+    mice, out = _check(df, method, n_imputations=4)
+    assert mice.method["zcol"] == method
+    for completed in out:
+        assert list(completed["zcol"].cat.categories) == ["maybe", "no", "yes"]
+        assert set(completed.loc[mis, "zcol"]) <= {"no", "yes"}
+
+
+@pytest.mark.parametrize("key, method", [("logreg_donors", "logreg"), ("logreg_boot_ridge", "logreg.boot")])
+def test_logreg_keywords_raise_takes_no_parameters(key, method):
+    df = typed_frame()
+    with pytest.raises(TypeError, match=rf"'{key}'\. Method '{re.escape(method)}' takes no parameters\."):
+        impute(df, method, **{key: 1})
+
+
+def test_polyreg_imputes_one_observed_category_everywhere():
+    """R draws one uniform number per cell first, then returns the category;
+    so does the port. (Through impute such a column is constant and not
+    imputed, as in R.)"""
+    from imputation.polyreg import polyreg
+
+    from ..test_parity._helpers import ScriptedGenerator
+
+    x = np.random.default_rng(3).normal(size=(12, 2))
+    y = pd.Categorical(["b"] * 9 + [None] * 3, categories=["a", "b", "c"])
+    scripted = ScriptedGenerator(uniforms=[0.1, 0.5, 0.9], strict=True)
+    assert polyreg(y, y.notna(), x, rng=scripted).tolist() == ["b"] * 3
+    scripted.assert_exhausted()
+    assert scripted.order == [("uniform", 3)]
+
+
+def test_polyreg_more_than_50_categories_raise():
+    """R's augment stops: "Maximum number of categories (50) exceeded"."""
+    from imputation.polyreg import polyreg
+
+    y = np.array([f"l{i % 51:02d}" for i in range(110)], dtype=object)
+    ry = np.arange(110) % 10 != 0
+    y[~ry] = None
+    x = np.random.default_rng(0).normal(size=(110, 1))
+    with pytest.raises(ValueError, match=r"51 categories, more than the maximum of 50 .*exceeded"):
+        polyreg(y, ry, x, rng=np.random.default_rng(1))
+
+
+def test_polyreg_two_categories_with_one_missing_value():
+    """R stops ("dim(X) must have a positive length"); the port imputes."""
+    df = regression_frame()
+    df["zcol"] = pd.Categorical(np.where(df["x1"] > 0, "yes", "no"))
+    df.loc[[7], "zcol"] = np.nan
+    mice, out = _check(df, {"zcol": "polyreg"})
+    assert mice.method["zcol"] == "polyreg"
+    assert {completed.loc[7, "zcol"] for completed in out} <= {"no", "yes"}
+
+
+def test_polyreg_ordered_column_with_unused_level():
+    """R stops ("dims ... do not match"); the port imputes the levels present
+    and keeps the declared ones."""
+    rng = np.random.default_rng(29)
+    df = regression_frame()
+    grades = np.array(["low", "mid", "high"])[np.digitize(df["x1"] + rng.normal(scale=0.5, size=len(df)), [-0.5, 0.5])]
+    df["grade"] = pd.Categorical(grades, categories=["low", "mid", "high", "top"], ordered=True)
+    mis = [0, 5, 12, 18, 27, 35]
+    df.loc[mis, "grade"] = np.nan
+    mice, out = _check(df, {"grade": "polyreg"}, n_imputations=4)
+    assert mice.method["grade"] == "polyreg"
+    for completed in out:
+        assert completed["grade"].dtype == df["grade"].dtype
+        assert set(completed.loc[mis, "grade"]) <= {"low", "mid", "high"}
+
+
+def test_polyreg_keywords_reach_the_imputer(monkeypatch):
+    """``polyreg_maxit`` and ``polyreg_max_weights`` are R's ``nnet.maxit`` and ``nnet.MaxNWts``."""
+    import imputation.polyreg
+
+    seen = []
+    original = imputation.polyreg.multinom_fit
+
+    def recording(*args, **kwargs):
+        seen.append((kwargs["maxit"], kwargs["max_weights"]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(imputation.polyreg, "multinom_fit", recording)
+    impute(typed_frame(), {"three": "polyreg"}, polyreg_maxit=7, polyreg_max_weights=99)
+    assert seen and set(seen) == {(7, 99)}
+
+
+def test_polyreg_too_many_weights_raise():
+    """R: "too many (N) weights"."""
+    with pytest.raises(ValueError, match=r"too many \(\d+\) weights.*max_weights=5"):
+        impute(typed_frame(), {"three": "polyreg"}, polyreg_max_weights=5, check_log_warning=False)
+
+
+def _three_category_column(kind, n, rng):
+    """A three-category column of the given dtype, related to nothing."""
+    labels = rng.choice(["lo", "mid", "hi"], size=n)
+    if kind == "object":
+        return pd.Series(labels, dtype=object)
+    if kind == "string":
+        return pd.Series(labels, dtype="string")
+    return pd.Series(pd.Categorical(labels, categories=["mid", "lo", "hi"]))
+
+
+@pytest.mark.parametrize("kind", ["object", "string", "category"])
+def test_polyreg_column_types_keep_their_dtype(kind):
+    """Three categories; boolean columns, which have two, are in
+    test_two_category_column_types_keep_their_dtype."""
+    rng = np.random.default_rng(19)
+    df = regression_frame()
+    df["zcol"] = _three_category_column(kind, len(df), rng)
+    df.loc[[2, 6, 11, 30, 33], "zcol"] = None
+    mice, _ = _check(df, "polyreg")
+    assert mice.method["zcol"] == "polyreg"
+
+
+def test_polr_imputes_one_observed_category_everywhere():
+    """R stops on an unordered target and fits a degenerate model to an
+    ordered one; the port imputes the category without a fit, after drawing
+    one uniform number per cell where R draws them. (Through impute such a
+    column is constant and not imputed, as in R.)"""
+    from imputation.polr import polr
+
+    from ..test_parity._helpers import ScriptedGenerator
+
+    x = np.random.default_rng(3).normal(size=(12, 2))
+    for ordered in (True, False):
+        y = pd.Categorical(["b"] * 9 + [None] * 3, categories=["a", "b", "c", "d"], ordered=ordered)
+        scripted = ScriptedGenerator(uniforms=[0.1, 0.5, 0.9], strict=True)
+        assert polr(y, y.notna(), x, rng=scripted).tolist() == ["b"] * 3
+        scripted.assert_exhausted()
+        assert scripted.order == [("uniform", 3)]
+
+
+def _polr_fallback_frame():
+    """A two-level ordered column and a boolean column, which polr imputes by
+    its fallback to the multinomial model, and complete predictors."""
+    rng = np.random.default_rng(31)
+    df = regression_frame()
+    latent = df["x1"] + rng.normal(scale=0.7, size=len(df))
+    df["level"] = pd.Categorical(np.where(latent > 0, "high", "low"), categories=["low", "high"], ordered=True)
+    df["flag"] = pd.Series(latent + rng.normal(size=len(df)) > 0.3, dtype=object)
+    df.loc[[0, 4, 9, 17, 26], "level"] = np.nan
+    df.loc[[2, 9, 15, 33], "flag"] = np.nan
+    return df
+
+
+def test_polr_two_levels_and_booleans_through_the_fallback():
+    """R's MASS::polr refuses both (fewer than 3 levels, not a factor) and
+    mice falls back to nnet::multinom; with ``polr_log_fallback`` every call
+    logs "polr falls back to multinom", as R's ``polr.to.loggedEvents``."""
+    df = _polr_fallback_frame()
+    mice, out = _check(df, {"level": "polr", "flag": "polr"}, polr_log_fallback=True)
+    assert mice.method["level"] == mice.method["flag"] == "polr"
+    for completed in out:
+        assert completed["level"].dtype == df["level"].dtype
+        assert set(completed["flag"]) <= {False, True}
+    events = mice.logged_events[mice.logged_events["meth"] == "polr"]
+    assert len(events) == 2 * N_IMP * MAXIT  # two columns, every call
+    assert set(events["dep"]) == {"level", "flag"} and set(events["out"]) == {"polr falls back to multinom"}
+    quiet, _ = _check(df, {"level": "polr", "flag": "polr"})
+    assert not (quiet.logged_events["meth"] == "polr").any()
+
+
+def test_polr_keywords_reach_the_fallback(monkeypatch):
+    """``polr_maxit`` and ``polr_max_weights`` are R's ``nnet.maxit`` and
+    ``nnet.MaxNWts``: they apply to the fallback fit."""
+    import imputation.polr
+
+    seen = []
+    original = imputation.polr.multinom_fit
+
+    def recording(*args, **kwargs):
+        seen.append((kwargs["maxit"], kwargs["max_weights"]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(imputation.polr, "multinom_fit", recording)
+    impute(typed_frame(), {"flag": "polr", "grade": "polr"}, polr_maxit=7, polr_max_weights=99)
+    assert len(seen) == N_IMP * MAXIT and set(seen) == {(7, 99)}  # only the boolean column falls back
+
+
+def test_polr_more_than_50_categories_raise():
+    """R's augment stops: "Maximum number of categories (50) exceeded"."""
+    from imputation.polr import polr
+
+    y = np.array([f"l{i % 51:02d}" for i in range(110)], dtype=object)
+    ry = np.arange(110) % 10 != 0
+    y[~ry] = None
+    x = np.random.default_rng(0).normal(size=(110, 1))
+    with pytest.raises(ValueError, match=r"51 categories, more than the maximum of 50 .*exceeded"):
+        polr(y, ry, x, rng=np.random.default_rng(1))
+
+
+def test_polr_without_predictors_imputes():
+    """R's mice.impute.polr stops without predictors (both of its fits see
+    no response); the port fits the model without predictors, and for a
+    two-level column the fallback on the intercept, which it logs."""
+    df = _polr_fallback_frame()
+    levels = ["low", "mid", "high", "top"]
+    grades = np.array(levels)[np.digitize(df["x2"], [-0.7, 0.0, 0.7])]
+    df["grade"] = pd.Categorical(grades, categories=levels, ordered=True)
+    df.loc[[1, 3, 8, 21], "grade"] = np.nan
+    pm = full_predictor_matrix(df)
+    pm.loc[["grade", "level"], :] = 0
+    mice, out = _check(df, {"grade": "polr", "level": "polr"}, predictor_matrix=pm, polr_log_fallback=True)
+    assert mice.method["grade"] == mice.method["level"] == "polr"
+    assert isinstance(df["grade"].dtype, pd.CategoricalDtype) and df["grade"].dtype.ordered
+    for completed in out:
+        assert completed["grade"].dtype == df["grade"].dtype
+    events = mice.logged_events[mice.logged_events["meth"] == "polr"]
+    assert set(events["dep"]) == {"level"} and len(events) == N_IMP * MAXIT
+
+
+@pytest.mark.parametrize("method", CATEGORICAL_METHODS)
+def test_categorical_method_without_predictors(method):
+    """Every categorical method imputes labels without predictors (the
+    intercept-only model; polr the cut points alone), whatever form the
+    empty predictors take; R's polr stops there."""
+    from imputation.utils import get_imputer_func
+
+    imputer = get_imputer_func(method)
+    rng = np.random.default_rng(5)
+    labels = ["lo", "hi"] if method in TWO_CATEGORY_METHODS else ["lo", "mid", "hi"]
+    ry = np.arange(30) % 3 != 0
+    y = pd.Categorical(np.where(ry, rng.choice(labels, size=30), None), categories=labels, ordered=True)
+    for x in (np.empty((30, 0)), pd.DataFrame(index=range(30)), None):
+        out = imputer(y, ry, x, rng=np.random.default_rng(2))
+        assert out.shape == (10,) and set(out) <= set(labels)
+
+
+def test_polr_ordered_column_keeps_its_dtype_and_category_order():
+    """An ordered ``category`` column declared in an order that is not
+    alphabetical, with an unused level: the completed column has the same
+    dtype (categories, their order, ordered), and its imputations are
+    declared categories (the unused one has a small positive probability)."""
+    rng = np.random.default_rng(29)
+    df = regression_frame()
+    grades = np.array(["low", "high", "top"])[np.digitize(df["x1"] + rng.normal(scale=0.5, size=len(df)), [-0.5, 0.5])]
+    df["grade"] = pd.Categorical(grades, categories=["low", "mid", "high", "top"], ordered=True)
+    mis = [0, 5, 12, 18, 27, 35]
+    df.loc[mis, "grade"] = np.nan
+    mice, out = _check(df, {"grade": "polr"}, n_imputations=4)
+    assert mice.method["grade"] == "polr"
+    for completed in out:
+        assert completed["grade"].dtype == df["grade"].dtype
+        assert list(completed["grade"].cat.categories) == ["low", "mid", "high", "top"]
+        assert completed["grade"].cat.ordered
+        assert set(completed.loc[mis, "grade"]) <= {"low", "mid", "high", "top"}

@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from imputation.validators import (
+    check_default_method,
     check_initial_method,
     check_maxit,
     check_method,
@@ -204,6 +205,36 @@ class TestCheckMethod:
         method_dict = {"A": "pmm", "C": "sample"}  # C doesn't exist
         with pytest.raises(ValueError, match="Columns not found in data"):
             check_method(method_dict, columns)
+
+    def test_check_method_dictionary_takes_the_defaults_for_unlisted_columns(self):
+        defaults = {"A": "pmm", "B": "logreg", "C": "polr"}
+        assert check_method({"A": "norm"}, ["A", "B", "C"], defaults) == {"A": "norm", "B": "logreg", "C": "polr"}
+        # without defaults: pmm, the default of a numeric column
+        assert check_method({"A": "norm"}, ["A", "B", "C"]) == {"A": "norm", "B": "pmm", "C": "pmm"}
+        # a string ignores them
+        assert check_method("cart", ["A", "B", "C"], defaults) == {"A": "cart", "B": "cart", "C": "cart"}
+
+
+class TestCheckDefaultMethod:
+    """R's defaultMethod: four supported method names."""
+
+    def test_valid(self):
+        assert check_default_method(("pmm", "logreg", "polyreg", "polr")) == ("pmm", "logreg", "polyreg", "polr")
+        assert check_default_method(["norm", "logreg.boot", "cart", "polyreg"]) == (
+            "norm",
+            "logreg.boot",
+            "cart",
+            "polyreg",
+        )
+
+    @pytest.mark.parametrize("value", ["pmm", ("pmm",) * 3, ("pmm",) * 5, None, {"pmm": 1}])
+    def test_not_four_names(self, value):
+        with pytest.raises(ValueError, match="list or tuple of four method names"):
+            check_default_method(value)
+
+    def test_unsupported_name(self):
+        with pytest.raises(ValueError, match=r"unsupported methods: \['lda'\]"):
+            check_default_method(["pmm", "logreg", "lda", "polr"])
 
 
 class TestCheckInitialMethod:

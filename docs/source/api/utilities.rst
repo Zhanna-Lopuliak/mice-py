@@ -23,8 +23,11 @@ Names of methods and options
 .. automodule:: imputation.constants
    :members:
 
-Method lookup
--------------
+Method lookup and default methods
+---------------------------------
+
+``imputation.make_method`` is ``imputation.utils.make_method``, documented
+here.
 
 .. automodule:: imputation.utils
    :members:

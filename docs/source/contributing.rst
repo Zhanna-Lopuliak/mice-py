@@ -56,7 +56,7 @@ A change that affects imputations should keep the parity tests passing. If R
 behaves differently from what you expect, check R first: the fixtures are
 produced by the scripts in ``tests/reference/r`` (see
 ``tests/reference/README.md``). To regenerate them you need R with mice
-3.19.0, ranger, rpart and jsonlite:
+3.19.0, ranger, rpart, nnet, MASS and jsonlite:
 
 .. code-block:: bash
 
@@ -88,11 +88,16 @@ Adding an imputation method
    signature of the others:
    ``f(y, id_obs, x, id_mis=None, <parameters>, rng=None) -> np.ndarray``.
    It returns the imputations of the cells in ``id_mis`` (all missing cells
-   if ``None``) and draws all random numbers from ``rng``.
+   if ``None``) and draws all random numbers from ``rng``. It may also take
+   a parameter ``log_event``: ``MICE.impute`` then passes a callable that
+   takes one string and records it as a row of ``MICE.logged_events``, with
+   the iteration, imputation, column and method filled in.
 2. Add the name to ``ImputationMethod`` in ``imputation/constants.py`` and
    the function to ``_IMPUTER_MAP`` in ``imputation/utils.py``. Its
-   parameters then become ``<name>_<parameter>`` arguments of
-   ``MICE.impute``.
+   parameters then become ``<prefix>_<parameter>`` arguments of
+   ``MICE.impute``, where the prefix is the name with every dot replaced by
+   an underscore (``norm_boot_ridge`` for parameter ``ridge`` of
+   ``norm.boot``).
 3. Add unit tests, and the method to the property tests in
    ``tests/test_properties``. If R mice has the method, add parity tests.
 4. Document it in :doc:`user_guide/imputation_methods` and

@@ -10,6 +10,46 @@ Each mutant is written so that it is valid once the library is fixed:
   F2 must flag it.
 * A6: ``cart(..., bootstrap=True)``, the old bootstrapped tree; the donor-set
   test on F1 must flag it.
+* ``norm`` without the parameter draw: ``imputation.norm.norm_nob`` (least
+  squares coefficients, residual sd from the fit) compared with R's ``norm``
+  on F1. Ignoring the parameter uncertainty narrows the imputations in the
+  cells where the coefficients are poorly determined: T1 (decile bins), T2
+  (cell variance) and T3 (coefficient variance) must each flag it. Measured
+  with 3,000 calls: smallest T1 p about 1e-206, largest |z| about 43 (T2) and
+  100 (T3). On F4, where every missing row lies in the bulk of the observed
+  ones, only T3 flags it clearly (|z| about 17; T2 about 5.5, T1 p 0.002).
+* ``logreg`` without augmentation: ``imputation.logreg.augment`` patched to
+  return its input with weights 1, compared with R's ``logreg`` on F6, whose
+  observed rows are separated. The fit then diverges and its huge covariance
+  scatters the coefficient draw, so the labels far from the boundary are
+  close to a coin flip instead of nearly certain: T1 (level counts) and T3
+  (coefficients of the level indicator) must each flag it. Measured with
+  1,500 calls (fewer than the 3,000 of the parity test, because every
+  diverging fit runs to the iteration limit): T1 p 0 (below the smallest
+  double) in most cells, largest |z| about 66 (T3). On F5, which is not
+  separated, it is not flagged (T1 p 8e-5, T3 |z| 4.9 with 3,000 calls).
+* ``logreg`` without the coefficient draw: ``imputation.logreg._coefficient_draw``
+  patched to return the fitted coefficients, compared with R's ``logreg``
+  on F5. The imputations of one call no longer share a drawn slope, so the
+  coefficients of the level indicator vary less across calls (T3: largest
+  |z| about 50, on the log-variance). F5 puts missing rows far from the
+  observed ones, where the draw also moves the label probabilities towards
+  1/2, so T1 flags it too (smallest p about 1e-20). Both must flag it.
+* ``polyreg`` taking the most probable category instead of a draw:
+  ``imputation.polyreg._draw_categories`` patched to return the category
+  with the largest probability, compared with R's ``polyreg`` on F3. Every
+  call then imputes the same labels. Measured with 1,000 calls (fewer than
+  the 3,000 of the parity test; the effect is large): T1 smallest p about
+  1e-294 and below 1e-8 in every cell, T3 largest |z| about 284 (mean) and
+  7,300 (log-variance; the coefficients no longer vary). The test asserts
+  p < 1e-12 and |z| > 8.
+* ``polr`` replaced by the multinomial model: the Python ``polyreg``
+  compared with R's ``polr`` on F7, an ordered target drawn from a model
+  that is not a proportional-odds model. The multinomial fit predicts other
+  probabilities (up to 0.5 apart in R). Measured with 1,000 calls (fewer
+  than the 2,000 of the parity test; the effect is large): T1 p below 1e-12
+  in all 20 cells (the smallest 0), T3 largest |z| about 114 (mean) and 26
+  (log-variance). The test asserts p < 1e-12 and |z| > 8.
 """
 
 import functools
@@ -73,6 +113,152 @@ def test_deterministic_ties_are_flagged_by_t1(monkeypatch):
     assert not comp.t1_ok(), "T1 does not flag deterministic ties: " + comp.t1_message()
 
 
+@functools.cache
+def norm_without_parameter_draw_comparison():
+    """Python norm_nob in place of norm, against R's norm on F1."""
+    from imputation.norm import norm_nob
+
+    calls = []
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return norm_nob(*args, **kwargs)
+
+    inp, r_sum, py_sum = run_python("norm", "F1", func=counting)
+    return compare(r_sum, py_sum, inp), len(calls)
+
+
+@pytest.mark.parametrize("statistic", ["T1", "T2", "T3"])
+def test_norm_without_parameter_draw_is_flagged(statistic):
+    comp, n_calls = norm_without_parameter_draw_comparison()
+    assert n_calls > 0, "mutant not applied: norm_nob was not called"
+    assert comp.kind == "continuous"
+    passed = {"T1": comp.t1_ok, "T2": comp.t2_ok, "T3": comp.t3_ok}[statistic]()
+    message = {"T1": comp.t1_message, "T2": comp.t2_message, "T3": comp.t3_message}
+    assert not passed, f"{statistic} does not flag the mutant: " + message[statistic]()
+
+
+@functools.cache
+def logreg_without_augmentation_comparison():
+    """logreg on F6 with imputation.logreg.augment returning its input, weights 1."""
+    import imputation.logreg as logreg_module
+
+    calls = []
+
+    def no_augmentation(y, id_obs, x, id_mis, *args, **kwargs):
+        calls.append(1)
+        y = np.asarray(y, dtype=np.intp).ravel()
+        return logreg_module.Augmented(
+            y=y,
+            id_obs=np.asarray(id_obs, dtype=bool),
+            x=np.asarray(x, dtype=float),
+            id_mis=np.asarray(id_mis, dtype=bool),
+            weights=np.ones(len(y)),
+        )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(logreg_module, "augment", no_augmentation)
+        inp, r_sum, py_sum = run_python("logreg", "F6", n_calls=1500)
+    return compare(r_sum, py_sum, inp), len(calls)
+
+
+@pytest.mark.parametrize("statistic", ["T1", "T3"])
+def test_logreg_without_augmentation_is_flagged(statistic):
+    comp, n_calls = logreg_without_augmentation_comparison()
+    assert n_calls > 0, "mutant not applied: logreg no longer calls imputation.logreg.augment"
+    assert comp.kind == "category"
+    passed = {"T1": comp.t1_ok, "T3": comp.t3_ok}[statistic]()
+    message = {"T1": comp.t1_message, "T3": comp.t3_message}
+    assert not passed, f"{statistic} does not flag the mutant: " + message[statistic]()
+
+
+@functools.cache
+def logreg_without_coefficient_draw_comparison():
+    """logreg on F5 with imputation.logreg._coefficient_draw returning the fitted coefficients."""
+    import imputation.logreg as logreg_module
+
+    calls = []
+
+    def fitted_coefficients(fit, rng):
+        calls.append(1)
+        return np.where(fit.aliased, 0.0, fit.coef)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(logreg_module, "_coefficient_draw", fitted_coefficients)
+        inp, r_sum, py_sum = run_python("logreg", "F5")
+    return compare(r_sum, py_sum, inp), len(calls)
+
+
+@pytest.mark.parametrize("statistic", ["T1", "T3"])
+def test_logreg_without_coefficient_draw_is_flagged(statistic):
+    comp, n_calls = logreg_without_coefficient_draw_comparison()
+    assert n_calls > 0, "mutant not applied: logreg no longer calls imputation.logreg._coefficient_draw"
+    assert comp.kind == "category"
+    passed = {"T1": comp.t1_ok, "T3": comp.t3_ok}[statistic]()
+    message = {"T1": comp.t1_message, "T3": comp.t3_message}
+    assert not passed, f"{statistic} does not flag the mutant: " + message[statistic]()
+
+
 def test_bootstrapped_cart_is_flagged_by_donor_sets():
     inp, r_sum, py_sum = run_python("cart", "F1", bootstrap=True, cp=1e-4, min_samples_leaf=5)
     assert donor_set_mismatches(r_sum, py_sum), "the donor-set test does not flag a bootstrapped tree"
+
+
+@functools.cache
+def polyreg_most_probable_category_comparison():
+    """polyreg on F3 with imputation.polyreg._draw_categories returning the most probable category."""
+    import imputation.polyreg as polyreg_module
+
+    calls = []
+
+    def most_probable(u, prob):
+        calls.append(1)
+        return np.argmax(prob, axis=1)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(polyreg_module, "_draw_categories", most_probable)
+        inp, r_sum, py_sum = run_python("polyreg", "F3", n_calls=1000)
+    return compare(r_sum, py_sum, inp), len(calls)
+
+
+def test_polyreg_taking_the_most_probable_category_is_flagged_by_t1():
+    comp, n_calls = polyreg_most_probable_category_comparison()
+    assert n_calls > 0, "mutant not applied: polyreg no longer calls imputation.polyreg._draw_categories"
+    assert comp.kind == "category"
+    assert comp.t1_min_p < 1e-12, "T1 does not flag the mutant clearly: " + comp.t1_message()
+
+
+def test_polyreg_taking_the_most_probable_category_is_flagged_by_t3():
+    comp, n_calls = polyreg_most_probable_category_comparison()
+    assert n_calls > 0, "mutant not applied: polyreg no longer calls imputation.polyreg._draw_categories"
+    assert np.abs(comp.t3_z_mean).max() > 8, "T3 (mean) does not flag the mutant clearly: " + comp.t3_message()
+    assert np.abs(comp.t3_z_var).max() > 8, "T3 (log-variance) does not flag the mutant clearly: " + comp.t3_message()
+
+
+@functools.cache
+def polr_replaced_by_polyreg_comparison():
+    """The Python polyreg in place of polr, against R's polr on F7."""
+    from imputation.polyreg import polyreg
+
+    calls = []
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return polyreg(*args, **kwargs)
+
+    inp, r_sum, py_sum = run_python("polr", "F7", func=counting, n_calls=1000)
+    return compare(r_sum, py_sum, inp), len(calls)
+
+
+def test_polr_replaced_by_polyreg_is_flagged_by_t1():
+    comp, n_calls = polr_replaced_by_polyreg_comparison()
+    assert n_calls > 0, "mutant not applied: polyreg was not called"
+    assert comp.kind == "category"
+    assert comp.t1_min_p < 1e-12, "T1 does not flag the mutant clearly: " + comp.t1_message()
+
+
+def test_polr_replaced_by_polyreg_is_flagged_by_t3():
+    comp, n_calls = polr_replaced_by_polyreg_comparison()
+    assert n_calls > 0, "mutant not applied: polyreg was not called"
+    assert np.abs(comp.t3_z_mean).max() > 8, "T3 (mean) does not flag the mutant clearly: " + comp.t3_message()
+    assert np.abs(comp.t3_z_var).max() > 8, "T3 (log-variance) does not flag the mutant clearly: " + comp.t3_message()

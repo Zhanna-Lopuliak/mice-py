@@ -6,13 +6,15 @@ imputer signatures and raises on unknown names. Planned: NumPy integers are
 accepted for ``n_imputations`` and ``maxit``.
 """
 
+import logging
+import re
 import warnings
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from ._helpers import METHODS, full_predictor_matrix, impute, numeric_frame, pmm_reference_frame
+from ._helpers import METHODS, full_predictor_matrix, impute, numeric_frame, pmm_reference_frame, register_imputer
 
 
 def _problem():
@@ -37,9 +39,13 @@ def test_imputer_rejects_unknown_keyword(method):
 
 @pytest.mark.parametrize("method", METHODS)
 def test_impute_rejects_misspelled_method_parameter(method):
+    from imputation.utils import method_prefix
+
     df = numeric_frame(n=30)
-    with pytest.raises((TypeError, ValueError)):
-        impute(df, method, n_imputations=1, maxit=1, **{f"{method}_not_a_parameter": 3})
+    key = f"{method_prefix(method)}_not_a_parameter"
+    # the message names the method, so the keyword was matched to it
+    with pytest.raises(TypeError, match=rf"argument '{key}'\. .*[Mm]ethod '{re.escape(method)}'"):
+        impute(df, method, n_imputations=1, maxit=1, **{key: 3})
 
 
 def test_impute_rejects_unknown_method_prefix():
@@ -234,3 +240,113 @@ def test_numpy_integer_maxit(dtype):
     mice, out = impute(df, "sample", n_imputations=2, maxit=dtype(3))
     assert len(out) == 2
     assert all(v.shape == (3, 2) for v in mice.chain_mean.values())
+
+
+# ---------------------------------------------------------------------------
+# keyword prefixes of method names with dots (R's norm.boot -> norm_boot_<param>)
+# ---------------------------------------------------------------------------
+
+DOTTED_PARAMS = {
+    "norm": ["ls_meth", "ridge"],
+    "norm.boot": ["ls_meth", "ridge"],
+    "norm.nob": ["ls_meth", "ridge"],
+    "logreg": [],
+    "logreg.boot": [],
+    "polyreg": ["maxit", "max_weights"],
+    "polr": ["maxit", "max_weights", "log_fallback"],
+}
+
+
+@pytest.mark.parametrize(
+    "key, expected",
+    [
+        ("norm_ridge", ("norm", "ridge")),
+        ("norm_boot_ridge", ("norm.boot", "ridge")),
+        ("norm_nob_ls_meth", ("norm.nob", "ls_meth")),
+        # no method has the parameter: the longest match is reported
+        ("logreg_boot_x", ("logreg.boot", "x")),
+        ("norm_boot_donors", ("norm.boot", "donors")),
+        ("polyreg_max_weights", ("polyreg", "max_weights")),
+        ("polr_log_fallback", ("polr", "log_fallback")),
+        ("polr_maxit", ("polr", "maxit")),
+        ("foo_bar", None),
+        ("norm", None),
+        # the prefix has underscores where the name has dots
+        ("norm.boot_ridge", None),
+    ],
+)
+def test_keyword_resolves_to_longest_method_prefix(key, expected):
+    from imputation.utils import split_method_param
+
+    assert split_method_param(key, DOTTED_PARAMS) == expected
+    assert split_method_param(key, dict(reversed(DOTTED_PARAMS.items()))) == expected
+
+
+def test_keyword_resolves_to_the_method_that_has_the_parameter():
+    """``norm_boot_x`` is parameter ``x`` of norm.boot or ``boot_x`` of norm;
+    only the second exists, so it wins over the longer prefix."""
+    from imputation.utils import split_method_param
+
+    params = {"norm": ["boot_x", "ridge"], "norm.boot": ["ridge"]}
+    assert split_method_param("norm_boot_x", params) == ("norm", "boot_x")
+    assert split_method_param("norm_boot_ridge", params) == ("norm.boot", "ridge")
+    assert split_method_param("norm_boot_y", params) == ("norm.boot", "y")
+
+
+def test_method_prefix_replaces_dots():
+    from imputation.utils import method_prefix
+
+    assert method_prefix("pmm") == "pmm"
+    assert method_prefix("norm.boot") == "norm_boot"
+    assert method_prefix("a.b.c") == "a_b_c"
+
+
+@pytest.fixture
+def fake_imputers(monkeypatch):
+    """Methods ``fake`` and ``fake.boot``, each with a parameter ``k``. Every
+    call appends ``(method, k)`` to the returned list."""
+    calls = []
+
+    def make(name):
+        def imputer(y, id_obs, x, id_mis=None, k=None, rng=None):
+            calls.append((name, k))
+            return np.full(int(np.sum(id_mis)), np.asarray(y, dtype=float)[id_obs].mean())
+
+        return imputer
+
+    for name in ("fake", "fake.boot"):
+        register_imputer(monkeypatch, name, make(name))
+    return calls
+
+
+def _unused_method_messages(caplog):
+    return [r.getMessage() for r in caplog.records if "unused methods" in r.getMessage()]
+
+
+def test_dotted_method_parameters_reach_their_imputer(fake_imputers, caplog):
+    df = numeric_frame(n=30)
+    with caplog.at_level(logging.WARNING, logger="imputation"):
+        impute(df, {"a": "fake", "b": "fake.boot", "c": "fake"}, n_imputations=1, maxit=1, fake_boot_k=2, fake_k=1)
+    assert fake_imputers == [("fake", 1), ("fake.boot", 2), ("fake", 1)]
+    assert _unused_method_messages(caplog) == []
+
+
+@pytest.mark.parametrize("used, unused", [("fake", "fake.boot"), ("fake.boot", "fake")])
+def test_unused_method_warning_names_dotted_method(fake_imputers, caplog, used, unused):
+    df = numeric_frame(n=30)
+    with caplog.at_level(logging.WARNING, logger="imputation"):
+        impute(df, used, n_imputations=1, maxit=1, fake_boot_k=2, fake_k=1)
+    assert set(fake_imputers) == {(used, 1 if used == "fake" else 2)}
+    assert _unused_method_messages(caplog) == [
+        f"Method-specific parameters were provided for unused methods: ['{unused}']. These parameters will be ignored."
+    ]
+
+
+def test_dotted_method_keywords_are_checked(fake_imputers):
+    df = numeric_frame(n=30)
+    with pytest.raises(TypeError, match=r"'fake_boot_x'. Valid parameters for method 'fake\.boot': fake_boot_k\.$"):
+        impute(df, "fake.boot", n_imputations=1, maxit=1, fake_boot_x=2)
+    # the name with its dot is no keyword; the message lists the valid ones
+    with pytest.raises(TypeError, match=r"'fake\.boot_k'. Method parameters .*fake_k, fake_boot_k\."):
+        impute(df, "fake.boot", n_imputations=1, maxit=1, **{"fake.boot_k": 2})
+    assert fake_imputers == []

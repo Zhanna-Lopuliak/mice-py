@@ -420,6 +420,483 @@ class TestMIDASImputation:
             assert val in y[id_obs]
 
 
+class TestNormImputation:
+    """Input handling of norm, norm.nob, norm.boot, norm.predict and mean."""
+
+    REGRESSIONS = ["norm", "norm.nob", "norm.boot", "norm.predict"]
+
+    @staticmethod
+    def _problem(n=12):
+        x = np.random.default_rng(0).normal(size=(n, 2))
+        y = 1.0 + x @ np.array([2.0, -1.0]) + 0.1 * np.cos(np.arange(n))
+        id_obs = np.arange(n) % 4 != 0
+        y[~id_obs] = np.nan
+        return y, id_obs, x
+
+    @pytest.mark.parametrize("method", REGRESSIONS)
+    def test_invalid_predictors(self, method):
+        imputer = get_imputer_func(method)
+        y, id_obs, x = self._problem()
+        with pytest.raises(ValueError, match=f"Predictors must be numeric for {method}"):
+            imputer(y, id_obs, np.full((12, 2), "a"))
+        x_nan = x.copy()
+        x_nan[3, 1] = np.nan
+        with pytest.raises(ValueError, match=f"Predictors must not contain missing values for {method}"):
+            imputer(y, id_obs, x_nan)
+        frame = pd.DataFrame(x_nan, columns=["u", "v"])
+        with pytest.raises(ValueError, match=r"Columns with missing values: \['v'\]"):
+            imputer(y, id_obs, frame)
+        with pytest.raises(ValueError, match="x has 11 rows, but y has 12 entries"):
+            imputer(y, id_obs, x[:11])
+
+    @pytest.mark.parametrize("method", [*REGRESSIONS, "mean"])
+    def test_nullable_and_complex_targets(self, method):
+        """A nullable numeric target works as its float version; complex values are refused."""
+        imputer = get_imputer_func(method)
+        y, id_obs, x = self._problem()
+        nullable = pd.array(np.where(id_obs, y, np.nan), dtype="Float64")
+        expected = imputer(y, id_obs, x, rng=np.random.default_rng(1))
+        np.testing.assert_array_equal(imputer(nullable, id_obs, x, rng=np.random.default_rng(1)), expected)
+        with pytest.raises(ValueError, match=f"numeric for {method}, got complex128 values"):
+            imputer(y.astype(complex), id_obs, x, rng=np.random.default_rng(1))
+
+    def test_norm_predict_is_the_least_squares_prediction(self):
+        y, id_obs, x = self._problem()
+        design = np.c_[np.ones(12), x]
+        coef = np.linalg.lstsq(design[id_obs], y[id_obs], rcond=None)[0]
+        predict = get_imputer_func("norm.predict")
+        np.testing.assert_allclose(predict(y, id_obs, x), design[~id_obs] @ coef)
+        # a 1-D x is one predictor
+        np.testing.assert_array_equal(predict(y, id_obs, x[:, 0]), predict(y, id_obs, x[:, :1]))
+
+    def test_aliased_predictor_gets_coefficient_zero(self):
+        """A duplicated column is aliased in the QR fit; R imputes NA, the port
+        sets its coefficient to 0, which leaves the prediction unchanged.
+        (norm.nob and norm.boot still count it in their residual df, as R.)"""
+        y, id_obs, x = self._problem()
+        with_copy = np.c_[x, x[:, 0]]
+        predict = get_imputer_func("norm.predict")
+        np.testing.assert_allclose(predict(y, id_obs, with_copy), predict(y, id_obs, x), rtol=1e-10)
+        for method in ("norm.nob", "norm.boot"):
+            out = get_imputer_func(method)(y, id_obs, with_copy, rng=np.random.default_rng(3))
+            assert np.isfinite(out).all()
+
+
+class TestLogregImputation:
+    """Input handling and building blocks of logreg and logreg.boot."""
+
+    METHODS = ["logreg", "logreg.boot"]
+
+    @staticmethod
+    def _problem(n=16):
+        x = np.random.default_rng(0).normal(size=(n, 2))
+        y = np.where(x[:, 0] + np.cos(np.arange(n)) > 0, "b", "a").astype(object)
+        id_obs = np.arange(n) % 4 != 0
+        y[~id_obs] = None
+        return y, id_obs, x
+
+    def test_uniform_equal_to_the_probability_gives_the_second_category(self):
+        """R's ``runif(n) <= p``: equality draws the second category."""
+        from imputation.logreg import _draw_codes
+
+        p = 0.3
+        u = np.array([p, p, p, 0.0, 1.0])
+        prob = np.array([p, np.nextafter(p, 0), np.nextafter(p, 1), 0.0, 1.0])
+        np.testing.assert_array_equal(_draw_codes(u, prob), [1, 0, 1, 1, 1])
+
+    @pytest.mark.parametrize(
+        "y, levels, codes",
+        [
+            (np.array([True, None, False, True], dtype=object), [False, True], [1, -1, 0, 1]),
+            (np.array([2.0, np.nan, 0.5, 2.0]), [0.5, 2.0], [1, -1, 0, 1]),
+            (np.array(["yes", None, "no", "yes"], dtype=object), ["no", "yes"], [1, -1, 0, 1]),
+            (pd.array([True, None, False, True], dtype="boolean"), [False, True], [1, -1, 0, 1]),
+            (pd.array(["yes", None, "no", "yes"], dtype="string"), ["no", "yes"], [1, -1, 0, 1]),
+            # unordered: sorted labels present, the unused "c" dropped
+            (pd.Categorical(["b", None, "a", "b"], categories=["c", "b", "a"]), ["a", "b"], [1, -1, 0, 1]),
+            # ordered: declared order of the levels present
+            (
+                pd.Categorical(["b", None, "a", "b"], categories=["c", "b", "a"], ordered=True),
+                ["b", "a"],
+                [0, -1, 1, 0],
+            ),
+        ],
+    )
+    def test_target_categories(self, y, levels, codes):
+        from imputation.logreg import target_categories
+
+        categories = target_categories(y)
+        assert categories.levels == levels
+        np.testing.assert_array_equal(categories.codes, codes)
+        assert categories.labels.dtype == np.asarray(y).dtype
+        assert categories.labels.tolist() == levels
+
+    def test_target_categories_keeps_unused_ordered_levels_on_request(self):
+        from imputation.logreg import target_categories
+
+        y = pd.Categorical(["b", "a"], categories=["c", "b", "a"], ordered=True)
+        categories = target_categories(y, keep_unused=True)
+        assert categories.levels == ["c", "b", "a"]
+        np.testing.assert_array_equal(categories.codes, [1, 2])
+        unordered = pd.Categorical(["b", "a"], categories=["c", "b", "a"])
+        assert target_categories(unordered, keep_unused=True).levels == ["a", "b"]
+
+    def test_values_of_mixed_types_raise(self):
+        from imputation.logreg import target_categories
+
+        with pytest.raises(TypeError, match="mixed types"):
+            target_categories(np.array(["a", 1, None], dtype=object))
+
+    @pytest.mark.parametrize("method", METHODS)
+    def test_invalid_inputs(self, method):
+        imputer = get_imputer_func(method)
+        y, id_obs, x = self._problem()
+        with pytest.raises(ValueError, match=f"Predictors must be numeric for {method}"):
+            imputer(y, id_obs, np.full((16, 2), "a"))
+        x_nan = x.copy()
+        x_nan[3, 1] = np.nan
+        with pytest.raises(ValueError, match=f"Predictors must not contain missing values for {method}"):
+            imputer(y, id_obs, x_nan)
+        with pytest.raises(ValueError, match=f"{method}: y is missing in entries that id_obs marks as observed"):
+            imputer(y, np.ones(16, dtype=bool), x)
+        with pytest.raises(ValueError, match=r"two categories, but y has 16 \(0\.0, 1\.0, 2\.0, 3\.0, 4\.0, \.\.\.\)"):
+            imputer(np.arange(16.0), id_obs, x)
+
+    @pytest.mark.parametrize("method", METHODS)
+    def test_x_as_data_frame_with_a_categorical_column(self, method):
+        """A DataFrame predictor is dummy-coded as MICE does."""
+        y, id_obs, x = self._problem()
+        frame = pd.DataFrame({"u": x[:, 0], "g": np.where(x[:, 1] > 0, "p", "q")})
+        coded = np.c_[x[:, 0], (x[:, 1] <= 0).astype(float)]
+        first = get_imputer_func(method)(y, id_obs, frame, rng=np.random.default_rng(4))
+        second = get_imputer_func(method)(y, id_obs, coded, rng=np.random.default_rng(4))
+        np.testing.assert_array_equal(first, second)
+
+    def test_logit_fit_rejects_invalid_input(self):
+        from imputation.fitting import logit_fit
+
+        x = np.c_[np.ones(4), [0.0, 1.0, 2.0, 3.0]]
+        with pytest.raises(ValueError, match=r"y values must be 0 <= y <= 1"):
+            logit_fit(x, [0, 1, 2, 1])
+        with pytest.raises(ValueError, match="non-negative"):
+            logit_fit(x, [0, 1, 0, 1], weights=[1, -1, 1, 1])
+        with pytest.raises(ValueError, match="x has 4 rows, y 3"):
+            logit_fit(x, [0, 1, 0])
+        with pytest.raises(ValueError, match="maxit must be at least 1"):
+            logit_fit(x, [0, 1, 0, 1], maxit=0)
+
+    def test_logit_fit_leaves_out_rows_with_weight_zero(self):
+        from imputation.fitting import logit_fit
+
+        x = np.c_[np.ones(7), [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]]
+        y = np.array([0, 0, 1, 0, 1, 1, 1.0])
+        weighted = logit_fit(x, y, weights=[1, 1, 1, 1, 1, 1, 0])
+        plain = logit_fit(x[:6], y[:6])
+        np.testing.assert_allclose(weighted.coef, plain.coef, rtol=1e-12)
+        np.testing.assert_allclose(weighted.cov_unscaled, plain.cov_unscaled, rtol=1e-12)
+
+    def test_one_dimensional_x_and_default_generator(self):
+        """A 1-D x is one column; without `rng` a fresh generator is used."""
+        from imputation.fitting import logit_fit
+        from imputation.logreg import augment
+
+        fit = logit_fit(np.ones(4), [0, 1, 1, 0])  # intercept only: logit(1/2) = 0
+        assert fit.coef.shape == (1,) and abs(fit.coef[0]) < 1e-12
+        y, id_obs, x = self._problem()
+        codes = np.where(y == "b", 1, np.where(y == "a", 0, -1))
+        np.testing.assert_array_equal(
+            augment(codes, id_obs, x[:, 0], ~id_obs).x, augment(codes, id_obs, x[:, :1], ~id_obs).x
+        )
+        for method in self.METHODS:
+            assert set(get_imputer_func(method)(y, id_obs, x)) <= {"a", "b"}
+
+    def test_logit_fit_of_separated_data_stops_at_maxit(self):
+        """As R's glm.fit: no error, ``converged`` False, large coefficients."""
+        from imputation.fitting import logit_fit
+
+        x = np.c_[np.ones(6), [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]]
+        fit = logit_fit(x, [0, 0, 0, 1, 1, 1], maxit=10)
+        assert (fit.iterations, fit.converged) == (10, False)
+        assert fit.coef[1] > 5
+        assert not fit.aliased.any()
+
+
+class TestPolyregImputation:
+    """Input handling and building blocks of polyreg and multinom_fit."""
+
+    @staticmethod
+    def _problem(n=24):
+        x = np.random.default_rng(0).normal(size=(n, 2))
+        score = x[:, 0] + np.cos(np.arange(n))
+        y = np.where(score > 0.6, "c", np.where(score > -0.6, "b", "a")).astype(object)
+        id_obs = np.arange(n) % 4 != 0
+        y[~id_obs] = None
+        return y, id_obs, x
+
+    def test_uniform_equal_to_a_cumulative_probability_stays_in_the_lower_category(self):
+        """R's ``un > cumsum(p)``: a number equal to a cumulative probability
+        does not exceed it; one just above it does."""
+        from imputation.polyreg import _draw_categories
+
+        prob = np.tile([0.25, 0.5, 0.25], (6, 1))
+        u = np.array([0.25, np.nextafter(0.25, 1), 0.75, np.nextafter(0.75, 1), 0.0, np.nextafter(0.25, 0)])
+        np.testing.assert_array_equal(_draw_categories(u, prob), [0, 1, 1, 2, 0, 0])
+
+    def test_uniform_above_the_last_cumulative_probability_gives_the_last_category(self):
+        """The probabilities may sum to slightly less than 1; R imputes NA
+        above the sum, the port the last category with a positive probability."""
+        from imputation.polyreg import _draw_categories
+
+        prob = np.array([[0.1, 0.2, 0.7 - 1e-12], [0.5, 0.5 - 1e-12, 0.0]])
+        assert np.cumsum(prob, axis=1)[:, -1].max() < 1 - 1e-13
+        np.testing.assert_array_equal(_draw_categories([1 - 1e-13, 1 - 1e-13], prob), [2, 1])
+
+    def test_zero_probability_category_is_never_drawn(self):
+        from imputation.polyreg import _draw_categories
+
+        prob = np.array([[0.4, 0.0, 0.6]] * 4)
+        np.testing.assert_array_equal(_draw_categories([0.1, 0.4, np.nextafter(0.4, 1), 0.99], prob), [0, 0, 2, 2])
+
+    def test_invalid_inputs(self):
+        from imputation.polyreg import polyreg
+
+        y, id_obs, x = self._problem()
+        with pytest.raises(ValueError, match="Predictors must be numeric for polyreg"):
+            polyreg(y, id_obs, np.full((24, 2), "a"))
+        x_nan = x.copy()
+        x_nan[3, 1] = np.nan
+        with pytest.raises(ValueError, match="Predictors must not contain missing values for polyreg"):
+            polyreg(y, id_obs, x_nan)
+        with pytest.raises(ValueError, match="polyreg: y is missing in entries that id_obs marks as observed"):
+            polyreg(y, np.ones(24, dtype=bool), x)
+
+    def test_x_as_data_frame_and_default_generator(self):
+        """A DataFrame predictor is dummy-coded as MICE does; without `rng` a fresh generator is used."""
+        from imputation.polyreg import polyreg
+
+        y, id_obs, x = self._problem()
+        frame = pd.DataFrame({"u": x[:, 0], "g": np.where(x[:, 1] > 0, "p", "q")})
+        coded = np.c_[x[:, 0], (x[:, 1] <= 0).astype(float)]
+        first = polyreg(y, id_obs, frame, rng=np.random.default_rng(4))
+        np.testing.assert_array_equal(first, polyreg(y, id_obs, coded, rng=np.random.default_rng(4)))
+        assert set(polyreg(y, id_obs, x)) <= {"a", "b", "c"}
+
+    def test_parameters_reach_the_fit(self, monkeypatch):
+        import imputation.polyreg
+
+        seen = []
+        original = imputation.polyreg.multinom_fit
+
+        def recording(*args, **kwargs):
+            seen.append((kwargs["maxit"], kwargs["max_weights"]))
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(imputation.polyreg, "multinom_fit", recording)
+        y, id_obs, x = self._problem()
+        imputation.polyreg.polyreg(y, id_obs, x, maxit=7, max_weights=50, rng=np.random.default_rng(1))
+        assert seen == [(7, 50)]
+
+    def test_multinom_fit_rejects_invalid_input(self):
+        from imputation.fitting import multinom_fit
+
+        x = np.c_[np.ones(6), [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]]
+        y = [0, 1, 2, 0, 1, 2]
+        with pytest.raises(ValueError, match="x has 6 rows, y 5"):
+            multinom_fit(x, y[:5])
+        with pytest.raises(ValueError, match="missing values in 'x'"):
+            multinom_fit(np.where(x == 3.0, np.nan, x), y)
+        with pytest.raises(ValueError, match="invalid weights vector"):
+            multinom_fit(x, y, weights=[1, 1, -1, 1, 1, 1])
+        with pytest.raises(ValueError, match="integers from 0 to 1"):
+            multinom_fit(x, y, n_classes=2)
+        with pytest.raises(ValueError, match="integers from 0 to 2"):
+            multinom_fit(x, [0, 1, 2, 0, 1.5, 2])
+        with pytest.raises(ValueError, match="need two or more classes"):
+            multinom_fit(x, [1] * 6, n_classes=3)
+        # 3 classes and 2 columns: 3 * (2 + 1) = 9 weights; 2 classes: 2 + 1
+        with pytest.raises(ValueError, match=r"too many \(9\) weights.*max_weights=8"):
+            multinom_fit(x, y, max_weights=8)
+        assert multinom_fit(x, [0, 1, 1, 0, 1, 0], max_weights=3).logistic
+
+    def test_multinom_fit_with_one_dimensional_x_and_an_empty_class(self):
+        """A 1-D x is one column; a class without rows is not fitted and has probability 0."""
+        from imputation.fitting import multinom_fit
+
+        x = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
+        fit = multinom_fit(x, [0, 0, 3, 0, 3, 3], n_classes=4)
+        assert fit.classes.tolist() == [0, 3] and fit.logistic and fit.coef.shape == (1, 1)
+        prob = fit.predict(x)
+        assert prob.shape == (6, 4) and np.all(prob[:, 1:3] == 0)
+        np.testing.assert_allclose(prob.sum(axis=1), 1.0, rtol=1e-15)
+
+    def test_softmax_probability_of_zero_costs_1000_times_the_weight(self):
+        """nnet adds ``1000 w`` where the probability of the observed class underflows to 0."""
+        from imputation.fitting import _softmax_objective
+
+        x = np.c_[np.ones(3), [-1.0, 0.0, 1.0]]
+        fn, gr = _softmax_objective(x, np.array([0, 1, 2]), np.array([2.0, 1.0, 0.5]), 3)
+        beta = np.array([0.0, -800.0, 0.0, 800.0])  # eta = (0, -800 x, 800 x)
+        # row 1 (class 1): p = exp(-800) / (...) = 0; row 2 (class 2): p = 1/3; row 3: p = 1
+        assert fn(beta) == pytest.approx(2.0 * 1000 + 1.0 * np.log(3) + 0.0, rel=1e-15)
+        assert np.isfinite(gr(beta)).all()
+
+    def test_nnet_sigmoid_is_cut_off_beyond_15(self):
+        from imputation.fitting import _nnet_sigmoid
+
+        out = _nnet_sigmoid(np.array([-800.0, -15.000001, -15.0, 0.0, 15.0, 15.000001]))
+        assert out[0] == 0.0 and out[1] == 0.0 and out[-1] == 1.0
+        np.testing.assert_allclose(out[2:5], [1 / (1 + np.exp(15)), 0.5, 1 / (1 + np.exp(-15))], rtol=1e-15)
+        assert 0 < out[2] and out[4] < 1
+
+
+class TestPolrImputation:
+    """Input handling and building blocks of polr and polr_fit."""
+
+    @staticmethod
+    def _problem(n=30):
+        x = np.random.default_rng(0).normal(size=(n, 2))
+        score = x[:, 0] - 0.5 * x[:, 1] + np.cos(np.arange(n))
+        labels = np.array(["low", "mid", "high", "top"])[np.digitize(score, [-0.8, 0.0, 0.8])]
+        id_obs = np.arange(n) % 4 != 0
+        y = pd.Categorical(np.where(id_obs, labels, None), categories=["low", "mid", "high", "top"], ordered=True)
+        return y, id_obs, x
+
+    def test_invalid_inputs(self):
+        from imputation.polr import polr
+
+        y, id_obs, x = self._problem()
+        with pytest.raises(ValueError, match="Predictors must be numeric for polr"):
+            polr(y, id_obs, np.full((30, 2), "a"))
+        x_nan = x.copy()
+        x_nan[3, 1] = np.nan
+        with pytest.raises(ValueError, match="Predictors must not contain missing values for polr"):
+            polr(y, id_obs, x_nan)
+        with pytest.raises(ValueError, match="polr: y is missing in entries that id_obs marks as observed"):
+            polr(y, np.ones(30, dtype=bool), x)
+
+    def test_without_predictors_the_cut_points_alone_are_fitted(self):
+        """R stops (both of its fits see no response); the port fits the
+        model without predictors, and multinom on the intercept where polr
+        does not apply."""
+        from imputation.fitting import MultinomFit, PolrFit
+        from imputation.polr import _polr
+
+        y, id_obs, _ = self._problem()
+        for x in (None, np.empty((30, 0)), pd.DataFrame(index=range(30))):
+            steps = _polr(y, id_obs, x, None, 100, 1500, False, np.random.default_rng(1), None)
+            assert isinstance(steps.fit, PolrFit) and steps.fit.coef.shape == (0,)
+            assert steps.prob.shape == (8, 4) and np.all(steps.prob == steps.prob[0])
+            assert set(steps.labels) <= {"low", "mid", "high", "top"}
+        two = np.where(id_obs, np.where(np.asarray(y) == "low", "low", "high"), None)
+        steps = _polr(two, id_obs, None, None, 100, 1500, False, np.random.default_rng(1), None)
+        assert isinstance(steps.fit, MultinomFit) and steps.fit.coef.shape == (1, 1)
+        assert set(steps.labels) <= {"low", "high"}
+
+    def test_x_as_data_frame_and_default_generator(self):
+        """A DataFrame predictor is dummy-coded as MICE does; without `rng` a fresh generator is used."""
+        from imputation.polr import polr
+
+        y, id_obs, x = self._problem()
+        frame = pd.DataFrame({"u": x[:, 0], "g": np.where(x[:, 1] > 0, "p", "q")})
+        coded = np.c_[x[:, 0], (x[:, 1] <= 0).astype(float)]
+        first = polr(y, id_obs, frame, rng=np.random.default_rng(4))
+        np.testing.assert_array_equal(first, polr(y, id_obs, coded, rng=np.random.default_rng(4)))
+        assert set(polr(y, id_obs, x)) <= {"low", "mid", "high", "top"}
+
+    def test_nothing_observed_and_nothing_to_impute(self):
+        from imputation.polr import polr
+
+        y, _, x = self._problem()
+        none = np.zeros(30, dtype=bool)
+        assert polr(y, none, x, id_mis=none).shape == (0,)
+        with pytest.raises(ValueError, match="polr: the target has no observed value"):
+            polr(y, none, x)
+
+    def test_fallback_parameters_reach_multinom_fit_only(self, monkeypatch):
+        """``maxit`` and ``max_weights`` are R's nnet.maxit and nnet.MaxNWts: they
+        reach the fallback; the proportional-odds fit keeps R's 100 iterations."""
+        import imputation.polr
+
+        seen = []
+        original_multinom, original_polr = imputation.polr.multinom_fit, imputation.polr.polr_fit
+
+        def recording_multinom(*args, **kwargs):
+            seen.append(("multinom", kwargs["maxit"], kwargs["max_weights"]))
+            return original_multinom(*args, **kwargs)
+
+        def recording_polr(*args, **kwargs):
+            seen.append(("polr", sorted(kwargs)))
+            return original_polr(*args, **kwargs)
+
+        monkeypatch.setattr(imputation.polr, "multinom_fit", recording_multinom)
+        monkeypatch.setattr(imputation.polr, "polr_fit", recording_polr)
+        y, id_obs, x = self._problem()
+        imputation.polr.polr(y, id_obs, x, maxit=7, max_weights=50, rng=np.random.default_rng(1))
+        numeric = np.where(id_obs, y.codes.astype(float), np.nan)
+        imputation.polr.polr(numeric, id_obs, x, maxit=7, max_weights=50, rng=np.random.default_rng(1))
+        assert seen == [("polr", ["n_levels", "weights"]), ("multinom", 7, 50)]
+
+    def test_targets_that_are_no_factor_in_r(self):
+        """Booleans and numbers go to the fallback (R: not a factor); text and Categoricals do not."""
+        from imputation.polr import _is_factor
+
+        assert _is_factor(pd.Categorical(["a", "b"]))
+        assert _is_factor(np.array(["a", None, "b"], dtype=object))
+        assert not _is_factor(np.array([True, None, False], dtype=object))
+        assert not _is_factor(np.array([1.0, np.nan, 2.0]))
+        assert not _is_factor(np.array([True, False]))
+
+    def test_polr_fit_rejects_invalid_input(self):
+        from imputation.fitting import PolrError, polr_fit
+
+        x = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
+        y = [0, 1, 2, 0, 1, 2]
+        with pytest.raises(ValueError, match="x has 6 rows, y 5"):
+            polr_fit(x, y[:5])
+        with pytest.raises(ValueError, match="missing values in 'x'"):
+            polr_fit(np.where(x == 3.0, np.nan, x), y)
+        with pytest.raises(ValueError, match="weights must be non-negative"):
+            polr_fit(x, y, weights=[1, 1, -1, 1, 1, 1])
+        with pytest.raises(ValueError, match="integers from 0 to 1"):
+            polr_fit(x, y, n_levels=2)
+        with pytest.raises(ValueError, match="integers from 0 to 2"):
+            polr_fit(x, [0, 1, 2, 0, 1.5, 2])
+        with pytest.raises(PolrError, match="response must have 3 or more levels") as info:
+            polr_fit(x, [0, 1, 1, 0, 1, 0])
+        assert info.value.condition == PolrError.FEW_LEVELS
+
+    def test_polr_gradient_is_that_of_the_objective(self):
+        """The analytic gradient of polr's objective agrees with central differences."""
+        from imputation.fitting import _polr_objective
+
+        rng = np.random.default_rng(2)
+        x = rng.normal(size=(25, 2))
+        codes = np.digitize(x @ [1.0, -0.7] + rng.logistic(size=25), [-1.0, 0.0, 1.0])
+        fn, gr = _polr_objective(x, codes, rng.uniform(0.5, 2.0, size=25), 4)
+        par = np.array([0.8, -0.5, -0.9, -0.1, 0.2])
+        h = 1e-6
+        numeric = [(fn(par + h * e) - fn(par - h * e)) / (2 * h) for e in np.eye(5)]
+        np.testing.assert_allclose(gr(par), numeric, rtol=1e-6, atol=1e-7)
+
+    def test_polr_objective_is_infinite_where_a_probability_is_zero(self):
+        """R's ``Inf`` when any probability is not positive: a middle level far
+        from its cut points has probability exactly 0."""
+        from imputation.fitting import _polr_objective
+
+        fn, _ = _polr_objective(np.array([[-60.0], [0.0], [1.0]]), np.array([1, 0, 2]), np.ones(3), 3)
+        assert fn(np.array([1.0, 0.0, 0.0])) == np.inf
+        assert np.isfinite(fn(np.array([0.0, 0.0, 0.0])))
+
+    def test_plogis_and_dlogis_are_rs(self):
+        from imputation.fitting import _dlogis, _plogis
+
+        z = np.array([-np.inf, -800.0, -100.0, 0.0, 2.0, 100.0, np.inf])
+        np.testing.assert_array_equal(_plogis(z)[[0, 1, 3, 5, 6]], [0.0, 0.0, 0.5, 1.0, 1.0])
+        np.testing.assert_allclose(_plogis(z[[2, 4]]), [np.exp(-100.0), 1 / (1 + np.exp(-2.0))], rtol=1e-15)
+        density = np.exp(-2) / (1 + np.exp(-2)) ** 2
+        np.testing.assert_allclose(_dlogis(np.array([0.0, 2.0, -2.0])), [0.25, density, density])
+
+
 class TestMethodConsistency:
     """Test consistency across imputation methods."""
 
@@ -430,7 +907,7 @@ class TestMethodConsistency:
         id_obs = ~np.isnan(y)
         x = rs.randn(8, 2)
 
-        methods = ["sample", "pmm", "cart", "rf", "midas"]
+        methods = ["sample", "pmm", "cart", "rf", "midas", "norm", "norm.nob", "norm.boot", "norm.predict", "mean"]
 
         for method_name in methods:
             method_func = get_imputer_func(method_name)
@@ -439,3 +916,12 @@ class TestMethodConsistency:
             assert isinstance(result, np.ndarray)
             assert len(result) == (~id_obs).sum()
             assert not np.isnan(result).any()
+
+        # the categorical methods impute a target with two categories
+        y01 = np.array([0.0, 1.0, np.nan, 1.0, 0.0, 1.0, 0.0, 1.0])
+        for method_name in ["logreg", "logreg.boot", "polyreg", "polr"]:
+            result = get_imputer_func(method_name)(y01, id_obs, x, rng=np.random.default_rng(6))
+
+            assert isinstance(result, np.ndarray)
+            assert len(result) == (~id_obs).sum()
+            assert set(result) <= {0.0, 1.0}

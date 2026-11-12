@@ -1,12 +1,12 @@
 # L3 simulation study: mice-py against R mice
 
-Generated 2026-11-11 17:38 by `simulations/report.py` from `simulations/work/results/`. Method and formulas: `simulations/README.md` and `simulations/metrics.py`.
+Generated 2026-11-12 09:23 by `simulations/report.py` from `simulations/work/results/`. Method and formulas: `simulations/README.md` and `simulations/metrics.py`.
 
 ## Run
 
 |  | Python | R |
 |---|---|---|
-| software | mice-py 0.2.0, Python 3.13.7, NumPy 2.3.3 | R version 4.6.2 (2026-10-29), mice 3.19.0, ranger 0.18.0, rpart 4.1.27 |
+| software | mice-py 0.3.0, Python 3.13.7, NumPy 2.3.3 | R version 4.6.2 (2026-10-29), mice 3.19.0, ranger 0.18.0, rpart 4.1.27 |
 | seeds | per replication | per replication (`mice(seed = )`) |
 | replications | 500, 1000 per cell | 500, 1000 per cell |
 | processes | 2 | 2 |
@@ -21,6 +21,60 @@ Scenarios:
 | S4 | model M, small sample | 50 | x1 MCAR 50% | 1 | (Intercept) = 0.5, x1 = 1, x2 = 0.5, mean(x1) = 0 |
 | S5 | g in {a,b,c} (0.5, 0.3, 0.2); x ~ N(0.5 code, 1); y = 0.5[g=b] + 1.0[g=c] + 0.7x + e | 200 | g MAR on y 30%; x MCAR 20% | 5 | (Intercept) = 0, gb = 0.5, gc = 1, x = 0.7, P(g=c) = 0.2, mean(x) = 0.35 |
 | S6 | w = exp(0.5 x1 + u), u ~ N(0, 0.5^2); y = 1 + 0.5w + 0.5x1 + e | 200 | w MAR on y 30% | 1 | (Intercept) = 1, w = 0.5, x1 = 0.5, mean(w) = 1.284 |
+| S7 | b in {no,yes} (0.6, 0.4); x ~ N(0.5 code, 1); y = 0.5 + 1.0[b=yes] + 0.7x + e | 200 | b MAR on y 30%; x MCAR 20% | 5 | (Intercept) = 0.5, byes = 1, x = 0.7, P(b=yes) = 0.4, mean(x) = 0.2 |
+| S8 | o ordered lo < mid < hi < top (0.2, 0.3, 0.3, 0.2), code 0-3; x ~ N(0.5 code, 1); y = 0.5 + 0.4 code + 0.7x + e | 200 | o MAR on y 30%; x MCAR 20% | 5 | (Intercept) = 0.5, omid = 0.4, ohi = 0.8, otop = 1.2, x = 0.7, P(o=top) = 0.2, mean(x) = 0.75 |
+
+Categorical columns: `g` (a, b, c, unordered) in S5; `b` (no, yes, unordered) in S7; `o` (lo < mid < hi < top, ordered) in S8. Python reads an unordered column as object dtype and an ordered one as an ordered `pd.Categorical`; R reads factors with these levels. The analysis uses treatment dummies for both (R analyses an unordered copy of an ordered factor).
+
+## Cells
+
+A study method on a scenario. Replications: planned for the full study, and run here by Python and R. Rule `z`: every paired difference |z| ≤ 4.2; rule `identity`: see [Identity rule](#identity-rule).
+
+| method | scenario | planned | Python | R | rule | method of each incomplete column |
+|---|---|---|---|---|---|---|
+| pmm | S1 | 1000 | 1000 | 1000 | z | x1: pmm |
+| pmm | S2 | 1000 | 1000 | 1000 | z | x1: pmm |
+| pmm | S3 | 1000 | 1000 | 1000 | z | x1: pmm, y: pmm |
+| pmm | S4 | 1000 | 1000 | 1000 | z | x1: pmm |
+| pmm | S5 | 1000 | 1000 | 1000 | z | g: pmm, x: pmm |
+| pmm | S6 | 1000 | 1000 | 1000 | z | w: pmm |
+| midastouch | S1 | 1000 | 1000 | 1000 | z | x1: midastouch |
+| midastouch | S2 | 1000 | 1000 | 1000 | z | x1: midastouch |
+| midastouch | S3 | 1000 | 1000 | 1000 | z | x1: midastouch, y: midastouch |
+| midastouch | S4 | 1000 | 1000 | 1000 | z | x1: midastouch |
+| midastouch | S5 | 1000 | 1000 | 1000 | z | g: midastouch, x: midastouch |
+| midastouch | S6 | 1000 | 1000 | 1000 | z | w: midastouch |
+| cart | S1 | 1000 | 1000 | 1000 | z | x1: cart |
+| cart | S2 | 1000 | 1000 | 1000 | z | x1: cart |
+| cart | S3 | 1000 | 1000 | 1000 | z | x1: cart, y: cart |
+| cart | S4 | 1000 | 1000 | 1000 | z | x1: cart |
+| cart | S5 | 1000 | 1000 | 1000 | z | g: cart, x: cart |
+| cart | S6 | 1000 | 1000 | 1000 | z | w: cart |
+| rf | S1 | 500 | 500 | 500 | z | x1: rf |
+| rf | S2 | 500 | 500 | 500 | z | x1: rf |
+| rf | S3 | 500 | 500 | 500 | z | x1: rf, y: rf |
+| rf | S4 | 500 | 500 | 500 | z | x1: rf |
+| rf | S5 | 500 | 500 | 500 | z | g: rf, x: rf |
+| rf | S6 | 500 | 500 | 500 | z | w: rf |
+| sample | S1 | 1000 | 1000 | 1000 | z | x1: sample |
+| sample | S2 | 1000 | 1000 | 1000 | z | x1: sample |
+| sample | S3 | 1000 | 1000 | 1000 | z | x1: sample, y: sample |
+| sample | S4 | 1000 | 1000 | 1000 | z | x1: sample |
+| sample | S5 | 1000 | 1000 | 1000 | z | g: sample, x: sample |
+| sample | S6 | 1000 | 1000 | 1000 | z | w: sample |
+| norm | S3 | 1000 | 1000 | 1000 | z | x1: norm, y: norm |
+| norm | S4 | 1000 | 1000 | 1000 | z | x1: norm |
+| norm.boot | S3 | 1000 | 1000 | 1000 | z | x1: norm.boot, y: norm.boot |
+| norm.boot | S4 | 1000 | 1000 | 1000 | z | x1: norm.boot |
+| norm.nob¹ | S4 | 1000 | 1000 | 1000 | z | x1: norm.nob |
+| norm.predict¹ | S4 | 1000 | 1000 | 1000 | identity | x1: norm.predict |
+| mean¹ | S4 | 1000 | 1000 | 1000 | identity | x1: mean |
+| default | S5 | 1000 | 1000 | 1000 | z | no `method` argument (each engine's default by column type) |
+| default | S7 | 1000 | 1000 | 1000 | z | no `method` argument (each engine's default by column type) |
+| default | S8 | 1000 | 1000 | 1000 | z | no `method` argument (each engine's default by column type) |
+| logreg.boot | S7 | 1000 | 1000 | 1000 | z | b: logreg.boot, x: pmm |
+
+¹ `norm.nob`, `norm.predict` and `mean` are improper imputation methods: they ignore the uncertainty of the imputation model (`norm.predict` and `mean` also the residual noise), so their intervals cover below 95% in both engines, by design. The pass rule is the same as for every cell: mice-py matches R.
 
 ## Harness checks
 
@@ -52,15 +106,52 @@ Coverage of the complete-data analysis (pseudo-method `complete`) must lie withi
 | S5 | P(g=c) | 0.934 ± 0.021 (1000 reps) | 0.934 ± 0.021 (1000 reps) |
 | S5 | mean(x) | 0.951 ± 0.021 (1000 reps) | 0.951 ± 0.021 (1000 reps) |
 | S6 | (Intercept) | 0.945 ± 0.021 (1000 reps) | 0.945 ± 0.021 (1000 reps) |
-| S6 | x1 | 0.950 ± 0.021 (1000 reps) | 0.950 ± 0.021 (1000 reps) |
 | S6 | w | 0.956 ± 0.021 (1000 reps) | 0.956 ± 0.021 (1000 reps) |
+| S6 | x1 | 0.950 ± 0.021 (1000 reps) | 0.950 ± 0.021 (1000 reps) |
 | S6 | mean(w) | 0.949 ± 0.021 (1000 reps) | 0.949 ± 0.021 (1000 reps) |
+| S7 | (Intercept) | 0.954 ± 0.021 (1000 reps) | 0.954 ± 0.021 (1000 reps) |
+| S7 | byes | 0.949 ± 0.021 (1000 reps) | 0.949 ± 0.021 (1000 reps) |
+| S7 | x | 0.944 ± 0.021 (1000 reps) | 0.944 ± 0.021 (1000 reps) |
+| S7 | P(b=yes) | 0.952 ± 0.021 (1000 reps) | 0.952 ± 0.021 (1000 reps) |
+| S7 | mean(x) | 0.953 ± 0.021 (1000 reps) | 0.953 ± 0.021 (1000 reps) |
+| S8 | (Intercept) | 0.948 ± 0.021 (1000 reps) | 0.948 ± 0.021 (1000 reps) |
+| S8 | omid | 0.950 ± 0.021 (1000 reps) | 0.950 ± 0.021 (1000 reps) |
+| S8 | ohi | 0.949 ± 0.021 (1000 reps) | 0.949 ± 0.021 (1000 reps) |
+| S8 | otop | 0.945 ± 0.021 (1000 reps) | 0.945 ± 0.021 (1000 reps) |
+| S8 | x | 0.956 ± 0.021 (1000 reps) | 0.956 ± 0.021 (1000 reps) |
+| S8 | P(o=top) | 0.949 ± 0.021 (1000 reps) | 0.949 ± 0.021 (1000 reps) |
+| S8 | mean(x) | 0.950 ± 0.021 (1000 reps) | 0.950 ± 0.021 (1000 reps) |
 
-Identical data, identical analysis: over 27000 complete-data rows the largest |qbar Python − qbar R| is 6.00e-15, the largest relative ubar difference 2.70e-14; dfcom equal: yes.
+Identical data, identical analysis: over 39000 complete-data rows the largest |qbar Python − qbar R| is 8.66e-15, the largest relative ubar difference 2.97e-14; dfcom equal: yes.
+
+## Methods used
+
+Each engine records the method of every column as it ran it (Python `MICE.method` in R's names, R `imp$method`; empty for a column that is not imputed). Only replications that succeeded in both engines are compared.
+
+Cells without a `method` argument, where each engine chooses by column type (R's `make.method`):
+
+| scenario | method | expected | Python | R | Python = R | verdict |
+|---|---|---|---|---|---|---|
+| S5 | default | `g=polyreg;x=pmm;y=` | g=polyreg;x=pmm;y= (1000) | g=polyreg;x=pmm;y= (1000) | 1000 / 1000 | pass |
+| S7 | default | `b=logreg;x=pmm;y=` | b=logreg;x=pmm;y= (1000) | b=logreg;x=pmm;y= (1000) | 1000 / 1000 | pass |
+| S8 | default | `o=polr;x=pmm;y=` | o=polr;x=pmm;y= (1000) | o=polr;x=pmm;y= (1000) | 1000 / 1000 | pass |
+
+In the other 37 cells Python and R recorded the same methods in every paired replication (34000 pairs).
+
+## Identity rule
+
+Deterministic methods on S4 (one incomplete column, maxit = 1) draw nothing, so the paired z statistic is 0/0 and is not computed. Such a cell passes when the largest |qbar Python − qbar R| over replications and terms is at most 1e-08 and B = 0 in both engines (to rounding: largest B at most 1e-16).
+
+| scenario | method | pairs × terms | max |qbar Py − qbar R| | max B Python | max B R | verdict |
+|---|---|---|---|---|---|---|
+| S4 | mean¹ | 1000 × 4 | 2.22e-15 | 1.54e-32 | 0.00e+00 | pass |
+| S4 | norm.predict¹ | 1000 × 4 | 3.33e-15 | 6.16e-32 | 0.00e+00 | pass |
 
 ## Flagged comparisons (|z| > 4.2)
 
-18 of 774 paired comparisons:
+Cells judged by the identity rule have no z and are not counted: S4 mean, S4 norm.predict.
+
+18 of 1044 paired comparisons:
 
 | scenario | method | term | metric | Python | R | Py − R (SE) | z |
 |---|---|---|---|---|---|---|---|
@@ -87,7 +178,7 @@ Identical data, identical analysis: over 27000 complete-data rows the largest |q
 
 | scenario | method | engine | failed / attempted | exception | message | cause |
 |---|---|---|---|---|---|---|
-| S5 | midastouch | python | 1000 / 1000 | ValueError | Target y must be numeric for midas, got string values. midas (R's midastouch) predicts the target by linear regression;  | midas does not take a categorical target (R's midastouch fails too) |
+| S5 | midastouch | python | 1000 / 1000 | ValueError | Column 'g', method 'midas' (iteration 1, imputation 1): Target y must be numeric for midas, got string values. midas (R' | midas does not take a categorical target (R's midastouch fails too) |
 | S5 | midastouch | r | 1000 / 1000 | simpleError | analysis: completed data still contain missing values | R midastouch imputes factor codes; R sets them to NA ('invalid factor level') |
 
 Replications with R `loggedEvents` or with warnings:
@@ -102,48 +193,63 @@ Mean seconds per replication (m = 5 imputations plus analysis), measured with al
 
 | scenario | method | Python | R |
 |---|---|---|---|
-| S1 | cart | 0.009 | 0.044 |
-| S1 | midastouch | 0.008 | 0.047 |
-| S1 | pmm | 0.008 | 0.017 |
-| S1 | rf | 0.030 | 0.060 |
-| S1 | sample | 0.006 | 0.036 |
-| S2 | cart | 0.009 | 0.047 |
-| S2 | midastouch | 0.008 | 0.051 |
-| S2 | pmm | 0.008 | 0.022 |
-| S2 | rf | 0.030 | 0.055 |
-| S2 | sample | 0.006 | 0.037 |
-| S3 | cart | 0.041 | 0.263 |
-| S3 | midastouch | 0.035 | 0.406 |
-| S3 | pmm | 0.030 | 0.087 |
-| S3 | rf | 0.252 | 0.336 |
-| S3 | sample | 0.018 | 0.078 |
-| S4 | cart | 0.008 | 0.052 |
-| S4 | midastouch | 0.007 | 0.035 |
-| S4 | pmm | 0.007 | 0.028 |
-| S4 | rf | 0.027 | 0.060 |
-| S4 | sample | 0.006 | 0.030 |
-| S5 | cart | 0.054 | 0.290 |
-| S5 | pmm | 0.042 | 0.122 |
-| S5 | rf | 0.387 | 0.513 |
-| S5 | sample | 0.036 | 0.087 |
-| S6 | cart | 0.012 | 0.053 |
-| S6 | midastouch | 0.011 | 0.070 |
-| S6 | pmm | 0.010 | 0.030 |
-| S6 | rf | 0.041 | 0.065 |
-| S6 | sample | 0.009 | 0.029 |
+| S1 | cart | 0.009 | 0.048 |
+| S1 | midastouch | 0.009 | 0.052 |
+| S1 | pmm | 0.009 | 0.017 |
+| S1 | rf | 0.031 | 0.059 |
+| S1 | sample | 0.007 | 0.035 |
+| S2 | cart | 0.010 | 0.044 |
+| S2 | midastouch | 0.009 | 0.060 |
+| S2 | pmm | 0.009 | 0.025 |
+| S2 | rf | 0.031 | 0.047 |
+| S2 | sample | 0.007 | 0.024 |
+| S3 | cart | 0.044 | 0.183 |
+| S3 | midastouch | 0.037 | 0.288 |
+| S3 | norm | 0.029 | 0.067 |
+| S3 | norm.boot | 0.028 | 0.068 |
+| S3 | pmm | 0.033 | 0.067 |
+| S3 | rf | 0.258 | 0.266 |
+| S3 | sample | 0.021 | 0.063 |
+| S4 | cart | 0.009 | 0.031 |
+| S4 | mean | 0.007 | 0.021 |
+| S4 | midastouch | 0.008 | 0.027 |
+| S4 | norm | 0.008 | 0.022 |
+| S4 | norm.boot | 0.008 | 0.022 |
+| S4 | norm.nob | 0.008 | 0.022 |
+| S4 | norm.predict | 0.008 | 0.022 |
+| S4 | pmm | 0.008 | 0.018 |
+| S4 | rf | 0.028 | 0.033 |
+| S4 | sample | 0.007 | 0.022 |
+| S5 | cart | 0.056 | 0.215 |
+| S5 | default | 0.071 | 0.158 |
+| S5 | pmm | 0.045 | 0.101 |
+| S5 | rf | 0.291 | 0.442 |
+| S5 | sample | 0.029 | 0.080 |
+| S6 | cart | 0.010 | 0.042 |
+| S6 | midastouch | 0.009 | 0.053 |
+| S6 | pmm | 0.009 | 0.025 |
+| S6 | rf | 0.031 | 0.050 |
+| S6 | sample | 0.007 | 0.028 |
+| S7 | default | 0.055 | 0.120 |
+| S7 | logreg.boot | 0.053 | 0.121 |
+| S8 | default | 0.094 | 0.311 |
 
-Extrapolated to the full study (1000 replications, rf 500, all six scenarios and five methods) on 8 cores:
+Extrapolated to the full study (all 41 cells of 8 scenarios, 500 or 1000 replications each), with as many processes as this run used:
 
-- python: about 2 min (0.2 CPU hours); cells not measured, taken from the slowest measured scenario of the same method: S5/midastouch.
-- r: about 6 min (0.8 CPU hours); cells not measured, taken from the slowest measured scenario of the same method: S5/midastouch.
+- python: about 9 min with 2 processes (0.3 CPU hours); cells not measured, taken from the slowest measured scenario of the same method: S5/midastouch.
+- r: about 27 min with 2 processes (0.9 CPU hours); cells not measured, taken from the slowest measured scenario of the same method: S5/midastouch.
 
 ## Results per scenario and method
 
-Cells: value (Monte Carlo SE). Py − R is the paired difference over replications where both engines succeeded, with its SE; z = difference / SE; bold z is flagged.
+Cells: value (Monte Carlo SE). Py − R is the paired difference over replications where both engines succeeded, with its SE; z = difference / SE; bold z is flagged. Cells of the identity rule have no z.
+
+¹ `norm.nob`, `norm.predict` and `mean` are improper imputation methods: they ignore the uncertainty of the imputation model (`norm.predict` and `mean` also the residual noise), so their intervals cover below 95% in both engines, by design. The pass rule is the same as for every cell: mice-py matches R.
 
 ### S1: model M; x1 MCAR 30%; n = 200, maxit = 1
 
 #### S1 pmm (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x1: pmm.
 
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
@@ -177,6 +283,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 
 #### S1 midastouch (Python 1000 reps, R 1000 reps, 1000 pairs)
 
+Methods: x1: midastouch.
+
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
 | (Intercept) = 0.5 | bias | -0.00117 (0.00246) | -0.00151 (0.00247) | 0.000336 (0.000585) | +0.57 |
@@ -208,6 +316,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 | mean(x1) | mean T | 0.00594 (0.00003) | 0.00595 (0.00003) | -0.0000159 (0.0000328) | -0.49 |
 
 #### S1 cart (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x1: cart.
 
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
@@ -241,6 +351,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 
 #### S1 rf (Python 500 reps, R 500 reps, 500 pairs)
 
+Methods: x1: rf.
+
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
 | (Intercept) = 0.5 | bias | 0.00126 (0.00360) | 0.00296 (0.00355) | -0.00170 (0.00069) | -2.46 |
@@ -272,6 +384,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 | mean(x1) | mean T | 0.00575 (0.00004) | 0.00572 (0.00004) | 0.0000294 (0.0000373) | +0.79 |
 
 #### S1 sample (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x1: sample.
 
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
@@ -307,6 +421,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 
 #### S2 pmm (Python 1000 reps, R 1000 reps, 1000 pairs)
 
+Methods: x1: pmm.
+
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
 | (Intercept) = 0.5 | bias | 0.0265 (0.0026) | 0.0259 (0.0026) | 0.000565 (0.000592) | +0.95 |
@@ -338,6 +454,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 | mean(x1) | mean T | 0.00581 (0.00004) | 0.00588 (0.00004) | -0.0000657 (0.0000401) | -1.64 |
 
 #### S2 midastouch (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x1: midastouch.
 
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
@@ -371,6 +489,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 
 #### S2 cart (Python 1000 reps, R 1000 reps, 1000 pairs)
 
+Methods: x1: cart.
+
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
 | (Intercept) = 0.5 | bias | 0.0217 (0.0027) | 0.0207 (0.0027) | 0.00101 (0.00041) | +2.49 |
@@ -403,6 +523,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 
 #### S2 rf (Python 500 reps, R 500 reps, 500 pairs)
 
+Methods: x1: rf.
+
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
 | (Intercept) = 0.5 | bias | 0.0433 (0.0037) | 0.0409 (0.0037) | 0.00237 (0.00069) | +3.41 |
@@ -434,6 +556,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 | mean(x1) | mean T | 0.00551 (0.00005) | 0.00555 (0.00004) | -0.0000371 (0.0000442) | -0.84 |
 
 #### S2 sample (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x1: sample.
 
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
@@ -468,6 +592,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 ### S3: model M; y and x1 each MAR on x2 25%, independent draws; n = 200, maxit = 5
 
 #### S3 pmm (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x1: pmm, y: pmm.
 
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
@@ -508,6 +634,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 
 #### S3 midastouch (Python 1000 reps, R 1000 reps, 1000 pairs)
 
+Methods: x1: midastouch, y: midastouch.
+
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
 | (Intercept) = 0.5 | bias | -0.00849 (0.00314) | -0.00772 (0.00313) | -0.00078 (0.00121) | -0.64 |
@@ -546,6 +674,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 | mean(y) | mean T | 0.0172 (0.0001) | 0.0173 (0.0001) | -0.000089 (0.000134) | -0.66 |
 
 #### S3 cart (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x1: cart, y: cart.
 
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
@@ -586,6 +716,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 
 #### S3 rf (Python 500 reps, R 500 reps, 500 pairs)
 
+Methods: x1: rf, y: rf.
+
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
 | (Intercept) = 0.5 | bias | -0.0186 (0.0043) | -0.0166 (0.0044) | -0.00200 (0.00143) | -1.39 |
@@ -625,6 +757,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 
 #### S3 sample (Python 1000 reps, R 1000 reps, 1000 pairs)
 
+Methods: x1: sample, y: sample.
+
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
 | (Intercept) = 0.5 | bias | -0.1981 (0.0035) | -0.1983 (0.0034) | 0.00024 (0.00123) | +0.19 |
@@ -662,9 +796,93 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 | mean(y) | mean B | 0.00318 (0.00007) | 0.00316 (0.00007) | 0.000018 (0.000102) | +0.18 |
 | mean(y) | mean T | 0.0165 (0.0001) | 0.0164 (0.0001) | 0.000024 (0.000124) | +0.19 |
 
+#### S3 norm (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x1: norm, y: norm.
+
+| term | metric | Python | R | Py − R | z |
+|---|---|---|---|---|---|
+| (Intercept) = 0.5 | bias | 0.00001 (0.00306) | 0.00163 (0.00308) | -0.00161 (0.00124) | -1.30 |
+| (Intercept) | % bias | 0.0 (0.6) | 0.3 (0.6) | -0.3 (0.2) | -1.30 |
+| (Intercept) | coverage | 0.952 (0.007) | 0.943 (0.007) | 0.009 (0.008) | +1.19 |
+| (Intercept) | CI width | 0.4151 (0.0031) | 0.4126 (0.0030) | 0.00253 (0.00416) | +0.61 |
+| (Intercept) | RMSE | 0.0968 (0.0021) | 0.0974 (0.0022) | -0.00060 (0.00124) | -0.48 |
+| (Intercept) | mean B | 0.00385 (0.00009) | 0.00377 (0.00009) | 0.000083 (0.000127) | +0.65 |
+| (Intercept) | mean T | 0.00970 (0.00012) | 0.00959 (0.00011) | 0.000106 (0.000154) | +0.69 |
+| x1 = 1 | bias | -0.00346 (0.00318) | -0.00405 (0.00318) | 0.00059 (0.00112) | +0.52 |
+| x1 | % bias | -0.3 (0.3) | -0.4 (0.3) | 0.1 (0.1) | +0.52 |
+| x1 | coverage | 0.961 (0.006) | 0.953 (0.007) | 0.008 (0.006) | +1.24 |
+| x1 | CI width | 0.4330 (0.0028) | 0.4327 (0.0028) | 0.00030 (0.00352) | +0.08 |
+| x1 | RMSE | 0.1004 (0.0023) | 0.1006 (0.0022) | -0.00014 (0.00109) | -0.13 |
+| x1 | mean B | 0.00354 (0.00009) | 0.00352 (0.00009) | 0.000014 (0.000120) | +0.12 |
+| x1 | mean T | 0.0111 (0.0001) | 0.0111 (0.0001) | 0.000017 (0.000146) | +0.11 |
+| x2 = 0.5 | bias | 0.00171 (0.00361) | 0.00392 (0.00369) | -0.00221 (0.00154) | -1.43 |
+| x2 | % bias | 0.3 (0.7) | 0.8 (0.7) | -0.4 (0.3) | -1.43 |
+| x2 | coverage | 0.962 (0.006) | 0.949 (0.007) | 0.013 (0.007) | +1.79 |
+| x2 | CI width | 0.5045 (0.0040) | 0.4982 (0.0040) | 0.00631 (0.00548) | +1.15 |
+| x2 | RMSE | 0.1141 (0.0025) | 0.1167 (0.0027) | -0.00265 (0.00148) | -1.79 |
+| x2 | mean B | 0.00599 (0.00014) | 0.00577 (0.00014) | 0.000221 (0.000199) | +1.11 |
+| x2 | mean T | 0.0141 (0.0002) | 0.0138 (0.0002) | 0.000270 (0.000239) | +1.13 |
+| mean(x1) = 0 | bias | -0.00259 (0.00255) | -0.00213 (0.00258) | -0.000454 (0.000734) | -0.62 |
+| mean(x1) | coverage | 0.947 (0.007) | 0.959 (0.006) | -0.012 (0.007) | -1.77 |
+| mean(x1) | CI width | 0.3287 (0.0013) | 0.3292 (0.0013) | -0.00057 (0.00166) | -0.34 |
+| mean(x1) | RMSE | 0.0808 (0.0017) | 0.0814 (0.0018) | -0.000676 (0.000724) | -0.93 |
+| mean(x1) | mean B | 0.00137 (0.00003) | 0.00139 (0.00003) | -0.0000185 (0.0000454) | -0.41 |
+| mean(x1) | mean T | 0.00668 (0.00004) | 0.00670 (0.00005) | -0.0000181 (0.0000553) | -0.33 |
+| mean(y) = 0.5 | bias | -0.00249 (0.00425) | -0.00052 (0.00425) | -0.00197 (0.00115) | -1.72 |
+| mean(y) | % bias | -0.5 (0.9) | -0.1 (0.8) | -0.4 (0.2) | -1.72 |
+| mean(y) | coverage | 0.953 (0.007) | 0.956 (0.006) | -0.003 (0.005) | -0.60 |
+| mean(y) | CI width | 0.5324 (0.0019) | 0.5303 (0.0018) | 0.00209 (0.00229) | +0.91 |
+| mean(y) | RMSE | 0.1344 (0.0031) | 0.1343 (0.0030) | 0.00014 (0.00120) | +0.12 |
+| mean(y) | mean B | 0.00323 (0.00007) | 0.00312 (0.00007) | 0.000101 (0.000102) | +0.99 |
+| mean(y) | mean T | 0.0177 (0.0001) | 0.0176 (0.0001) | 0.000116 (0.000126) | +0.92 |
+
+#### S3 norm.boot (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x1: norm.boot, y: norm.boot.
+
+| term | metric | Python | R | Py − R | z |
+|---|---|---|---|---|---|
+| (Intercept) = 0.5 | bias | 0.00054 (0.00307) | 0.00113 (0.00307) | -0.00058 (0.00122) | -0.48 |
+| (Intercept) | % bias | 0.1 (0.6) | 0.2 (0.6) | -0.1 (0.2) | -0.48 |
+| (Intercept) | coverage | 0.945 (0.007) | 0.950 (0.007) | -0.005 (0.007) | -0.67 |
+| (Intercept) | CI width | 0.4102 (0.0032) | 0.4090 (0.0031) | 0.00125 (0.00407) | +0.31 |
+| (Intercept) | RMSE | 0.0971 (0.0022) | 0.0970 (0.0023) | 0.00004 (0.00136) | +0.03 |
+| (Intercept) | mean B | 0.00373 (0.00010) | 0.00370 (0.00010) | 0.000033 (0.000126) | +0.26 |
+| (Intercept) | mean T | 0.00950 (0.00012) | 0.00947 (0.00012) | 0.000037 (0.000151) | +0.24 |
+| x1 = 1 | bias | -0.00020 (0.00321) | -0.00168 (0.00316) | 0.00148 (0.00116) | +1.28 |
+| x1 | % bias | -0.0 (0.3) | -0.2 (0.3) | 0.1 (0.1) | +1.28 |
+| x1 | coverage | 0.966 (0.006) | 0.957 (0.006) | 0.009 (0.007) | +1.37 |
+| x1 | CI width | 0.4259 (0.0027) | 0.4297 (0.0027) | -0.00385 (0.00326) | -1.18 |
+| x1 | RMSE | 0.1015 (0.0022) | 0.0999 (0.0023) | 0.00154 (0.00122) | +1.26 |
+| x1 | mean B | 0.00332 (0.00008) | 0.00344 (0.00009) | -0.000117 (0.000111) | -1.06 |
+| x1 | mean T | 0.0108 (0.0001) | 0.0110 (0.0001) | -0.000140 (0.000135) | -1.04 |
+| x2 = 0.5 | bias | 0.00035 (0.00361) | 0.00194 (0.00364) | -0.00159 (0.00150) | -1.06 |
+| x2 | % bias | 0.1 (0.7) | 0.4 (0.7) | -0.3 (0.3) | -1.06 |
+| x2 | coverage | 0.952 (0.007) | 0.949 (0.007) | 0.003 (0.008) | +0.40 |
+| x2 | CI width | 0.4983 (0.0040) | 0.4989 (0.0042) | -0.00062 (0.00520) | -0.12 |
+| x2 | RMSE | 0.1140 (0.0025) | 0.1152 (0.0026) | -0.00114 (0.00151) | -0.76 |
+| x2 | mean B | 0.00579 (0.00014) | 0.00584 (0.00015) | -0.000046 (0.000188) | -0.25 |
+| x2 | mean T | 0.0138 (0.0002) | 0.0138 (0.0002) | -0.000069 (0.000226) | -0.31 |
+| mean(x1) = 0 | bias | -0.00269 (0.00258) | -0.00180 (0.00256) | -0.000883 (0.000716) | -1.23 |
+| mean(x1) | coverage | 0.946 (0.007) | 0.955 (0.007) | -0.009 (0.006) | -1.52 |
+| mean(x1) | CI width | 0.3255 (0.0013) | 0.3256 (0.0012) | -0.00011 (0.00159) | -0.07 |
+| mean(x1) | RMSE | 0.0815 (0.0017) | 0.0811 (0.0017) | 0.000453 (0.000690) | +0.66 |
+| mean(x1) | mean B | 0.00130 (0.00003) | 0.00130 (0.00003) | 0.0000043 (0.0000437) | +0.10 |
+| mean(x1) | mean T | 0.00658 (0.00005) | 0.00658 (0.00004) | -0.0000005 (0.0000533) | -0.01 |
+| mean(y) = 0.5 | bias | -0.00221 (0.00426) | -0.00064 (0.00427) | -0.00157 (0.00109) | -1.43 |
+| mean(y) | % bias | -0.4 (0.9) | -0.1 (0.9) | -0.3 (0.2) | -1.43 |
+| mean(y) | coverage | 0.949 (0.007) | 0.948 (0.007) | 0.001 (0.005) | +0.19 |
+| mean(y) | CI width | 0.5295 (0.0019) | 0.5313 (0.0019) | -0.00186 (0.00230) | -0.81 |
+| mean(y) | RMSE | 0.1347 (0.0031) | 0.1351 (0.0031) | -0.00042 (0.00113) | -0.37 |
+| mean(y) | mean B | 0.00312 (0.00008) | 0.00319 (0.00008) | -0.000071 (0.000103) | -0.69 |
+| mean(y) | mean T | 0.0175 (0.0001) | 0.0176 (0.0001) | -0.000105 (0.000126) | -0.83 |
+
 ### S4: model M, small sample; x1 MCAR 50%; n = 50, maxit = 1
 
 #### S4 pmm (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x1: pmm.
 
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
@@ -698,6 +916,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 
 #### S4 midastouch (Python 1000 reps, R 1000 reps, 1000 pairs)
 
+Methods: x1: midastouch.
+
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
 | (Intercept) = 0.5 | bias | 0.00388 (0.00583) | 0.00540 (0.00579) | -0.00152 (0.00185) | -0.82 |
@@ -729,6 +949,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 | mean(x1) | mean T | 0.0321 (0.0005) | 0.0316 (0.0005) | 0.000480 (0.000522) | +0.92 |
 
 #### S4 cart (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x1: cart.
 
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
@@ -762,6 +984,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 
 #### S4 rf (Python 500 reps, R 500 reps, 500 pairs)
 
+Methods: x1: rf.
+
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
 | (Intercept) = 0.5 | bias | 0.00642 (0.00774) | 0.00741 (0.00786) | -0.00099 (0.00187) | -0.53 |
@@ -794,6 +1018,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 
 #### S4 sample (Python 1000 reps, R 1000 reps, 1000 pairs)
 
+Methods: x1: sample.
+
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
 | (Intercept) = 0.5 | bias | 0.00409 (0.00553) | 0.00530 (0.00551) | -0.00121 (0.00099) | -1.22 |
@@ -824,9 +1050,185 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 | mean(x1) | mean B | 0.00958 (0.00024) | 0.00963 (0.00025) | -0.000051 (0.000327) | -0.16 |
 | mean(x1) | mean T | 0.0308 (0.0004) | 0.0309 (0.0004) | -0.000092 (0.000402) | -0.23 |
 
+#### S4 norm (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x1: norm.
+
+| term | metric | Python | R | Py − R | z |
+|---|---|---|---|---|---|
+| (Intercept) = 0.5 | bias | 0.00407 (0.00573) | 0.00595 (0.00571) | -0.00187 (0.00205) | -0.91 |
+| (Intercept) | % bias | 0.8 (1.1) | 1.2 (1.1) | -0.4 (0.4) | -0.91 |
+| (Intercept) | coverage | 0.949 (0.007) | 0.951 (0.007) | -0.002 (0.006) | -0.33 |
+| (Intercept) | CI width | 0.7746 (0.0055) | 0.7657 (0.0055) | 0.00895 (0.00600) | +1.49 |
+| (Intercept) | RMSE | 0.1812 (0.0042) | 0.1806 (0.0042) | 0.00065 (0.00194) | +0.33 |
+| (Intercept) | mean B | 0.00966 (0.00027) | 0.00921 (0.00028) | 0.000449 (0.000327) | +1.37 |
+| (Intercept) | mean T | 0.0337 (0.0004) | 0.0330 (0.0004) | 0.000617 (0.000407) | +1.52 |
+| x1 = 1 | bias | -0.0426 (0.0075) | -0.0395 (0.0077) | -0.00316 (0.00335) | -0.94 |
+| x1 | % bias | -4.3 (0.8) | -3.9 (0.8) | -0.3 (0.3) | -0.94 |
+| x1 | coverage | 0.964 (0.006) | 0.949 (0.007) | 0.015 (0.007) | +2.15 |
+| x1 | CI width | 1.1069 (0.0166) | 1.0712 (0.0152) | 0.0357 (0.0164) | +2.17 |
+| x1 | RMSE | 0.2423 (0.0061) | 0.2458 (0.0058) | -0.00351 (0.00437) | -0.80 |
+| x1 | mean B | 0.0280 (0.0013) | 0.0255 (0.0011) | 0.00248 (0.00133) | +1.86 |
+| x1 | mean T | 0.0652 (0.0019) | 0.0623 (0.0016) | 0.00292 (0.00164) | +1.78 |
+| x2 = 0.5 | bias | 0.0234 (0.0069) | 0.0266 (0.0068) | -0.00321 (0.00272) | -1.18 |
+| x2 | % bias | 4.7 (1.4) | 5.3 (1.4) | -0.6 (0.5) | -1.18 |
+| x2 | coverage | 0.954 (0.007) | 0.951 (0.007) | 0.003 (0.006) | +0.47 |
+| x2 | CI width | 0.9754 (0.0098) | 0.9624 (0.0100) | 0.0129 (0.0093) | +1.39 |
+| x2 | RMSE | 0.2184 (0.0052) | 0.2172 (0.0048) | 0.00119 (0.00299) | +0.40 |
+| x2 | mean B | 0.0179 (0.0006) | 0.0173 (0.0006) | 0.000638 (0.000637) | +1.00 |
+| x2 | mean T | 0.0527 (0.0009) | 0.0516 (0.0010) | 0.00104 (0.00080) | +1.31 |
+| mean(x1) = 0 | bias | -0.00209 (0.00551) | -0.00375 (0.00551) | 0.00167 (0.00213) | +0.78 |
+| mean(x1) | coverage | 0.964 (0.006) | 0.961 (0.006) | 0.003 (0.006) | +0.48 |
+| mean(x1) | CI width | 0.7948 (0.0068) | 0.7738 (0.0064) | 0.0210 (0.0075) | +2.80 |
+| mean(x1) | RMSE | 0.1741 (0.0042) | 0.1742 (0.0042) | -0.00009 (0.00212) | -0.04 |
+| mean(x1) | mean B | 0.0114 (0.0003) | 0.0103 (0.0003) | 0.00107 (0.00041) | +2.63 |
+| mean(x1) | mean T | 0.0350 (0.0005) | 0.0336 (0.0005) | 0.00133 (0.00051) | +2.61 |
+
+#### S4 norm.boot (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x1: norm.boot.
+
+| term | metric | Python | R | Py − R | z |
+|---|---|---|---|---|---|
+| (Intercept) = 0.5 | bias | 0.00223 (0.00581) | 0.00388 (0.00583) | -0.00165 (0.00189) | -0.88 |
+| (Intercept) | % bias | 0.4 (1.2) | 0.8 (1.2) | -0.3 (0.4) | -0.88 |
+| (Intercept) | coverage | 0.953 (0.007) | 0.952 (0.007) | 0.001 (0.006) | +0.17 |
+| (Intercept) | CI width | 0.7803 (0.0064) | 0.7702 (0.0061) | 0.0101 (0.0065) | +1.55 |
+| (Intercept) | RMSE | 0.1837 (0.0043) | 0.1842 (0.0045) | -0.00041 (0.00186) | -0.22 |
+| (Intercept) | mean B | 0.0104 (0.0003) | 0.00985 (0.00030) | 0.000537 (0.000360) | +1.49 |
+| (Intercept) | mean T | 0.0338 (0.0005) | 0.0331 (0.0004) | 0.000655 (0.000446) | +1.47 |
+| x1 = 1 | bias | 0.00066 (0.00777) | 0.00443 (0.00770) | -0.00376 (0.00298) | -1.26 |
+| x1 | % bias | 0.1 (0.8) | 0.4 (0.8) | -0.4 (0.3) | -1.26 |
+| x1 | coverage | 0.952 (0.007) | 0.942 (0.007) | 0.010 (0.007) | +1.34 |
+| x1 | CI width | 1.0250 (0.0147) | 1.0102 (0.0142) | 0.0148 (0.0138) | +1.07 |
+| x1 | RMSE | 0.2457 (0.0063) | 0.2433 (0.0057) | 0.00240 (0.00377) | +0.64 |
+| x1 | mean B | 0.0227 (0.0010) | 0.0217 (0.0010) | 0.00102 (0.00111) | +0.92 |
+| x1 | mean T | 0.0595 (0.0016) | 0.0582 (0.0016) | 0.00132 (0.00139) | +0.95 |
+| x2 = 0.5 | bias | 0.00152 (0.00697) | 0.00216 (0.00696) | -0.00065 (0.00254) | -0.25 |
+| x2 | % bias | 0.3 (1.4) | 0.4 (1.4) | -0.1 (0.5) | -0.25 |
+| x2 | coverage | 0.960 (0.006) | 0.948 (0.007) | 0.012 (0.007) | +1.70 |
+| x2 | CI width | 0.9452 (0.0096) | 0.9418 (0.0096) | 0.00338 (0.00905) | +0.37 |
+| x2 | RMSE | 0.2203 (0.0052) | 0.2201 (0.0051) | 0.00017 (0.00287) | +0.06 |
+| x2 | mean B | 0.0164 (0.0006) | 0.0163 (0.0006) | 0.000121 (0.000632) | +0.19 |
+| x2 | mean T | 0.0502 (0.0009) | 0.0499 (0.0010) | 0.000323 (0.000796) | +0.41 |
+| mean(x1) = 0 | bias | 0.00008 (0.00541) | -0.00212 (0.00542) | 0.00220 (0.00196) | +1.13 |
+| mean(x1) | coverage | 0.958 (0.006) | 0.963 (0.006) | -0.005 (0.006) | -0.90 |
+| mean(x1) | CI width | 0.7713 (0.0063) | 0.7620 (0.0065) | 0.00925 (0.00709) | +1.30 |
+| mean(x1) | RMSE | 0.1711 (0.0040) | 0.1712 (0.0041) | -0.00011 (0.00194) | -0.06 |
+| mean(x1) | mean B | 0.0104 (0.0003) | 0.0100 (0.0003) | 0.000389 (0.000376) | +1.03 |
+| mean(x1) | mean T | 0.0330 (0.0004) | 0.0325 (0.0005) | 0.000589 (0.000462) | +1.27 |
+
+#### S4 norm.nob¹ (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x1: norm.nob.
+
+| term | metric | Python | R | Py − R | z |
+|---|---|---|---|---|---|
+| (Intercept) = 0.5 | bias | 0.00357 (0.00567) | 0.00542 (0.00576) | -0.00185 (0.00136) | -1.36 |
+| (Intercept) | % bias | 0.7 (1.1) | 1.1 (1.2) | -0.4 (0.3) | -1.36 |
+| (Intercept) | coverage | 0.929 (0.008) | 0.936 (0.008) | -0.007 (0.007) | -1.07 |
+| (Intercept) | CI width | 0.6700 (0.0034) | 0.6674 (0.0034) | 0.00260 (0.00297) | +0.88 |
+| (Intercept) | RMSE | 0.1792 (0.0042) | 0.1820 (0.0044) | -0.00283 (0.00143) | -1.99 |
+| (Intercept) | mean B | 0.00456 (0.00011) | 0.00441 (0.00011) | 0.000155 (0.000149) | +1.04 |
+| (Intercept) | mean T | 0.0269 (0.0003) | 0.0268 (0.0003) | 0.000149 (0.000186) | +0.80 |
+| x1 = 1 | bias | -0.00934 (0.00745) | -0.00759 (0.00740) | -0.00175 (0.00192) | -0.91 |
+| x1 | % bias | -0.9 (0.7) | -0.8 (0.7) | -0.2 (0.2) | -0.91 |
+| x1 | coverage | 0.930 (0.008) | 0.919 (0.009) | 0.011 (0.007) | +1.61 |
+| x1 | CI width | 0.8472 (0.0080) | 0.8453 (0.0078) | 0.00186 (0.00602) | +0.31 |
+| x1 | RMSE | 0.2356 (0.0059) | 0.2341 (0.0055) | 0.00149 (0.00224) | +0.66 |
+| x1 | mean B | 0.0103 (0.0004) | 0.00997 (0.00036) | 0.000294 (0.000438) | +0.67 |
+| x1 | mean T | 0.0438 (0.0008) | 0.0436 (0.0008) | 0.000247 (0.000564) | +0.44 |
+| x2 = 0.5 | bias | 0.00804 (0.00681) | 0.00782 (0.00671) | 0.00022 (0.00169) | +0.13 |
+| x2 | % bias | 1.6 (1.4) | 1.6 (1.3) | 0.0 (0.3) | +0.13 |
+| x2 | coverage | 0.932 (0.008) | 0.934 (0.008) | -0.002 (0.006) | -0.32 |
+| x2 | CI width | 0.8038 (0.0056) | 0.7995 (0.0056) | 0.00426 (0.00407) | +1.04 |
+| x2 | RMSE | 0.2153 (0.0052) | 0.2123 (0.0048) | 0.00299 (0.00177) | +1.69 |
+| x2 | mean B | 0.00737 (0.00020) | 0.00717 (0.00021) | 0.000197 (0.000260) | +0.75 |
+| x2 | mean T | 0.0392 (0.0005) | 0.0389 (0.0005) | 0.000259 (0.000334) | +0.77 |
+| mean(x1) = 0 | bias | -0.00224 (0.00535) | -0.00448 (0.00539) | 0.00224 (0.00133) | +1.68 |
+| mean(x1) | coverage | 0.947 (0.007) | 0.937 (0.008) | 0.010 (0.006) | +1.67 |
+| mean(x1) | CI width | 0.6600 (0.0034) | 0.6542 (0.0034) | 0.00587 (0.00308) | +1.91 |
+| mean(x1) | RMSE | 0.1690 (0.0041) | 0.1706 (0.0042) | -0.00158 (0.00134) | -1.17 |
+| mean(x1) | mean B | 0.00467 (0.00012) | 0.00442 (0.00011) | 0.000245 (0.000154) | +1.59 |
+| mean(x1) | mean T | 0.0261 (0.0002) | 0.0258 (0.0003) | 0.000322 (0.000195) | +1.65 |
+
+#### S4 norm.predict¹ (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x1: norm.predict.
+
+Identity rule: max |qbar Python − qbar R| = 3.33e-15, max B Python 6.16e-32, R 0.00e+00: pass.
+
+| term | metric | Python | R | Py − R | z |
+|---|---|---|---|---|---|
+| (Intercept) = 0.5 | bias | 0.00603 (0.00679) | 0.00603 (0.00679) | -0.00000000 (0.00000000) | – |
+| (Intercept) | % bias | 1.2 (1.4) | 1.2 (1.4) | -0.0 (0.0) | – |
+| (Intercept) | coverage | 0.737 (0.014) | 0.737 (0.014) | 0.000 (0.000) | – |
+| (Intercept) | CI width | 0.4863 (0.0032) | 0.4863 (0.0032) | 0.00000000 (0.00000000) | – |
+| (Intercept) | RMSE | 0.2147 (0.0052) | 0.2147 (0.0052) | -0.00000000 (0.00000000) | – |
+| (Intercept) | mean B | 0.00000000 (0.00000000) | 0.0000 (0.0000) | 0.00000000 (0.00000000) | – |
+| (Intercept) | mean T | 0.0152 (0.0002) | 0.0152 (0.0002) | 0.00000000 (0.00000000) | – |
+| x1 = 1 | bias | 0.4304 (0.0082) | 0.4304 (0.0082) | -0.00000000 (0.00000000) | – |
+| x1 | % bias | 43.0 (0.8) | 43.0 (0.8) | -0.0 (0.0) | – |
+| x1 | coverage | 0.349 (0.015) | 0.349 (0.015) | 0.000 (0.000) | – |
+| x1 | CI width | 0.7069 (0.0076) | 0.7069 (0.0076) | 0.00000000 (0.00000000) | – |
+| x1 | RMSE | 0.5022 (0.0088) | 0.5022 (0.0088) | 0.00000000 (0.00000000) | – |
+| x1 | mean B | 0.00000000 (0.00000000) | 0.0000 (0.0000) | 0.00000000 (0.00000000) | – |
+| x1 | mean T | 0.0344 (0.0008) | 0.0344 (0.0008) | 0.00000000 (0.00000000) | – |
+| x2 = 0.5 | bias | -0.2140 (0.0079) | -0.2140 (0.0079) | 0.00000000 (0.00000000) | – |
+| x2 | % bias | -42.8 (1.6) | -42.8 (1.6) | 0.0 (0.0) | – |
+| x2 | coverage | 0.634 (0.015) | 0.634 (0.015) | 0.000 (0.000) | – |
+| x2 | CI width | 0.6077 (0.0054) | 0.6077 (0.0054) | 0.00000000 (0.00000000) | – |
+| x2 | RMSE | 0.3291 (0.0077) | 0.3291 (0.0077) | 0.00000000 (0.00000000) | – |
+| x2 | mean B | 0.00000000 (0.00000000) | 0.0000 (0.0000) | 0.00000000 (0.00000000) | – |
+| x2 | mean T | 0.0245 (0.0005) | 0.0245 (0.0005) | 0.00000000 (0.00000000) | – |
+| mean(x1) = 0 | bias | -0.00210 (0.00529) | -0.00210 (0.00529) | 0.00000000 (0.00000000) | – |
+| mean(x1) | coverage | 0.871 (0.011) | 0.871 (0.011) | 0.000 (0.000) | – |
+| mean(x1) | CI width | 0.5004 (0.0026) | 0.5004 (0.0026) | -0.00000000 (0.00000000) | – |
+| mean(x1) | RMSE | 0.1671 (0.0040) | 0.1671 (0.0040) | 0.00000000 (0.00000000) | – |
+| mean(x1) | mean B | 0.00000000 (0.00000000) | 0.0000 (0.0000) | 0.00000000 (0.00000000) | – |
+| mean(x1) | mean T | 0.0159 (0.0002) | 0.0159 (0.0002) | -0.00000000 (0.00000000) | – |
+
+#### S4 mean¹ (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x1: mean.
+
+Identity rule: max |qbar Python − qbar R| = 2.22e-15, max B Python 1.54e-32, R 0.00e+00: pass.
+
+| term | metric | Python | R | Py − R | z |
+|---|---|---|---|---|---|
+| (Intercept) = 0.5 | bias | 0.00435 (0.00623) | 0.00435 (0.00623) | 0.00000000 (0.00000000) | – |
+| (Intercept) | % bias | 0.9 (1.2) | 0.9 (1.2) | 0.0 (0.0) | – |
+| (Intercept) | coverage | 0.931 (0.008) | 0.931 (0.008) | 0.000 (0.000) | – |
+| (Intercept) | CI width | 0.7190 (0.0029) | 0.7190 (0.0029) | -0.00000000 (0.00000000) | – |
+| (Intercept) | RMSE | 0.1971 (0.0049) | 0.1971 (0.0049) | 0.00000000 (0.00000000) | – |
+| (Intercept) | mean B | 0.00000000 (0.00000000) | 0.0000 (0.0000) | 0.00000000 (0.00000000) | – |
+| (Intercept) | mean T | 0.0324 (0.0003) | 0.0324 (0.0003) | -0.00000000 (0.00000000) | – |
+| x1 = 1 | bias | -0.1573 (0.0079) | -0.1573 (0.0079) | -0.00000000 (0.00000000) | – |
+| x1 | % bias | -15.7 (0.8) | -15.7 (0.8) | -0.0 (0.0) | – |
+| x1 | coverage | 0.952 (0.007) | 0.952 (0.007) | 0.000 (0.000) | – |
+| x1 | CI width | 1.1120 (0.0070) | 1.1120 (0.0070) | -0.00000000 (0.00000000) | – |
+| x1 | RMSE | 0.2962 (0.0066) | 0.2962 (0.0066) | -0.00000000 (0.00000000) | – |
+| x1 | mean B | 0.00000000 (0.00000000) | 0.0000 (0.0000) | 0.00000000 (0.00000000) | – |
+| x1 | mean T | 0.0793 (0.0011) | 0.0793 (0.0011) | -0.00000000 (0.00000000) | – |
+| x2 = 0.5 | bias | 0.3040 (0.0060) | 0.3040 (0.0060) | 0.00000000 (0.00000000) | – |
+| x2 | % bias | 60.8 (1.2) | 60.8 (1.2) | 0.0 (0.0) | – |
+| x2 | coverage | 0.630 (0.015) | 0.630 (0.015) | 0.000 (0.000) | – |
+| x2 | CI width | 0.7521 (0.0036) | 0.7521 (0.0036) | 0.00000000 (0.00000000) | – |
+| x2 | RMSE | 0.3587 (0.0055) | 0.3587 (0.0055) | 0.00000000 (0.00000000) | – |
+| x2 | mean B | 0.00000000 (0.00000000) | 0.0000 (0.0000) | 0.00000000 (0.00000000) | – |
+| x2 | mean T | 0.0356 (0.0003) | 0.0356 (0.0003) | 0.00000000 (0.00000000) | – |
+| mean(x1) = 0 | bias | -0.00201 (0.00629) | -0.00201 (0.00629) | -0.00000000 (0.00000000) | – |
+| mean(x1) | coverage | 0.662 (0.015) | 0.662 (0.015) | 0.000 (0.000) | – |
+| mean(x1) | CI width | 0.3903 (0.0020) | 0.3903 (0.0020) | 0.00000000 (0.00000000) | – |
+| mean(x1) | RMSE | 0.1988 (0.0044) | 0.1988 (0.0044) | -0.00000000 (0.00000000) | – |
+| mean(x1) | mean B | 0.00000000 (0.00000000) | 0.0000 (0.0000) | 0.00000000 (0.00000000) | – |
+| mean(x1) | mean T | 0.00966 (0.00010) | 0.00966 (0.00010) | 0.00000000 (0.00000000) | – |
+
 ### S5: g in {a,b,c} (0.5, 0.3, 0.2); x ~ N(0.5 code, 1); y = 0.5[g=b] + 1.0[g=c] + 0.7x + e; g MAR on y 30%; x MCAR 20%; n = 200, maxit = 5
 
 #### S5 pmm (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: g: pmm, x: pmm.
 
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
@@ -874,6 +1276,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 
 #### S5 cart (Python 1000 reps, R 1000 reps, 1000 pairs)
 
+Methods: g: cart, x: cart.
+
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
 | (Intercept) = 0 | bias | 0.0106 (0.0040) | 0.0121 (0.0040) | -0.00154 (0.00108) | -1.42 |
@@ -919,6 +1323,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 | mean(x) | mean T | 0.00636 (0.00003) | 0.00635 (0.00003) | 0.0000016 (0.0000206) | +0.08 |
 
 #### S5 rf (Python 500 reps, R 500 reps, 500 pairs)
+
+Methods: g: rf, x: rf.
 
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
@@ -966,6 +1372,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 
 #### S5 sample (Python 1000 reps, R 1000 reps, 1000 pairs)
 
+Methods: g: sample, x: sample.
+
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
 | (Intercept) = 0 | bias | 0.1823 (0.0030) | 0.1815 (0.0030) | 0.00084 (0.00110) | +0.76 |
@@ -1010,9 +1418,59 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 | mean(x) | mean B | 0.00115 (0.00003) | 0.00117 (0.00003) | -0.0000180 (0.0000362) | -0.50 |
 | mean(x) | mean T | 0.00715 (0.00004) | 0.00717 (0.00004) | -0.0000236 (0.0000442) | -0.53 |
 
+#### S5 default (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: no `method` argument (each engine's default by column type).
+
+| term | metric | Python | R | Py − R | z |
+|---|---|---|---|---|---|
+| (Intercept) = 0 | bias | -0.00920 (0.00372) | -0.00931 (0.00373) | 0.00010 (0.00102) | +0.10 |
+| (Intercept) | coverage | 0.946 (0.007) | 0.950 (0.007) | -0.004 (0.006) | -0.63 |
+| (Intercept) | CI width | 0.4608 (0.0018) | 0.4646 (0.0019) | -0.00385 (0.00218) | -1.77 |
+| (Intercept) | RMSE | 0.1179 (0.0029) | 0.1182 (0.0029) | -0.000306 (0.000974) | -0.31 |
+| (Intercept) | mean B | 0.00256 (0.00006) | 0.00271 (0.00007) | -0.000147 (0.000086) | -1.71 |
+| (Intercept) | mean T | 0.0132 (0.0001) | 0.0134 (0.0001) | -0.000195 (0.000103) | -1.89 |
+| gb = 0.5 | bias | 0.00672 (0.00692) | 0.00772 (0.00689) | -0.00100 (0.00210) | -0.47 |
+| gb | % bias | 1.3 (1.4) | 1.5 (1.4) | -0.2 (0.4) | -0.47 |
+| gb | coverage | 0.923 (0.008) | 0.929 (0.008) | -0.006 (0.007) | -0.80 |
+| gb | CI width | 0.8305 (0.0043) | 0.8361 (0.0044) | -0.00560 (0.00526) | -1.07 |
+| gb | RMSE | 0.2189 (0.0048) | 0.2181 (0.0048) | 0.00083 (0.00213) | +0.39 |
+| gb | mean B | 0.0110 (0.0003) | 0.0114 (0.0003) | -0.000377 (0.000355) | -1.06 |
+| gb | mean T | 0.0418 (0.0004) | 0.0422 (0.0004) | -0.000470 (0.000428) | -1.10 |
+| gc = 1 | bias | 0.00358 (0.00865) | -0.00179 (0.00874) | 0.00538 (0.00265) | +2.03 |
+| gc | % bias | 0.4 (0.9) | -0.2 (0.9) | 0.5 (0.3) | +2.03 |
+| gc | coverage | 0.929 (0.008) | 0.929 (0.008) | 0.000 (0.007) | +0.00 |
+| gc | CI width | 1.0206 (0.0063) | 1.0283 (0.0067) | -0.00770 (0.00714) | -1.08 |
+| gc | RMSE | 0.2733 (0.0062) | 0.2763 (0.0063) | -0.00307 (0.00265) | -1.16 |
+| gc | mean B | 0.0177 (0.0005) | 0.0184 (0.0005) | -0.000635 (0.000591) | -1.08 |
+| gc | mean T | 0.0630 (0.0007) | 0.0639 (0.0007) | -0.000846 (0.000716) | -1.18 |
+| x = 0.7 | bias | 0.00008 (0.00261) | 0.00042 (0.00260) | -0.000337 (0.000662) | -0.51 |
+| x | % bias | 0.0 (0.4) | 0.1 (0.4) | -0.0 (0.1) | -0.51 |
+| x | coverage | 0.950 (0.007) | 0.943 (0.007) | 0.007 (0.006) | +1.26 |
+| x | CI width | 0.3234 (0.0014) | 0.3248 (0.0015) | -0.00142 (0.00143) | -0.99 |
+| x | RMSE | 0.0826 (0.0018) | 0.0822 (0.0018) | 0.000360 (0.000691) | +0.52 |
+| x | mean B | 0.00113 (0.00003) | 0.00118 (0.00003) | -0.0000409 (0.0000404) | -1.01 |
+| x | mean T | 0.00658 (0.00005) | 0.00664 (0.00006) | -0.0000553 (0.0000503) | -1.10 |
+| P(g=c) = 0.2 | bias | 0.00022 (0.00125) | -0.00005 (0.00124) | 0.000265 (0.000323) | +0.82 |
+| P(g=c) | % bias | 0.1 (0.6) | -0.0 (0.6) | 0.1 (0.2) | +0.82 |
+| P(g=c) | coverage | 0.904 (0.009) | 0.901 (0.009) | 0.003 (0.008) | +0.38 |
+| P(g=c) | CI width | 0.1343 (0.0006) | 0.1347 (0.0006) | -0.000404 (0.000786) | -0.51 |
+| P(g=c) | RMSE | 0.0397 (0.0009) | 0.0392 (0.0009) | 0.000468 (0.000333) | +1.41 |
+| P(g=c) | mean B | 0.000273 (0.000006) | 0.000279 (0.000006) | -0.00000550 (0.00000887) | -0.62 |
+| P(g=c) | mean T | 0.00112 (0.00001) | 0.00113 (0.00001) | -0.0000060 (0.0000107) | -0.56 |
+| mean(x) = 0.35 | bias | 0.00088 (0.00258) | 0.00211 (0.00260) | -0.00122 (0.00059) | -2.08 |
+| mean(x) | % bias | 0.3 (0.7) | 0.6 (0.7) | -0.3 (0.2) | -2.08 |
+| mean(x) | coverage | 0.957 (0.006) | 0.959 (0.006) | -0.002 (0.005) | -0.41 |
+| mean(x) | CI width | 0.3257 (0.0009) | 0.3269 (0.0009) | -0.00124 (0.00091) | -1.36 |
+| mean(x) | RMSE | 0.0816 (0.0018) | 0.0821 (0.0017) | -0.000498 (0.000595) | -0.84 |
+| mean(x) | mean B | 0.000821 (0.000019) | 0.000855 (0.000021) | -0.0000342 (0.0000264) | -1.29 |
+| mean(x) | mean T | 0.00673 (0.00003) | 0.00677 (0.00003) | -0.0000421 (0.0000324) | -1.30 |
+
 ### S6: w = exp(0.5 x1 + u), u ~ N(0, 0.5^2); y = 1 + 0.5w + 0.5x1 + e; w MAR on y 30%; n = 200, maxit = 1
 
 #### S6 pmm (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: w: pmm.
 
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
@@ -1047,6 +1505,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 
 #### S6 midastouch (Python 1000 reps, R 1000 reps, 1000 pairs)
 
+Methods: w: midastouch.
+
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
 | (Intercept) = 1 | bias | 0.1307 (0.0066) | 0.1302 (0.0066) | 0.00050 (0.00284) | +0.18 |
@@ -1079,6 +1539,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 | mean(w) | mean T | 0.00669 (0.00017) | 0.00680 (0.00019) | -0.000112 (0.000106) | -1.06 |
 
 #### S6 cart (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: w: cart.
 
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
@@ -1113,6 +1575,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 
 #### S6 rf (Python 500 reps, R 500 reps, 500 pairs)
 
+Methods: w: rf.
+
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
 | (Intercept) = 1 | bias | 0.1231 (0.0092) | 0.1190 (0.0093) | 0.00412 (0.00305) | +1.35 |
@@ -1146,6 +1610,8 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 
 #### S6 sample (Python 1000 reps, R 1000 reps, 1000 pairs)
 
+Methods: w: sample.
+
 | term | metric | Python | R | Py − R | z |
 |---|---|---|---|---|---|
 | (Intercept) = 1 | bias | 0.5500 (0.0042) | 0.5490 (0.0041) | 0.00102 (0.00164) | +0.62 |
@@ -1176,4 +1642,148 @@ Cells: value (Monte Carlo SE). Py − R is the paired difference over replicatio
 | mean(w) | RMSE | 0.2240 (0.0019) | 0.2239 (0.0019) | 0.000096 (0.000529) | +0.18 |
 | mean(w) | mean B | 0.000823 (0.000020) | 0.000830 (0.000021) | -0.0000066 (0.0000273) | -0.24 |
 | mean(w) | mean T | 0.00368 (0.00004) | 0.00369 (0.00004) | -0.0000078 (0.0000346) | -0.22 |
+
+### S7: b in {no,yes} (0.6, 0.4); x ~ N(0.5 code, 1); y = 0.5 + 1.0[b=yes] + 0.7x + e; b MAR on y 30%; x MCAR 20%; n = 200, maxit = 5
+
+#### S7 default (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: no `method` argument (each engine's default by column type).
+
+| term | metric | Python | R | Py − R | z |
+|---|---|---|---|---|---|
+| (Intercept) = 0.5 | bias | -0.00173 (0.00376) | -0.00121 (0.00371) | -0.00052 (0.00123) | -0.43 |
+| (Intercept) | % bias | -0.3 (0.8) | -0.2 (0.7) | -0.1 (0.2) | -0.43 |
+| (Intercept) | coverage | 0.933 (0.008) | 0.943 (0.007) | -0.010 (0.007) | -1.42 |
+| (Intercept) | CI width | 0.4634 (0.0026) | 0.4619 (0.0026) | 0.00141 (0.00337) | +0.42 |
+| (Intercept) | RMSE | 0.1188 (0.0026) | 0.1172 (0.0026) | 0.00166 (0.00116) | +1.43 |
+| (Intercept) | mean B | 0.00366 (0.00009) | 0.00361 (0.00009) | 0.000054 (0.000125) | +0.44 |
+| (Intercept) | mean T | 0.0129 (0.0001) | 0.0128 (0.0001) | 0.000063 (0.000150) | +0.42 |
+| byes = 1 | bias | -0.00751 (0.00626) | -0.00935 (0.00626) | 0.00184 (0.00237) | +0.78 |
+| byes | % bias | -0.8 (0.6) | -0.9 (0.6) | 0.2 (0.2) | +0.78 |
+| byes | coverage | 0.944 (0.007) | 0.943 (0.007) | 0.001 (0.007) | +0.15 |
+| byes | CI width | 0.8085 (0.0059) | 0.8010 (0.0058) | 0.00751 (0.00720) | +1.04 |
+| byes | RMSE | 0.1979 (0.0048) | 0.1979 (0.0049) | -0.00006 (0.00237) | -0.03 |
+| byes | mean B | 0.0130 (0.0004) | 0.0125 (0.0003) | 0.000453 (0.000455) | +1.00 |
+| byes | mean T | 0.0384 (0.0005) | 0.0379 (0.0005) | 0.000553 (0.000553) | +1.00 |
+| x = 0.7 | bias | 0.00187 (0.00267) | 0.00283 (0.00270) | -0.000957 (0.000710) | -1.35 |
+| x | % bias | 0.3 (0.4) | 0.4 (0.4) | -0.1 (0.1) | -1.35 |
+| x | coverage | 0.942 (0.007) | 0.942 (0.007) | 0.000 (0.006) | +0.00 |
+| x | CI width | 0.3325 (0.0015) | 0.3339 (0.0015) | -0.00145 (0.00164) | -0.89 |
+| x | RMSE | 0.0845 (0.0020) | 0.0854 (0.0020) | -0.000834 (0.000695) | -1.20 |
+| x | mean B | 0.00138 (0.00003) | 0.00142 (0.00004) | -0.0000357 (0.0000460) | -0.78 |
+| x | mean T | 0.00688 (0.00006) | 0.00693 (0.00006) | -0.0000430 (0.0000566) | -0.76 |
+| P(b=yes) = 0.4 | bias | -0.00157 (0.00137) | -0.00135 (0.00136) | -0.000216 (0.000482) | -0.45 |
+| P(b=yes) | % bias | -0.4 (0.3) | -0.3 (0.3) | -0.1 (0.1) | -0.45 |
+| P(b=yes) | coverage | 0.940 (0.008) | 0.948 (0.007) | -0.008 (0.007) | -1.16 |
+| P(b=yes) | CI width | 0.1746 (0.0009) | 0.1762 (0.0010) | -0.00160 (0.00132) | -1.21 |
+| P(b=yes) | RMSE | 0.0434 (0.0010) | 0.0429 (0.0010) | 0.000431 (0.000493) | +0.87 |
+| P(b=yes) | mean B | 0.000549 (0.000013) | 0.000573 (0.000014) | -0.0000234 (0.0000190) | -1.23 |
+| P(b=yes) | mean T | 0.00185 (0.00002) | 0.00187 (0.00002) | -0.0000283 (0.0000226) | -1.25 |
+| mean(x) = 0.2 | bias | 0.00004 (0.00249) | -0.00012 (0.00249) | 0.000160 (0.000557) | +0.29 |
+| mean(x) | % bias | 0.0 (1.2) | -0.1 (1.2) | 0.1 (0.3) | +0.29 |
+| mean(x) | coverage | 0.956 (0.006) | 0.941 (0.007) | 0.015 (0.005) | +3.14 |
+| mean(x) | CI width | 0.3149 (0.0009) | 0.3141 (0.0009) | 0.000805 (0.000962) | +0.84 |
+| mean(x) | RMSE | 0.0787 (0.0017) | 0.0788 (0.0017) | -0.000063 (0.000569) | -0.11 |
+| mean(x) | mean B | 0.000830 (0.000020) | 0.000807 (0.000019) | 0.0000224 (0.0000267) | +0.84 |
+| mean(x) | mean T | 0.00627 (0.00003) | 0.00624 (0.00003) | 0.0000293 (0.0000327) | +0.89 |
+
+#### S7 logreg.boot (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: b: logreg.boot, x: pmm.
+
+| term | metric | Python | R | Py − R | z |
+|---|---|---|---|---|---|
+| (Intercept) = 0.5 | bias | -0.00535 (0.00379) | -0.00545 (0.00376) | 0.00010 (0.00120) | +0.09 |
+| (Intercept) | % bias | -1.1 (0.8) | -1.1 (0.8) | 0.0 (0.2) | +0.09 |
+| (Intercept) | coverage | 0.938 (0.008) | 0.940 (0.008) | -0.002 (0.007) | -0.28 |
+| (Intercept) | CI width | 0.4684 (0.0028) | 0.4634 (0.0025) | 0.00499 (0.00332) | +1.50 |
+| (Intercept) | RMSE | 0.1200 (0.0026) | 0.1191 (0.0026) | 0.00088 (0.00117) | +0.75 |
+| (Intercept) | mean B | 0.00386 (0.00010) | 0.00367 (0.00009) | 0.000189 (0.000124) | +1.53 |
+| (Intercept) | mean T | 0.0131 (0.0001) | 0.0129 (0.0001) | 0.000238 (0.000149) | +1.60 |
+| byes = 1 | bias | -0.00152 (0.00647) | -0.00012 (0.00636) | -0.00140 (0.00224) | -0.63 |
+| byes | % bias | -0.2 (0.6) | -0.0 (0.6) | -0.1 (0.2) | -0.63 |
+| byes | coverage | 0.930 (0.008) | 0.936 (0.008) | -0.006 (0.007) | -0.82 |
+| byes | CI width | 0.8107 (0.0061) | 0.8050 (0.0058) | 0.00571 (0.00698) | +0.82 |
+| byes | RMSE | 0.2045 (0.0047) | 0.2010 (0.0048) | 0.00351 (0.00224) | +1.57 |
+| byes | mean B | 0.0132 (0.0004) | 0.0128 (0.0003) | 0.000394 (0.000443) | +0.89 |
+| byes | mean T | 0.0386 (0.0005) | 0.0381 (0.0005) | 0.000514 (0.000539) | +0.96 |
+| x = 0.7 | bias | 0.00058 (0.00269) | 0.00082 (0.00268) | -0.000240 (0.000754) | -0.32 |
+| x | % bias | 0.1 (0.4) | 0.1 (0.4) | -0.0 (0.1) | -0.32 |
+| x | coverage | 0.936 (0.008) | 0.944 (0.007) | -0.008 (0.006) | -1.30 |
+| x | CI width | 0.3351 (0.0016) | 0.3340 (0.0015) | 0.00116 (0.00169) | +0.69 |
+| x | RMSE | 0.0850 (0.0020) | 0.0849 (0.0020) | 0.000166 (0.000774) | +0.21 |
+| x | mean B | 0.00147 (0.00004) | 0.00144 (0.00004) | 0.0000307 (0.0000475) | +0.65 |
+| x | mean T | 0.00697 (0.00006) | 0.00692 (0.00006) | 0.0000449 (0.0000585) | +0.77 |
+| P(b=yes) = 0.4 | bias | -0.00095 (0.00140) | -0.00099 (0.00139) | 0.000037 (0.000497) | +0.07 |
+| P(b=yes) | % bias | -0.2 (0.3) | -0.2 (0.3) | 0.0 (0.1) | +0.07 |
+| P(b=yes) | coverage | 0.940 (0.008) | 0.943 (0.007) | -0.003 (0.007) | -0.43 |
+| P(b=yes) | CI width | 0.1772 (0.0010) | 0.1763 (0.0009) | 0.00093 (0.00127) | +0.73 |
+| P(b=yes) | RMSE | 0.0442 (0.0010) | 0.0438 (0.0010) | 0.000340 (0.000508) | +0.67 |
+| P(b=yes) | mean B | 0.000587 (0.000014) | 0.000572 (0.000013) | 0.0000150 (0.0000183) | +0.82 |
+| P(b=yes) | mean T | 0.00189 (0.00002) | 0.00187 (0.00002) | 0.0000178 (0.0000219) | +0.82 |
+| mean(x) = 0.2 | bias | 0.00067 (0.00249) | 0.00046 (0.00247) | 0.000209 (0.000560) | +0.37 |
+| mean(x) | % bias | 0.3 (1.2) | 0.2 (1.2) | 0.1 (0.3) | +0.37 |
+| mean(x) | coverage | 0.950 (0.007) | 0.953 (0.007) | -0.003 (0.005) | -0.60 |
+| mean(x) | CI width | 0.3155 (0.0009) | 0.3142 (0.0009) | 0.00128 (0.00095) | +1.35 |
+| mean(x) | RMSE | 0.0787 (0.0017) | 0.0780 (0.0017) | 0.000657 (0.000579) | +1.14 |
+| mean(x) | mean B | 0.000848 (0.000019) | 0.000810 (0.000022) | 0.0000374 (0.0000266) | +1.41 |
+| mean(x) | mean T | 0.00630 (0.00003) | 0.00625 (0.00003) | 0.0000456 (0.0000324) | +1.41 |
+
+### S8: o ordered lo < mid < hi < top (0.2, 0.3, 0.3, 0.2), code 0-3; x ~ N(0.5 code, 1); y = 0.5 + 0.4 code + 0.7x + e; o MAR on y 30%; x MCAR 20%; n = 200, maxit = 5
+
+#### S8 default (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: no `method` argument (each engine's default by column type).
+
+| term | metric | Python | R | Py − R | z |
+|---|---|---|---|---|---|
+| (Intercept) = 0.5 | bias | 0.0146 (0.0057) | 0.0111 (0.0058) | 0.00353 (0.00171) | +2.06 |
+| (Intercept) | % bias | 2.9 (1.1) | 2.2 (1.2) | 0.7 (0.3) | +2.06 |
+| (Intercept) | coverage | 0.949 (0.007) | 0.953 (0.007) | -0.004 (0.006) | -0.71 |
+| (Intercept) | CI width | 0.7367 (0.0036) | 0.7408 (0.0034) | -0.00414 (0.00356) | -1.16 |
+| (Intercept) | RMSE | 0.1807 (0.0044) | 0.1822 (0.0043) | -0.00146 (0.00172) | -0.85 |
+| (Intercept) | mean B | 0.00685 (0.00018) | 0.00708 (0.00016) | -0.000225 (0.000225) | -1.00 |
+| (Intercept) | mean T | 0.0339 (0.0003) | 0.0342 (0.0003) | -0.000297 (0.000273) | -1.09 |
+| omid = 0.4 | bias | -0.0219 (0.0066) | -0.0173 (0.0068) | -0.00453 (0.00233) | -1.94 |
+| omid | % bias | -5.5 (1.7) | -4.3 (1.7) | -1.1 (0.6) | -1.94 |
+| omid | coverage | 0.971 (0.005) | 0.977 (0.005) | -0.006 (0.005) | -1.28 |
+| omid | CI width | 0.9886 (0.0045) | 0.9984 (0.0045) | -0.00979 (0.00540) | -1.81 |
+| omid | RMSE | 0.2107 (0.0052) | 0.2148 (0.0050) | -0.00414 (0.00234) | -1.77 |
+| omid | mean B | 0.0135 (0.0003) | 0.0143 (0.0003) | -0.000853 (0.000446) | -1.91 |
+| omid | mean T | 0.0601 (0.0005) | 0.0611 (0.0005) | -0.000982 (0.000537) | -1.83 |
+| ohi = 0.8 | bias | -0.0290 (0.0077) | -0.0258 (0.0077) | -0.00318 (0.00261) | -1.22 |
+| ohi | % bias | -3.6 (1.0) | -3.2 (1.0) | -0.4 (0.3) | -1.22 |
+| ohi | coverage | 0.959 (0.006) | 0.966 (0.006) | -0.007 (0.006) | -1.22 |
+| ohi | CI width | 1.0594 (0.0054) | 1.0589 (0.0053) | 0.00051 (0.00659) | +0.08 |
+| ohi | RMSE | 0.2443 (0.0061) | 0.2439 (0.0062) | 0.00040 (0.00247) | +0.16 |
+| ohi | mean B | 0.0170 (0.0004) | 0.0170 (0.0004) | 0.000090 (0.000571) | +0.16 |
+| ohi | mean T | 0.0685 (0.0006) | 0.0684 (0.0006) | 0.000091 (0.000691) | +0.13 |
+| otop = 1.2 | bias | -0.0101 (0.0103) | -0.0031 (0.0103) | -0.00700 (0.00332) | -2.11 |
+| otop | % bias | -0.8 (0.9) | -0.3 (0.9) | -0.6 (0.3) | -2.11 |
+| otop | coverage | 0.935 (0.008) | 0.936 (0.008) | -0.001 (0.007) | -0.15 |
+| otop | CI width | 1.2489 (0.0070) | 1.2442 (0.0069) | 0.00470 (0.00802) | +0.59 |
+| otop | RMSE | 0.3254 (0.0075) | 0.3246 (0.0073) | 0.00084 (0.00328) | +0.26 |
+| otop | mean B | 0.0257 (0.0006) | 0.0252 (0.0006) | 0.000514 (0.000811) | +0.63 |
+| otop | mean T | 0.0945 (0.0009) | 0.0939 (0.0009) | 0.000656 (0.000980) | +0.67 |
+| x = 0.7 | bias | 0.00137 (0.00259) | 0.00116 (0.00258) | 0.000207 (0.000677) | +0.31 |
+| x | % bias | 0.2 (0.4) | 0.2 (0.4) | 0.0 (0.1) | +0.31 |
+| x | coverage | 0.949 (0.007) | 0.951 (0.007) | -0.002 (0.005) | -0.38 |
+| x | CI width | 0.3264 (0.0015) | 0.3255 (0.0014) | 0.00093 (0.00142) | +0.66 |
+| x | RMSE | 0.0818 (0.0018) | 0.0817 (0.0019) | 0.000096 (0.000638) | +0.15 |
+| x | mean B | 0.00122 (0.00003) | 0.00118 (0.00003) | 0.0000378 (0.0000400) | +0.94 |
+| x | mean T | 0.00669 (0.00006) | 0.00665 (0.00005) | 0.0000417 (0.0000496) | +0.84 |
+| P(o=top) = 0.2 | bias | 0.00076 (0.00120) | 0.00070 (0.00119) | 0.000057 (0.000325) | +0.18 |
+| P(o=top) | % bias | 0.4 (0.6) | 0.4 (0.6) | 0.0 (0.2) | +0.18 |
+| P(o=top) | coverage | 0.912 (0.009) | 0.913 (0.009) | -0.001 (0.007) | -0.14 |
+| P(o=top) | CI width | 0.1348 (0.0006) | 0.1343 (0.0006) | 0.000456 (0.000792) | +0.58 |
+| P(o=top) | RMSE | 0.0379 (0.0009) | 0.0378 (0.0009) | 0.000090 (0.000314) | +0.29 |
+| P(o=top) | mean B | 0.000277 (0.000006) | 0.000273 (0.000006) | 0.00000428 (0.00000899) | +0.48 |
+| P(o=top) | mean T | 0.00113 (0.00001) | 0.00112 (0.00001) | 0.0000053 (0.0000108) | +0.48 |
+| mean(x) = 0.75 | bias | 0.00063 (0.00277) | 0.00013 (0.00275) | 0.000498 (0.000610) | +0.82 |
+| mean(x) | % bias | 0.1 (0.4) | 0.0 (0.4) | 0.1 (0.1) | +0.82 |
+| mean(x) | coverage | 0.932 (0.008) | 0.939 (0.008) | -0.007 (0.005) | -1.35 |
+| mean(x) | CI width | 0.3396 (0.0009) | 0.3392 (0.0008) | 0.000397 (0.000904) | +0.44 |
+| mean(x) | RMSE | 0.0874 (0.0019) | 0.0869 (0.0019) | 0.000484 (0.000608) | +0.80 |
+| mean(x) | mean B | 0.000851 (0.000021) | 0.000847 (0.000019) | 0.0000037 (0.0000274) | +0.13 |
+| mean(x) | mean T | 0.00732 (0.00004) | 0.00731 (0.00003) | 0.0000175 (0.0000337) | +0.52 |
 

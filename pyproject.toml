@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mice-py"
-version = "0.2.0"
+version = "0.3.0"
 description = "A comprehensive Python implementation of Multiple Imputation by Chained Equations (MICE) for handling missing data"
 readme = "README.md"
 requires-python = ">=3.9"

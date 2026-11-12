@@ -5,6 +5,10 @@ sometimes rounded so that ties occur, sometimes carry a non-default index, and
 have random missingness that leaves at least two observed values per column
 and at least one observed value per row (all-empty rows are C4, tested in
 test_edge_cases). The full predictor matrix is used, as planned.
+
+A few frames with categorical columns (text, Categorical, ordered
+Categorical; two to four categories) check polyreg the same way, and a few
+with ordered Categoricals check polr.
 """
 
 import numpy as np
@@ -14,7 +18,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
 
-from ._helpers import assert_all_invariants, impute
+from ._helpers import assert_all_invariants, impute, imputes_observed_values
 
 FLOATS = st.floats(min_value=-1e3, max_value=1e3, allow_nan=False, allow_infinity=False, allow_subnormal=False)
 
@@ -54,10 +58,39 @@ def numeric_frames(draw, min_observed=2, values="hypothesis"):
     return df
 
 
+@st.composite
+def categorical_frames(draw, kinds=("text", "category", "ordered")):
+    """A complete predictor ``x``, an incomplete numeric column ``v`` and one
+    or two incomplete categorical columns related to them, each of one of
+    `kinds`: text, an unordered or an ordered Categorical with 2 to 4
+    categories, declared in reverse order (a category may not occur); 12 to
+    30 rows, at least two observed values per column."""
+    n = draw(st.integers(12, 30))
+    rng = np.random.default_rng(draw(st.integers(0, 2**32 - 1)))
+    latent = rng.normal(size=n)
+    data = {"x": latent + rng.normal(scale=0.5, size=n), "v": latent + rng.normal(size=n)}
+    for j in range(draw(st.integers(1, 2))):
+        k = draw(st.integers(2, 4))
+        labels = np.array([f"c{i}" for i in range(k)])
+        noise = draw(st.sampled_from([0.3, 1.0, 3.0]))
+        codes = np.digitize(latent + rng.normal(scale=noise, size=n), np.linspace(-1, 1, k + 1)[1:-1])
+        kind = draw(st.sampled_from(kinds))
+        if kind == "text":
+            data[f"g{j}"] = pd.Series(labels[codes], dtype=object)
+        else:
+            data[f"g{j}"] = pd.Categorical(labels[codes], categories=labels[::-1], ordered=kind == "ordered")
+    df = pd.DataFrame(data)
+    for col in df.columns[1:]:
+        missing = rng.random(n) < draw(st.sampled_from([0.1, 0.25, 0.4]))
+        missing[rng.choice(n, size=2, replace=False)] = False  # at least two observed values
+        df.loc[missing, col] = np.nan
+    return df
+
+
 def _check_frame(df, method):
     before = df.copy(deep=True)
     mice, out = impute(df, method, n_imputations=2, maxit=2, seed=1)
-    assert_all_invariants(df, before, mice, out, 2, 2)
+    assert_all_invariants(df, before, mice, out, 2, 2, donor=imputes_observed_values(method))
 
 
 def _settings(n):
@@ -77,6 +110,7 @@ def _settings(n):
         pytest.param("sample", 40, id="sample"),
         pytest.param("cart", 15, id="cart"),
         pytest.param("rf", 6, id="rf"),
+        pytest.param("norm", 15, id="norm"),
     ],
 )
 def test_invariants_on_random_frames(method, n_examples):
@@ -88,7 +122,32 @@ def test_invariants_on_random_frames(method, n_examples):
     check()
 
 
-@pytest.mark.parametrize("method,n_examples", [("pmm", 40), ("sample", 20)])
+def test_polyreg_invariants_on_random_categorical_frames():
+    """polyreg imputes the categorical columns, pmm the numeric one; every
+    imputed cell holds a label or value observed in its column."""
+
+    @_settings(10)
+    @given(categorical_frames())
+    def check(df):
+        _check_frame(df, "polyreg")
+
+    check()
+
+
+def test_polr_invariants_on_random_ordered_frames():
+    """polr imputes the ordered columns (by its fallback where they have two
+    levels), pmm the numeric one; every imputed cell holds a declared
+    category of its column, or an observed value."""
+
+    @_settings(8)
+    @given(categorical_frames(kinds=("ordered",)))
+    def check(df):
+        _check_frame(df, "polr")
+
+    check()
+
+
+@pytest.mark.parametrize("method,n_examples", [("pmm", 40), ("sample", 20), ("norm", 10)])
 def test_invariants_on_well_conditioned_random_frames(method, n_examples):
     """Same invariants on frames where today's pmm does not hit B3/B4:
     correlated normal columns and at least eight observed values per column."""

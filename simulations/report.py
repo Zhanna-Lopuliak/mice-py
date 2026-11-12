@@ -23,9 +23,17 @@ import pandas as pd
 import metrics as mx
 
 HERE = Path(__file__).resolve().parent
-FULL_REPS = 1000
-FULL_RF_REPS = 500
-FULL_METHODS = ("pmm", "midastouch", "cart", "rf", "sample")
+
+#: Methods that leave out the uncertainty of the imputation model (and, for
+#: norm.predict and mean, the residual noise): their intervals cover below the
+#: nominal level in both engines by design.
+IMPROPER_METHODS = ("norm.nob", "norm.predict", "mean")
+IMPROPER_NOTE = (
+    "`norm.nob`, `norm.predict` and `mean` are improper imputation methods: they ignore the "
+    "uncertainty of the imputation model (`norm.predict` and `mean` also the residual noise), so "
+    "their intervals cover below 95% in both engines, by design. The pass rule is the same as for "
+    "every cell: mice-py matches R."
+)
 
 # Failures whose cause is known. (engine, method or None, error class, regex
 # on the message, label). The first match wins.
@@ -160,13 +168,15 @@ def timing_table(status):
     return t.pivot_table(index=["scenario", "method"], columns="engine", values="mean").reset_index()
 
 
-def extrapolate(timing, meta_py, meta_r, scenarios, cores=8):
-    """CPU and wall time of the full plan from the measured seconds per replication.
+def extrapolate(timing, cells, workers):
+    """CPU and wall time of the full study from the measured seconds per replication.
 
-    Measured seconds come from runs with all cores busy, so they include
-    contention; wall time is CPU time / cores. A (scenario, method) cell that
-    was not measured (or failed throughout) takes the slowest measured
-    scenario of the same method and is listed as a guess.
+    ``cells`` are the manifest's cells with their full replication counts;
+    ``workers`` maps an engine to its number of processes. Measured seconds
+    come from runs with all processes busy, so they include contention; wall
+    time is CPU time / processes. A cell that was not measured (or failed
+    throughout) takes the slowest measured scenario of the same method (or
+    the slowest cell of all) and is listed as a guess.
     """
     if timing.empty:
         return None
@@ -177,19 +187,32 @@ def extrapolate(timing, meta_py, meta_r, scenarios, cores=8):
         per = timing.set_index(["scenario", "method"])[engine]
         total = 0.0
         guessed = []
-        for sid in scenarios:
-            for method in FULL_METHODS:
-                reps = FULL_RF_REPS if method == "rf" else FULL_REPS
-                key = (sid, method)
-                if key in per.index and np.isfinite(per[key]):
-                    sec = per[key]
-                else:
-                    same = per[[k for k in per.index if k[1] == method]].dropna()
-                    sec = same.max() if len(same) else per.dropna().max()
-                    guessed.append(f"{sid}/{method}")
-                total += reps * sec
-        out[engine] = dict(cpu_seconds=total, wall_seconds=total / cores, guessed=guessed)
+        for cell in cells:
+            key = (cell["scenario"], cell["method"])
+            if key in per.index and np.isfinite(per[key]):
+                sec = per[key]
+            else:
+                same = per[[k for k in per.index if k[1] == cell["method"]]].dropna()
+                sec = same.max() if len(same) else per.dropna().max()
+                guessed.append(f"{key[0]}/{key[1]}")
+            total += cell["reps"] * sec
+        n = max(int(workers.get(engine) or 1), 1)
+        out[engine] = dict(cpu_seconds=total, wall_seconds=total / n, workers=n, guessed=guessed)
     return out
+
+
+def _cell_label(method):
+    return f"{method}¹" if method in IMPROPER_METHODS else method
+
+
+def _columns_text(cell):
+    if cell.get("columns") is None:
+        return "no `method` argument (each engine's default by column type)"
+    return ", ".join(f"{c}: {m}" for c, m in cell["columns"].items())
+
+
+def _sci(x):
+    return "–" if x is None or not np.isfinite(x) else f"{x:.2e}"
 
 
 # ---------------------------------------------------------------------------
@@ -203,19 +226,23 @@ def build_report(work_dir, out_dir):
     manifest = json.loads(manifest_path.read_text())
     summary, pooled, metrics, paired = mx.summarise(results_dir, manifest_path)
     status = mx.load_status(results_dir)
+    cells = mx.load_cells(manifest_path)
+    identity = mx.identity_cells(cells)
 
     meta_py = _read_json(results_dir / "python_meta.json")
     meta_r = _read_json(results_dir / "r_meta.json")
 
     out_dir.mkdir(parents=True, exist_ok=True)
     order = {sid: i for i, sid in enumerate(manifest["scenarios"])}
-    method_order = {m: i for i, m in enumerate(FULL_METHODS + ("complete",))}
+    # Methods in the order of their first cell; the 0.2 methods come first
+    methods = list(dict.fromkeys(method for _, method in cells))
+    method_order = {m: i for i, m in enumerate([*methods, "complete"])}
     metric_order = {m: i for i, m in enumerate(mx.METRICS)}
     term_order = {(sid, t): i for sid, spec in manifest["scenarios"].items() for i, t in enumerate(spec["terms"])}
     summary = (
         summary.assign(
             _s=summary["scenario"].map(order),
-            _m=summary["method"].map(method_order),
+            _m=summary["method"].map(method_order).fillna(len(method_order)),
             _t=[term_order.get((s, t), 99) for s, t in zip(summary["scenario"], summary["term"])],
             _x=summary["metric"].map(metric_order),
         )
@@ -314,6 +341,54 @@ def build_report(work_dir, out_dir):
         )
     )
     w("")
+    categorical = [
+        f"`{c}` ({' < '.join(f['levels']) if f['ordered'] else ', '.join(f['levels'])}, "
+        f"{'ordered' if f['ordered'] else 'unordered'}) in {sid}"
+        for sid, spec in manifest["scenarios"].items()
+        for c, f in spec.get("categorical", {}).items()
+    ]
+    if categorical:
+        w(
+            "Categorical columns: "
+            + "; ".join(categorical)
+            + ". Python reads an unordered column as object dtype and an ordered one as an ordered "
+            "`pd.Categorical`; R reads factors with these levels. The analysis uses treatment dummies "
+            "for both (R analyses an unordered copy of an ordered factor)."
+        )
+        w("")
+
+    # Cells
+    w("## Cells")
+    w("")
+    ran = status[status["method"] != "complete"].groupby(["scenario", "method", "engine"]).size()
+    w(
+        "A study method on a scenario. Replications: planned for the full study, and run here by "
+        "Python and R. Rule `z`: every paired difference |z| ≤ "
+        f"{mx.Z_FLAG}; rule `identity`: see [Identity rule](#identity-rule)."
+    )
+    w("")
+    w(
+        md_table(
+            ["method", "scenario", "planned", "Python", "R", "rule", "method of each incomplete column"],
+            [
+                [
+                    _cell_label(method),
+                    sid,
+                    c["reps"],
+                    int(ran.get((sid, method, "python"), 0)) or "–",
+                    int(ran.get((sid, method, "r"), 0)) or "–",
+                    c.get("rule", "z"),
+                    _columns_text(c),
+                ]
+                for (sid, method), c in sorted(
+                    cells.items(), key=lambda kv: (method_order[kv[0][1]], order.get(kv[0][0], 99))
+                )
+            ],
+        )
+    )
+    w("")
+    w(f"¹ {IMPROPER_NOTE}")
+    w("")
 
     # Harness
     w("## Harness checks")
@@ -336,18 +411,20 @@ def build_report(work_dir, out_dir):
             aggfunc="first",
             sort=False,
         )
+        # pivot_table does not keep the term order: restore the scenario's
+        wide = wide.loc[sorted(wide.index, key=lambda k: (order.get(k[0], 99), term_order.get(k, 99)))]
         rows = []
         for (sid, term), r in wide.iterrows():
-            cells = []
+            entries = []
             for engine in mx.ENGINES:
                 if ("value", engine) in r.index and pd.notna(r[("value", engine)]):
                     ok = "" if r[("within", engine)] else " **outside**"
-                    cells.append(
+                    entries.append(
                         f"{r[('value', engine)]:.3f} ± {r[('band', engine)]:.3f} ({int(r[('reps', engine)])} reps){ok}"
                     )
                 else:
-                    cells.append("–")
-            rows.append([sid, term, *cells])
+                    entries.append("–")
+            rows.append([sid, term, *entries])
         w(md_table(["scenario", "term", "Python: coverage ± band", "R: coverage ± band"], rows))
     w("")
     ident = mx.harness_identity(pooled)
@@ -358,6 +435,96 @@ def build_report(work_dir, out_dir):
             f"difference {ident['max_rel_ubar']:.2e}; dfcom equal: {'yes' if ident['dfcom_equal'] else '**no**'}."
         )
         w("")
+
+    # Methods used
+    w("## Methods used")
+    w("")
+    mc = mx.methods_check(status, cells, {sid: spec["columns"] for sid, spec in manifest["scenarios"].items()})
+    if mc.empty:
+        w("No method records (status files without a `methods` column).")
+    else:
+        w(
+            "Each engine records the method of every column as it ran it (Python `MICE.method` in R's "
+            "names, R `imp$method`; empty for a column that is not imputed). Only replications that "
+            "succeeded in both engines are compared."
+        )
+        w("")
+        is_default = [
+            cells.get((r.scenario, r.method), {}).get("expected_methods") is not None for r in mc.itertuples()
+        ]
+        default = mc[is_default]
+        if not default.empty:
+            w("Cells without a `method` argument, where each engine chooses by column type (R's `make.method`):")
+            w("")
+            w(
+                md_table(
+                    ["scenario", "method", "expected", "Python", "R", "Python = R", "verdict"],
+                    [
+                        [
+                            r.scenario,
+                            r.method,
+                            f"`{r.expected}`",
+                            r.python,
+                            r.r,
+                            f"{r.equal} / {r.pairs}",
+                            "pass" if r.passed else "**fail**",
+                        ]
+                        for r in default.itertuples()
+                    ],
+                )
+            )
+            w("")
+        others = mc[~mc.index.isin(default.index)]
+        bad = others[~others["passed"]]
+        if not others.empty:
+            if bad.empty:
+                w(
+                    f"In the other {len(others)} cells Python and R recorded the same methods in every "
+                    f"paired replication ({int(others['pairs'].sum())} pairs)."
+                )
+            else:
+                w(f"**{len(bad)} cell(s) where Python's methods differ from R's:**")
+                w("")
+                w(
+                    md_table(
+                        ["scenario", "method", "Python", "R", "Python = R"],
+                        [[r.scenario, r.method, r.python, r.r, f"{r.equal} / {r.pairs}"] for r in bad.itertuples()],
+                    )
+                )
+            w("")
+
+    # Identity rule
+    w("## Identity rule")
+    w("")
+    ic = mx.identity_check(pooled, identity)
+    if ic.empty:
+        w("No cell is judged by the identity rule.")
+    else:
+        w(
+            "Deterministic methods on S4 (one incomplete column, maxit = 1) draw nothing, so the paired "
+            "z statistic is 0/0 and is not computed. Such a cell passes when the largest |qbar Python − "
+            f"qbar R| over replications and terms is at most {mx.IDENTITY_TOL:g} and B = 0 in both "
+            f"engines (to rounding: largest B at most {mx.IDENTITY_TOL**2:g})."
+        )
+        w("")
+        w(
+            md_table(
+                ["scenario", "method", "pairs × terms", "max |qbar Py − qbar R|", "max B Python", "max B R", "verdict"],
+                [
+                    [
+                        r.scenario,
+                        _cell_label(r.method),
+                        f"{r.pairs} × {r.terms}",
+                        _sci(r.max_abs_qbar),
+                        _sci(r.max_b_python),
+                        _sci(r.max_b_r),
+                        "pass" if r.passed else "**fail**",
+                    ]
+                    for r in ic.itertuples()
+                ],
+            )
+        )
+    w("")
 
     # Flags
     w(f"## Flagged comparisons (|z| > {mx.Z_FLAG})")
@@ -371,6 +538,13 @@ def build_report(work_dir, out_dir):
             f"Some cells have only {int(min_pairs)} paired replications. The z-scores use a normal "
             "approximation and Monte Carlo errors estimated from the same replications; below about "
             "100 replications they are not meaningful and flags are expected by chance."
+        )
+        w("")
+    if identity:
+        w(
+            "Cells judged by the identity rule have no z and are not counted: "
+            + ", ".join(f"{sid} {method}" for sid, method in sorted(identity))
+            + "."
         )
         w("")
     if flagged.empty:
@@ -467,11 +641,14 @@ def build_report(work_dir, out_dir):
             )
         )
         w("")
-        ext = extrapolate(timing, meta_py, meta_r, list(manifest["scenarios"]))
+        workers = {"python": meta_py.get("jobs"), "r": meta_r.get("jobs")}
+        ext = extrapolate(timing, list(cells.values()), workers)
         if ext:
+            n_reps = sorted({c["reps"] for c in cells.values()})
             w(
-                f"Extrapolated to the full study ({FULL_REPS} replications, rf {FULL_RF_REPS}, "
-                f"all six scenarios and five methods) on 8 cores:"
+                f"Extrapolated to the full study (all {len(cells)} cells of {len(manifest['scenarios'])} "
+                f"scenarios, {' or '.join(map(str, n_reps))} replications each), with as many processes "
+                "as this run used:"
             )
             w("")
             for engine, e in ext.items():
@@ -481,7 +658,10 @@ def build_report(work_dir, out_dir):
                         "; cells not measured, taken from the slowest measured scenario of the "
                         f"same method: {', '.join(e['guessed'])}"
                     )
-                w(f"- {engine}: about {e['wall_seconds'] / 60:.0f} min ({e['cpu_seconds'] / 3600:.1f} CPU hours){g}.")
+                w(
+                    f"- {engine}: about {e['wall_seconds'] / 60:.0f} min with {e['workers']} processes "
+                    f"({e['cpu_seconds'] / 3600:.1f} CPU hours){g}."
+                )
             w("")
 
     # Per scenario and method
@@ -489,24 +669,37 @@ def build_report(work_dir, out_dir):
     w("")
     w(
         "Cells: value (Monte Carlo SE). Py − R is the paired difference over replications where "
-        "both engines succeeded, with its SE; z = difference / SE; bold z is flagged."
+        "both engines succeeded, with its SE; z = difference / SE; bold z is flagged. Cells of the "
+        "identity rule have no z."
     )
     w("")
+    w(f"¹ {IMPROPER_NOTE}")
+    w("")
+    ident_by_cell = {(r.scenario, r.method): r for r in ic.itertuples()} if not ic.empty else {}
     for sid, spec in manifest["scenarios"].items():
         sub = summary[(summary["scenario"] == sid) & (summary["method"] != "complete")]
         if sub.empty:
             continue
         w(f"### {sid}: {spec['description']}; {spec['missingness']}; n = {spec['n']}, maxit = {spec['maxit']}")
         w("")
-        for method in FULL_METHODS:
+        for method in sorted(sub["method"].unique(), key=lambda m: method_order.get(m, len(method_order))):
             sm = sub[sub["method"] == method]
-            if sm.empty:
-                continue
             np_ = _int_or_dash(sm["python_reps"].max())
             nr_ = _int_or_dash(sm["r_reps"].max())
             npair = _int_or_dash(sm["n_pairs"].max())
-            w(f"#### {sid} {method} (Python {np_} reps, R {nr_} reps, {npair} pairs)")
+            w(f"#### {sid} {_cell_label(method)} (Python {np_} reps, R {nr_} reps, {npair} pairs)")
             w("")
+            cell = cells.get((sid, method), {})
+            if cell:
+                w(f"Methods: {_columns_text(cell)}.")
+                w("")
+            if (sid, method) in ident_by_cell:
+                r = ident_by_cell[(sid, method)]
+                w(
+                    f"Identity rule: max |qbar Python − qbar R| = {_sci(r.max_abs_qbar)}, max B Python "
+                    f"{_sci(r.max_b_python)}, R {_sci(r.max_b_r)}: {'pass' if r.passed else '**fail**'}."
+                )
+                w("")
             rows = []
             for r in sm.itertuples():
                 if r.metric == "estimate":
