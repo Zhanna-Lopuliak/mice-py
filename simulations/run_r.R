@@ -2,19 +2,24 @@
 # R mice and record the pooling ingredients per replication.
 #
 # Run from the repository root, after `study.py generate`:
-#   Rscript simulations/run_r.R [--scenarios S1,S4] [--methods pmm,sample]
-#                               [--reps 1000] [--rf-reps 500] [--jobs 8]
+#   Rscript simulations/run_r.R [--scenarios S1,S4] [--methods pmm,default]
+#                               [--reps N] [--jobs 8]
 #
 # Reads   simulations/work/data/manifest.json and data/<scenario>/rep_<k>.csv
 # Writes  simulations/work/results/r_<scenario>_<method>.csv
 #         (scenario, method, rep, term, qbar, ubar, b, m, n, dfcom),
 #         r_<scenario>_<method>_status.csv and r_meta.json.
 #
-# Every incomplete column gets the same method; full predictor matrix; visit
-# sequence = incomplete columns in column order; m = 5; maxit from the
-# manifest; seed = scenario_index * 100000 + rep. The pseudo-method
-# `complete` analyses the data before deletion and must reproduce the Python
-# numbers exactly (same data, same OLS).
+# The cells (study method x scenario, with their replications) and the
+# method of every incomplete column come from the manifest that study.py
+# wrote, so both engines run the same cells; --scenarios and --methods
+# select cells, --reps caps their replications. A cell without column
+# methods (`default`) calls mice() without `method`, so mice chooses by
+# column type (make.method). Full predictor matrix; visit sequence =
+# incomplete columns in column order; m = 5; maxit from the manifest; seed =
+# scenario_index * 100000 + rep. The status file records imp$method. The
+# pseudo-method `complete` analyses the data before deletion and must
+# reproduce the Python numbers exactly (same data, same OLS).
 #
 # This script calls mice rather than copying mice source, so that its
 # results are those of the installed mice. mice-py, like mice, is licensed
@@ -29,7 +34,6 @@ suppressPackageStartupMessages({
 # One thread per worker: replications run in parallel instead.
 options(ranger.num.threads = 1L)
 
-METHODS <- c("pmm", "midastouch", "cart", "rf", "sample")
 M_IMPUTATIONS <- 5L
 CHUNK_SIZE <- 10L # replications per forked task
 
@@ -43,7 +47,7 @@ script_dir <- function() {
 
 parse_options <- function(args) {
   opts <- list(
-    scenarios = NULL, methods = METHODS, reps = 1000L, rf_reps = 500L,
+    scenarios = NULL, methods = NULL, reps = NULL,
     jobs = max(1L, parallel::detectCores()),
     work_dir = file.path(script_dir(), "work")
   )
@@ -64,15 +68,12 @@ parse_options <- function(args) {
       "--scenarios" = opts$scenarios <- split_list(value),
       "--methods" = opts$methods <- split_list(value),
       "--reps" = opts$reps <- as.integer(value),
-      "--rf-reps" = opts$rf_reps <- as.integer(value),
       "--jobs" = opts$jobs <- as.integer(value),
       "--work-dir" = opts$work_dir <- normalizePath(value, mustWork = TRUE),
       stop("unknown option ", key)
     )
   }
-  bad <- setdiff(opts$methods, METHODS)
-  if (length(bad)) stop("unknown method(s): ", paste(bad, collapse = ", "))
-  if (is.na(opts$reps) || opts$reps < 1L) stop("--reps must be positive")
+  if (!is.null(opts$reps) && (is.na(opts$reps) || opts$reps < 1L)) stop("--reps must be positive")
   if (is.na(opts$jobs) || opts$jobs < 1L) stop("--jobs must be positive")
   if (.Platform$OS.type == "windows") opts$jobs <- 1L  # mclapply cannot fork
   opts
@@ -82,20 +83,36 @@ replication_seed <- function(spec, rep) as.integer(spec$index) * 100000L + rep
 
 # The manifest is read without simplification; turn the vectors into vectors.
 normalise_spec <- function(spec) {
-  for (key in c("columns", "means", "terms")) spec[[key]] <- as.character(unlist(spec[[key]]))
+  for (key in c("columns", "incomplete", "means", "terms")) spec[[key]] <- as.character(unlist(spec[[key]]))
   spec$regression$predictors <- as.character(unlist(spec$regression$predictors))
-  spec$categorical <- lapply(spec$categorical, function(lv) as.character(unlist(lv)))
+  spec$categorical <- lapply(spec$categorical, function(f) {
+    list(levels = as.character(unlist(f$levels)), ordered = isTRUE(f$ordered))
+  })
   spec$maxit <- as.integer(spec$maxit)
   spec$reps <- as.integer(spec$reps)
   spec
 }
 
+# A cell of the manifest: `columns` (method of each incomplete column) is
+# NULL for `default`.
+normalise_cell <- function(cell) {
+  cols <- cell$columns
+  cell$columns <- if (is.null(cols)) NULL else vapply(cols, as.character, character(1))
+  cell$reps <- as.integer(cell$reps)
+  cell
+}
+
+# A factor with the manifest's levels, ordered where the manifest says so,
+# so that mice's default for an ordered column is polr.
 read_dataset <- function(path, spec) {
   df <- utils::read.csv(path, na.strings = "", stringsAsFactors = FALSE)
   df <- df[spec$columns]
   for (col in spec$columns) {
-    if (col %in% names(spec$categorical)) {
-      df[[col]] <- factor(df[[col]], levels = spec$categorical[[col]])
+    f <- spec$categorical[[col]]
+    if (!is.null(f)) {
+      unknown <- setdiff(unique(df[[col]][!is.na(df[[col]])]), f$levels)
+      if (length(unknown)) stop("column ", col, " has values outside its levels: ", paste(unknown, collapse = ", "))
+      df[[col]] <- factor(df[[col]], levels = f$levels, ordered = f$ordered)
     } else {
       df[[col]] <- as.numeric(df[[col]])
     }
@@ -107,6 +124,11 @@ read_dataset <- function(path, spec) {
 analyse <- function(df, spec) {
   if (anyNA(df[spec$columns])) {
     stop("completed data still contain missing values")
+  }
+  # Treatment dummies for every factor: lm would give an ordered factor
+  # polynomial contrasts (o.L, o.Q, ...), so analyse an unordered copy.
+  for (col in names(spec$categorical)) {
+    if (is.ordered(df[[col]])) df[[col]] <- factor(df[[col]], levels = levels(df[[col]]), ordered = FALSE)
   }
   n <- nrow(df)
   f <- stats::reformulate(spec$regression$predictors,
@@ -141,10 +163,10 @@ analyse <- function(df, spec) {
   out
 }
 
-impute <- function(data, method, spec, seed) {
+# `columns`: the method of each incomplete column (names), or NULL for no
+# `method` argument (mice's make.method chooses by column type).
+impute <- function(data, columns, spec, seed) {
   incomplete <- names(data)[colSums(is.na(data)) > 0]
-  meth <- stats::setNames(rep("", ncol(data)), names(data))
-  meth[incomplete] <- method
   pred <- matrix(1L, ncol(data), ncol(data),
     dimnames = list(names(data), names(data))
   )
@@ -152,11 +174,23 @@ impute <- function(data, method, spec, seed) {
   # Column positions, not names: mice reads a single name as a keyword
   # ("roman", "monotone", ...) and stops.
   visit <- match(incomplete, names(data))
-  imp <- mice::mice(data,
-    m = M_IMPUTATIONS, maxit = spec$maxit, method = meth,
-    predictorMatrix = pred, visitSequence = visit,
-    printFlag = FALSE, seed = seed
-  )
+  if (is.null(columns)) {
+    imp <- mice::mice(data,
+      m = M_IMPUTATIONS, maxit = spec$maxit,
+      predictorMatrix = pred, visitSequence = visit,
+      printFlag = FALSE, seed = seed
+    )
+  } else {
+    unassigned <- setdiff(incomplete, names(columns))
+    if (length(unassigned)) stop("no method for the incomplete column(s) ", paste(unassigned, collapse = ", "))
+    meth <- stats::setNames(rep("", ncol(data)), names(data))
+    meth[incomplete] <- columns[incomplete]
+    imp <- mice::mice(data,
+      m = M_IMPUTATIONS, maxit = spec$maxit, method = meth,
+      predictorMatrix = pred, visitSequence = visit,
+      printFlag = FALSE, seed = seed
+    )
+  }
   if (!identical(unname(imp$visitSequence), incomplete)) {
     stop("unexpected visit sequence: ", paste(imp$visitSequence, collapse = ", "))
   }
@@ -165,12 +199,15 @@ impute <- function(data, method, spec, seed) {
 
 one_line <- function(x) substr(gsub("\\s+", " ", paste(x, collapse = " ")), 1L, 300L)
 
-run_one <- function(spec, method, rep, data_dir) {
+# `cell`: list(method, columns) from the manifest; method "complete" for the
+# complete-data analysis.
+run_one <- function(spec, cell, rep, data_dir) {
+  method <- cell$method
   t0 <- proc.time()[["elapsed"]]
   status <- list(
     scenario = spec$id, method = method, rep = rep, status = "ok",
     error_class = "", error_message = "", n_events = NA_integer_,
-    events = "", n_warnings = 0L, warnings = "", seconds = NA_real_
+    events = "", n_warnings = 0L, warnings = "", methods = "", seconds = NA_real_
   )
   warns <- character(0)
   stage <- "imputation"
@@ -185,7 +222,8 @@ run_one <- function(spec, method, rep, data_dir) {
           list(analyses = list(analyse(df, spec)), m = 1L, n = nrow(df))
         } else {
           df <- read_dataset(file.path(data_dir, spec$id, sprintf("rep_%d.csv", rep)), spec)
-          imp <- impute(df, method, spec, replication_seed(spec, rep))
+          imp <- impute(df, cell$columns, spec, replication_seed(spec, rep))
+          status$methods <- paste0(names(imp$method), "=", unname(imp$method), collapse = ";")
           ev <- imp$loggedEvents
           status$n_events <- if (is.null(ev)) 0L else nrow(ev)
           if (!is.null(ev)) {
@@ -260,7 +298,7 @@ write_outputs <- function(results_dir, spec, method, outs) {
   n_fail <- sum(status$status != "ok")
   classes <- unique(status$error_class[status$status != "ok"])
   cat(sprintf(
-    "  %s %-10s reps=%5d failed=%5d%s  events in %d reps  %.3f s/rep\n",
+    "  %s %-12s reps=%5d failed=%5d%s  events in %d reps  %.3f s/rep\n",
     spec$id, method, nrow(status), n_fail,
     if (length(classes)) paste0(" (", paste(classes, collapse = ", "), ")") else "",
     sum(status$n_events > 0, na.rm = TRUE), mean(as.numeric(status$seconds))
@@ -275,9 +313,27 @@ main <- function() {
   manifest_path <- file.path(data_dir, "manifest.json")
   if (!file.exists(manifest_path)) stop(manifest_path, " not found: run study.py generate first")
   manifest <- jsonlite::fromJSON(manifest_path, simplifyVector = FALSE)
+  if (is.null(manifest$cells)) stop(manifest_path, " has no cells: run study.py generate again")
   scenarios <- if (is.null(opts$scenarios)) names(manifest$scenarios) else opts$scenarios
   missing_sc <- setdiff(scenarios, names(manifest$scenarios))
   if (length(missing_sc)) stop("not generated: ", paste(missing_sc, collapse = ", "))
+
+  # The cells of the manifest, selected by --scenarios and --methods, with
+  # their replications capped by --reps
+  cells <- lapply(manifest$cells, normalise_cell)
+  known <- unique(vapply(cells, `[[`, character(1), "method"))
+  bad <- setdiff(opts$methods, known)
+  if (length(bad)) stop("unknown study method(s): ", paste(bad, collapse = ", "))
+  cells <- Filter(function(cl) {
+    cl$scenario %in% scenarios && (is.null(opts$methods) || cl$method %in% opts$methods)
+  }, cells)
+  if (!length(cells)) stop("no cell matches --scenarios and --methods")
+  if (!is.null(opts$reps)) {
+    cells <- lapply(cells, function(cl) {
+      cl$reps <- min(cl$reps, opts$reps)
+      cl
+    })
+  }
 
   cat(sprintf(
     "R %s, mice %s, %d processes\n", getRversion(), packageVersion("mice"), opts$jobs
@@ -285,24 +341,23 @@ main <- function() {
   t_start <- proc.time()[["elapsed"]]
   plan <- list()
   for (sid in scenarios) {
+    own <- Filter(function(cl) cl$scenario == sid, cells)
+    if (!length(own)) next
     spec <- normalise_spec(manifest$scenarios[[sid]])
-    reps_by_method <- vapply(opts$methods, function(mth) {
-      if (mth == "rf") min(opts$rf_reps, opts$reps) else opts$reps
-    }, integer(1))
-    need <- max(reps_by_method)
+    need <- max(vapply(own, `[[`, integer(1), "reps"))
     if (spec$reps < need) {
       stop(sid, ": ", spec$reps, " datasets generated, ", need, " needed")
     }
-    reps_by_method["complete"] <- need
-    # All methods of a scenario in one pool, in chunks of CHUNK_SIZE
+    own <- c(own, list(list(method = "complete", columns = NULL, reps = need)))
+    # All cells of a scenario in one pool, in chunks of CHUNK_SIZE
     # replications handed out dynamically: cores of different speed stay
     # busy, and results do not depend on scheduling (one seed per rep).
-    tasks <- do.call(rbind, lapply(names(reps_by_method), function(mth) {
-      data.frame(method = mth, rep = seq_len(reps_by_method[[mth]]), stringsAsFactors = FALSE)
+    tasks <- do.call(rbind, lapply(seq_along(own), function(k) {
+      data.frame(cell = k, rep = seq_len(own[[k]]$reps))
     }))
     chunks <- split(seq_len(nrow(tasks)), ceiling(seq_len(nrow(tasks)) / CHUNK_SIZE))
     outs <- parallel::mclapply(chunks, function(idx) {
-      lapply(idx, function(i) run_one(spec, tasks$method[i], tasks$rep[i], data_dir))
+      lapply(idx, function(i) run_one(spec, own[[tasks$cell[i]]], tasks$rep[i], data_dir))
     }, mc.cores = opts$jobs, mc.preschedule = FALSE)
     died <- vapply(outs, function(o) inherits(o, "try-error") || is.null(o), logical(1))
     if (any(died)) {
@@ -311,9 +366,10 @@ main <- function() {
       stop(sum(died), " chunk(s) of ", sid, " died: ", why)
     }
     outs <- unlist(unname(outs), recursive = FALSE)
-    for (mth in names(reps_by_method)) {
-      write_outputs(results_dir, spec, mth, outs[tasks$method == mth])
-      plan[[paste0(sid, "/", mth)]] <- reps_by_method[[mth]]
+    for (k in seq_along(own)) {
+      mth <- own[[k]]$method
+      write_outputs(results_dir, spec, mth, outs[tasks$cell == k])
+      plan[[paste0(sid, "/", mth)]] <- own[[k]]$reps
     }
   }
   wall <- proc.time()[["elapsed"]] - t_start

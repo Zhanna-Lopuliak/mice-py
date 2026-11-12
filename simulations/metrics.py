@@ -36,6 +36,17 @@ Monte Carlo standard errors (R = number of replications):
   n10, n01 the discordant counts;
 - other paired differences: sd(difference) / sqrt(R); for RMSE the paired
   difference of squared errors divided by (RMSE_py + RMSE_r).
+
+Identity rule. A deterministic method (cells with ``rule = "identity"`` in
+the manifest: ``norm.predict`` and ``mean`` on S4, one incomplete column and
+maxit = 1) draws nothing, so both engines must give the same completed data
+up to rounding and every between-imputation variance is 0. The paired
+differences and their Monte Carlo errors are then 0 or rounding noise, and z
+is 0/0 or meaningless. Such a cell gets no z and no flag; it passes when the
+largest |qbar_python - qbar_R| over replications and terms is at most
+``IDENTITY_TOL`` (1e-8) and B = 0 on both sides, to rounding: the largest B
+of each engine at most ``IDENTITY_TOL ** 2`` (the m estimates differ by at
+most about 1e-8).
 """
 
 from __future__ import annotations
@@ -48,6 +59,7 @@ import pandas as pd
 from scipy import stats
 
 Z_FLAG = 4.2
+IDENTITY_TOL = 1e-8
 LEVEL = 0.95
 ENGINES = ("python", "r")
 #: Metrics in report order; ``estimate`` is in summary.csv only.
@@ -113,6 +125,17 @@ def load_truth(manifest_path):
         for sid, spec in manifest["scenarios"].items()
         for term, value in spec["truth"].items()
     }
+
+
+def load_cells(manifest_path):
+    """The cells of the manifest as ``{(scenario, method): cell}`` (dicts as ``study.py`` wrote them)."""
+    manifest = json.loads(Path(manifest_path).read_text())
+    return {(c["scenario"], c["method"]): c for c in manifest.get("cells", [])}
+
+
+def identity_cells(cells):
+    """``{(scenario, method)}`` of the cells judged by the identity rule."""
+    return {key for key, c in cells.items() if c.get("rule") == "identity"}
 
 
 # ---------------------------------------------------------------------------
@@ -231,8 +254,12 @@ def _z(diff, se):
     return diff / se
 
 
-def paired_differences(pooled):
-    """Long table: scenario, method, term, metric, diff, diff_se, z, flagged, n_pairs."""
+def paired_differences(pooled, identity=frozenset()):
+    """Long table: scenario, method, term, metric, diff, diff_se, z, flagged, n_pairs.
+
+    Cells in ``identity`` (``(scenario, method)`` pairs) get z = NaN and no
+    flag: they are judged by :func:`identity_check`.
+    """
     cols = ["scenario", "method", "term", "rep", "truth", "qbar", "width", "covered", "sqerr", "b", "t"]
     py = pooled.loc[pooled["engine"] == "python", cols]
     r = pooled.loc[pooled["engine"] == "r", cols]
@@ -261,12 +288,15 @@ def paired_differences(pooled):
         d = g["sqerr_py"] - g["sqerr_r"]
         denom = rmse_py + rmse_r
         out["rmse"] = (rmse_py - rmse_r, _mcse_mean(d) / denom if denom > 0 else np.nan)
+        deterministic = (sid, method) in identity
         for metric in METRICS:
             diff, se = out[metric]
-            z = _z(diff, se)
-            # complete: identical data on both sides, judged by harness_identity().
+            z = np.nan if deterministic else _z(diff, se)
+            # complete: identical data on both sides, judged by harness_identity();
+            # deterministic methods: judged by identity_check().
             flagged = (
                 method != "complete"
+                and not deterministic
                 and metric in TESTED_METRICS
                 and bool(np.isinf(z) or (np.isfinite(z) and abs(z) > Z_FLAG))
             )
@@ -326,6 +356,121 @@ def harness_identity(results):
     }
 
 
+def identity_check(pooled, identity):
+    """The identity rule for each deterministic cell (see the module docstring).
+
+    Returns a DataFrame with one row per cell: ``scenario, method, pairs``
+    (paired replications), ``terms``, ``max_abs_qbar`` (largest |qbar
+    Python - qbar R| over paired replications and terms), ``max_b_python``,
+    ``max_b_r`` (largest B of each engine over all its replications) and
+    ``passed``.
+    """
+    rows = []
+    for sid, method in sorted(identity):
+        c = pooled[(pooled["scenario"] == sid) & (pooled["method"] == method)]
+        py = c[c["engine"] == "python"]
+        r = c[c["engine"] == "r"]
+        both = py.merge(r, on=["term", "rep"], suffixes=("_py", "_r"))
+        max_abs = float((both["qbar_py"] - both["qbar_r"]).abs().max()) if len(both) else np.nan
+        max_b_py = float(py["b"].max()) if len(py) else np.nan
+        max_b_r = float(r["b"].max()) if len(r) else np.nan
+        passed = bool(
+            len(both) > 0 and max_abs <= IDENTITY_TOL and max_b_py <= IDENTITY_TOL**2 and max_b_r <= IDENTITY_TOL**2
+        )
+        rows.append(
+            dict(
+                scenario=sid,
+                method=method,
+                pairs=int(both["rep"].nunique()) if len(both) else 0,
+                terms=int(both["term"].nunique()) if len(both) else 0,
+                max_abs_qbar=max_abs,
+                max_b_python=max_b_py,
+                max_b_r=max_b_r,
+                passed=passed,
+            )
+        )
+    return pd.DataFrame(
+        rows, columns=["scenario", "method", "pairs", "terms", "max_abs_qbar", "max_b_python", "max_b_r", "passed"]
+    )
+
+
+# ---------------------------------------------------------------------------
+# Methods used
+# ---------------------------------------------------------------------------
+
+
+def expected_methods(cell, columns):
+    """The method record a cell should produce, ``"col=method;..."`` over all ``columns``.
+
+    ``expected_methods`` of a ``default`` cell, otherwise the cell's own
+    method of each incomplete column; ``""`` for the other columns.
+    """
+    wanted = cell.get("expected_methods") or cell.get("columns") or {}
+    return ";".join(f"{c}={wanted.get(c, '')}" for c in columns)
+
+
+def methods_check(status, cells, columns_by_scenario):
+    """The methods each engine recorded (``methods`` in the status files), per cell.
+
+    Only replications that succeeded in both engines are compared. Returns
+    a DataFrame with one row per cell: ``scenario, method, python, r`` (the
+    distinct records with their counts), ``pairs``, ``equal`` (pairs where
+    Python's record equals R's), ``expected`` and ``python_expected``,
+    ``r_expected`` (replications whose record is the expected one), and
+    ``passed``: Python equals R in every pair and, for a ``default`` cell,
+    both chose the expected methods every time.
+    """
+    cols = [
+        "scenario",
+        "method",
+        "python",
+        "r",
+        "pairs",
+        "equal",
+        "expected",
+        "python_expected",
+        "r_expected",
+        "passed",
+    ]
+    if status.empty or "methods" not in status:
+        return pd.DataFrame(columns=cols)
+    st = status[(status["method"] != "complete") & (status["status"] == "ok")].copy()
+    st["methods"] = st["methods"].fillna("").astype(str)
+    rows = []
+    for (sid, method), g in st.groupby(["scenario", "method"], sort=False):
+        py = g[g["engine"] == "python"].set_index("rep")["methods"]
+        r = g[g["engine"] == "r"].set_index("rep")["methods"]
+        common = py.index.intersection(r.index)
+        equal = int((py[common] == r[common]).sum())
+        cell = cells.get((sid, method), {})
+        expected = expected_methods(cell, columns_by_scenario.get(sid, []))
+        py_exp = int((py == expected).sum())
+        r_exp = int((r == expected).sum())
+        passed = len(common) > 0 and equal == len(common)
+        if cell.get("expected_methods") is not None:
+            passed = passed and py_exp == len(py) and r_exp == len(r)
+        rows.append(
+            dict(
+                scenario=sid,
+                method=method,
+                python=_counts(py),
+                r=_counts(r),
+                pairs=len(common),
+                equal=equal,
+                expected=expected,
+                python_expected=py_exp,
+                r_expected=r_exp,
+                passed=passed,
+            )
+        )
+    return pd.DataFrame(rows, columns=cols)
+
+
+def _counts(records):
+    counts = records.value_counts()
+    return "; ".join(f"{text or '(none)'} ({n})" for text, n in counts.items())
+
+
 # ---------------------------------------------------------------------------
 # Everything at once
 # ---------------------------------------------------------------------------
@@ -336,13 +481,13 @@ def summarise(results_dir, manifest_path):
 
     ``summary`` has one row per scenario, method, term and metric with the
     Python and R values, their MCSEs, the paired difference, its MCSE, z and
-    the flag.
+    the flag (z empty and no flag for the cells of the identity rule).
     """
     results = load_results(results_dir)
     truth = load_truth(manifest_path)
     pooled = pool(results, truth)
     metrics = engine_metrics(pooled)
-    paired = paired_differences(pooled)
+    paired = paired_differences(pooled, identity_cells(load_cells(manifest_path)))
 
     keys = ["scenario", "method", "term", "metric"]
     wide = None

@@ -8,8 +8,14 @@ What it fixes explicitly, so that the study does not depend on defaults:
 - the full predictor matrix (all ones, zero diagonal), as R's
   ``make.predictorMatrix``;
 - the visit sequence: incomplete columns in column order (R's ``"roman"``);
-- the method, forced for every incomplete column;
+- the method of every incomplete column, given by the study cell; or no
+  ``method`` argument at all (cell ``default``), so that the library chooses
+  by column type as R's ``make.method`` does;
 - ``n_imputations`` and ``maxit``.
+
+It records the method the library used for every column (``MICE.method``),
+translated to R's names, so that the report can compare it with R's
+``imp$method``.
 
 joblib runs sequentially inside the call: the study parallelises over
 replications instead. rf grows its trees in one job by default anyway; the
@@ -38,14 +44,26 @@ import pandas as pd
 
 from imputation import MICE
 
-#: Study method name (R's) -> mice-py method name.
+#: Method name (R's) -> mice-py method name.
 PYTHON_METHOD = {
     "pmm": "pmm",
     "midastouch": "midas",
     "cart": "cart",
     "rf": "rf",
     "sample": "sample",
+    "norm": "norm",
+    "norm.boot": "norm.boot",
+    "norm.nob": "norm.nob",
+    "norm.predict": "norm.predict",
+    "mean": "mean",
+    "logreg": "logreg",
+    "logreg.boot": "logreg.boot",
+    "polyreg": "polyreg",
+    "polr": "polr",
 }
+
+#: mice-py method name -> R's name ("" stays "": the column is not imputed).
+R_METHOD = {py: r for r, py in PYTHON_METHOD.items()}
 
 #: True if ``MICE.impute`` accepts ``seed`` (it does not before the C1 fix).
 SEED_SUPPORTED = "seed" in inspect.signature(MICE.impute).parameters
@@ -92,12 +110,16 @@ class Outcome:
     ``datasets`` is None when the library raised; ``error_class`` and
     ``error_message`` then describe the exception. ``events`` holds the text
     of every non-benign warning the library issued during the call.
+    ``methods`` is the method of every column in data order (R's names,
+    ``""`` for a column that is not imputed) as the library set it, or None
+    if the library raised before setting it.
     """
 
     datasets: list | None
     error_class: str = ""
     error_message: str = ""
     events: list = field(default_factory=list)
+    methods: dict | None = None
     seconds: float = 0.0
 
     @property
@@ -105,15 +127,19 @@ class Outcome:
         return self.datasets is not None
 
 
-def impute(df, method, m, maxit, seed):
-    """Impute ``df`` with ``method`` forced for every incomplete column.
+def impute(df, methods, m, maxit, seed):
+    """Impute ``df`` with the given method of every incomplete column.
 
     Parameters
     ----------
     df : DataFrame
-        Incomplete data; categorical columns as object dtype.
-    method : str
-        Study method name (``pmm``, ``midastouch``, ``cart``, ``rf``, ``sample``).
+        Incomplete data; unordered categorical columns as object dtype,
+        ordered ones as ordered ``pd.Categorical``.
+    methods : dict or None
+        Method of each incomplete column, by R's name (``pmm``,
+        ``midastouch``, ``norm``, ``logreg.boot``, ...). Every incomplete
+        column must be in it. None: no ``method`` argument, so the library
+        chooses each column's method by its type.
     m, maxit : int
         Number of imputations and iterations.
     seed : int
@@ -125,21 +151,31 @@ def impute(df, method, m, maxit, seed):
         Never raises for a library failure: the exception class and message
         are recorded instead, so one failing replication does not stop the
         study.
+
+    Raises
+    ------
+    ValueError
+        If ``methods`` misses an incomplete column (an error of the study).
     """
     incomplete = [c for c in df.columns if df[c].isna().any()]
     kwargs = dict(
         n_imputations=int(m),
         maxit=int(maxit),
         predictor_matrix=full_predictor_matrix(df.columns),
-        method={c: PYTHON_METHOD[method] for c in incomplete},
         visit_sequence=list(incomplete),
     )
+    if methods is not None:
+        unassigned = [c for c in incomplete if c not in methods]
+        if unassigned:
+            raise ValueError(f"no method for the incomplete column(s) {unassigned}")
+        kwargs["method"] = {c: PYTHON_METHOD[methods[c]] for c in incomplete}
     if SEED_SUPPORTED:
         kwargs["seed"] = int(seed)
     else:
         _warn_shared_streams_once()
 
     start = time.perf_counter()
+    mice = None
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         try:
@@ -149,20 +185,31 @@ def impute(df, method, m, maxit, seed):
             # (rf uses one job by default); with a fixed random_state this
             # does not change any result.
             with contextlib.redirect_stdout(io.StringIO()), joblib.parallel_config(backend="sequential"):
-                datasets = MICE(df.copy()).impute(**kwargs)
+                mice = MICE(df.copy())
+                datasets = mice.impute(**kwargs)
         except Exception as exc:  # recorded, not raised: see docstring
             return Outcome(
                 datasets=None,
                 error_class=type(exc).__name__,
                 error_message=_one_line(exc),
                 events=_events(caught),
+                methods=_methods(mice),
                 seconds=time.perf_counter() - start,
             )
     return Outcome(
         datasets=[d.copy() for d in datasets],
         events=_events(caught),
+        methods=_methods(mice),
         seconds=time.perf_counter() - start,
     )
+
+
+def _methods(mice):
+    """The method of every column as the library set it, in R's names; None if unset."""
+    used = getattr(mice, "method", None)
+    if not isinstance(used, dict):
+        return None
+    return {col: R_METHOD.get(meth, meth) for col, meth in used.items()}
 
 
 def _events(caught):

@@ -41,8 +41,27 @@ from scipy.optimize import brentq
 #: Slope of the MAR logit on the standardised driver variable.
 MAR_SLOPE = 1.5
 
-#: Levels of the categorical variable of S5, in R factor order.
-G_LEVELS = ("a", "b", "c")
+#: Levels of the categorical variables, in R factor order: unordered ``g``
+#: of S5, binary ``b`` of S7, ordered ``o`` of S8 (lo < mid < hi < top; the
+#: labels do not sort in that order, so the order must come from the
+#: declared levels on both sides).
+S5_LEVELS = ("a", "b", "c")
+S7_LEVELS = ("no", "yes")
+S8_LEVELS = ("lo", "mid", "hi", "top")
+
+
+@dataclass(frozen=True)
+class Factor:
+    """A categorical column: its levels in R factor order, and whether they are ordered.
+
+    Python reads an unordered column as object dtype and an ordered one as
+    an ordered ``pd.Categorical`` with these categories; R reads a factor
+    (ordered or not) with these levels. The analysis always uses treatment
+    dummies (``run_r.R`` analyses an unordered copy of an ordered factor).
+    """
+
+    levels: tuple
+    ordered: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +160,7 @@ def _gen_s5(rng, n):
     x = 0.5 * code + rng.standard_normal(n)
     e = rng.standard_normal(n)
     y = 0.5 * (code == 1) + 1.0 * (code == 2) + 0.7 * x + e
-    g = np.asarray(G_LEVELS, dtype=object)[code]
+    g = np.asarray(S5_LEVELS, dtype=object)[code]
     full = pd.DataFrame({"g": g, "x": x, "y": y})
     data = full.copy()
     miss_g = mar_mask(rng, full["y"], 0.30)
@@ -149,6 +168,37 @@ def _gen_s5(rng, n):
     data.loc[miss_g, "g"] = np.nan
     data.loc[miss_x, "x"] = np.nan
     return full, data
+
+
+def _category_x_y(rng, n, column, levels, probs, effects):
+    """S7 and S8, drawn as S5: the category, then x given it, then y given both.
+
+    Draws: level codes (n uniforms through ``rng.choice``), x noise, e, then
+    the masks (the category MAR on y 30%, x MCAR 20%).
+    x = 0.5 code + N(0, 1); y = 0.5 + effects[code] + 0.7 x + e.
+    """
+    code = rng.choice(len(levels), size=n, p=probs)
+    x = 0.5 * code + rng.standard_normal(n)
+    e = rng.standard_normal(n)
+    y = 0.5 + np.asarray(effects, dtype=float)[code] + 0.7 * x + e
+    cat = np.asarray(levels, dtype=object)[code]
+    full = pd.DataFrame({column: cat, "x": x, "y": y})
+    data = full.copy()
+    miss_cat = mar_mask(rng, full["y"], 0.30)
+    miss_x = mcar_mask(rng, n, 0.20)
+    data.loc[miss_cat, column] = np.nan
+    data.loc[miss_x, "x"] = np.nan
+    return full, data
+
+
+def _gen_s7(rng, n):
+    """Binary b: P(b = yes) = 0.4; y = 0.5 + 1.0 [b = yes] + 0.7 x + e."""
+    return _category_x_y(rng, n, "b", S7_LEVELS, [0.6, 0.4], (0.0, 1.0))
+
+
+def _gen_s8(rng, n):
+    """Ordered o, probabilities (0.2, 0.3, 0.3, 0.2); y = 0.5 + 0.4 code + 0.7 x + e."""
+    return _category_x_y(rng, n, "o", S8_LEVELS, [0.2, 0.3, 0.3, 0.2], (0.0, 0.4, 0.8, 1.2))
 
 
 def _gen_s6(rng, n):
@@ -173,11 +223,14 @@ def _gen_s6(rng, n):
 class Scenario:
     """One row of the scenario table.
 
+    ``incomplete`` lists the columns that the missingness mechanism deletes
+    from, in column order; a study method assigns each of them a method.
     ``regression`` is ``(response, predictors)`` with predictors in the order
     of the model terms; a categorical predictor expands to treatment dummies
-    named ``<col><level>`` (R's ``model.matrix`` names). ``means`` lists the
-    columns whose mean is a target, ``proportions`` maps a term name to
-    ``(column, level)``.
+    named ``<col><level>`` (R's ``model.matrix`` names), ordered or not.
+    ``means`` lists the columns whose mean is a target, ``proportions`` maps
+    a term name to ``(column, level)``. ``categorical`` maps each categorical
+    column to its :class:`Factor`.
     """
 
     id: str
@@ -185,13 +238,14 @@ class Scenario:
     n: int
     maxit: int
     columns: tuple
+    incomplete: tuple
     description: str
     missingness: str
     generator: Callable = field(repr=False)
     regression: tuple = ()
     means: tuple = ()
     proportions: dict = field(default_factory=dict)
-    categorical: tuple = ()
+    categorical: dict = field(default_factory=dict)
     truth: dict = field(default_factory=dict)
 
     def generate(self, rep):
@@ -215,6 +269,7 @@ SCENARIOS = {
             n=200,
             maxit=1,
             columns=("x1", "x2", "y"),
+            incomplete=("x1",),
             description="model M",
             missingness="x1 MCAR 30%",
             generator=_gen_s1,
@@ -228,6 +283,7 @@ SCENARIOS = {
             n=200,
             maxit=1,
             columns=("x1", "x2", "y"),
+            incomplete=("x1",),
             description="model M",
             missingness="x1 MAR on y 30%",
             generator=_gen_s2,
@@ -241,6 +297,7 @@ SCENARIOS = {
             n=200,
             maxit=5,
             columns=("x1", "x2", "y"),
+            incomplete=("x1", "y"),
             description="model M",
             missingness="y and x1 each MAR on x2 25%, independent draws",
             generator=_gen_s3,
@@ -254,6 +311,7 @@ SCENARIOS = {
             n=50,
             maxit=1,
             columns=("x1", "x2", "y"),
+            incomplete=("x1",),
             description="model M, small sample",
             missingness="x1 MCAR 50%",
             generator=_gen_s4,
@@ -267,13 +325,14 @@ SCENARIOS = {
             n=200,
             maxit=5,
             columns=("g", "x", "y"),
+            incomplete=("g", "x"),
             description="g in {a,b,c} (0.5, 0.3, 0.2); x ~ N(0.5 code, 1); y = 0.5[g=b] + 1.0[g=c] + 0.7x + e",
             missingness="g MAR on y 30%; x MCAR 20%",
             generator=_gen_s5,
             regression=("y", ("g", "x")),
             means=("x",),
             proportions={"P(g=c)": ("g", "c")},
-            categorical=("g",),
+            categorical={"g": Factor(S5_LEVELS)},
             truth={"(Intercept)": 0.0, "gb": 0.5, "gc": 1.0, "x": 0.7, "P(g=c)": 0.2, "mean(x)": 0.35},
         ),
         Scenario(
@@ -282,12 +341,58 @@ SCENARIOS = {
             n=200,
             maxit=1,
             columns=("x1", "w", "y"),
+            incomplete=("w",),
             description="w = exp(0.5 x1 + u), u ~ N(0, 0.5^2); y = 1 + 0.5w + 0.5x1 + e",
             missingness="w MAR on y 30%",
             generator=_gen_s6,
             regression=("y", ("w", "x1")),
             means=("w",),
             truth={"(Intercept)": 1.0, "w": 0.5, "x1": 0.5, "mean(w)": float(np.exp(0.25))},
+        ),
+        Scenario(
+            id="S7",
+            index=7,
+            n=200,
+            maxit=5,
+            columns=("b", "x", "y"),
+            incomplete=("b", "x"),
+            description="b in {no,yes} (0.6, 0.4); x ~ N(0.5 code, 1); y = 0.5 + 1.0[b=yes] + 0.7x + e",
+            missingness="b MAR on y 30%; x MCAR 20%",
+            generator=_gen_s7,
+            regression=("y", ("b", "x")),
+            means=("x",),
+            proportions={"P(b=yes)": ("b", "yes")},
+            categorical={"b": Factor(S7_LEVELS)},
+            # E(x) = 0.5 P(b = yes)
+            truth={"(Intercept)": 0.5, "byes": 1.0, "x": 0.7, "P(b=yes)": 0.4, "mean(x)": 0.2},
+        ),
+        Scenario(
+            id="S8",
+            index=8,
+            n=200,
+            maxit=5,
+            columns=("o", "x", "y"),
+            incomplete=("o", "x"),
+            description=(
+                "o ordered lo < mid < hi < top (0.2, 0.3, 0.3, 0.2), code 0-3; x ~ N(0.5 code, 1); "
+                "y = 0.5 + 0.4 code + 0.7x + e"
+            ),
+            missingness="o MAR on y 30%; x MCAR 20%",
+            generator=_gen_s8,
+            regression=("y", ("o", "x")),
+            means=("x",),
+            proportions={"P(o=top)": ("o", "top")},
+            categorical={"o": Factor(S8_LEVELS, ordered=True)},
+            # E(code) = 0.3 + 0.6 + 0.6 = 1.5, so E(x) = 0.75
+            truth={
+                "(Intercept)": 0.5,
+                "omid": 0.4,
+                "ohi": 0.8,
+                "otop": 1.2,
+                "x": 0.7,
+                "P(o=top)": 0.2,
+                "mean(x)": 0.75,
+            },
         ),
     ]
 }
@@ -304,11 +409,13 @@ def _design(df, scenario):
     names = ["(Intercept)"]
     for p in predictors:
         if p in scenario.categorical:
+            levels = scenario.categorical[p].levels
             values = df[p].astype(object).to_numpy()
-            unknown = set(pd.unique(values)) - set(G_LEVELS)
+            unknown = set(pd.unique(values)) - set(levels)
             if unknown:
-                raise ValueError(f"column {p!r} has values outside {G_LEVELS}: {sorted(map(str, unknown))}")
-            for level in G_LEVELS[1:]:
+                raise ValueError(f"column {p!r} has values outside {levels}: {sorted(map(str, unknown))}")
+            # Treatment dummies in level order, ordered or not
+            for level in levels[1:]:
                 cols.append((values == level).astype(float))
                 names.append(f"{p}{level}")
         else:
@@ -363,11 +470,23 @@ def analyse(df, scenario):
 
 
 def read_dataset(path, scenario):
-    """Read one CSV written by ``study.py generate`` with the right dtypes."""
+    """Read one CSV written by ``study.py generate`` with the right dtypes.
+
+    Numeric columns become float, unordered categorical columns object
+    dtype (as in 0.2), ordered ones an ordered ``pd.Categorical`` with the
+    scenario's levels, so that the library's default for them is ``polr``.
+    """
     df = pd.read_csv(path, keep_default_na=False, na_values=[""])
     for col in scenario.columns:
-        if col in scenario.categorical:
-            df[col] = df[col].astype(object).where(df[col].notna(), np.nan)
-        else:
+        factor = scenario.categorical.get(col)
+        if factor is None:
             df[col] = df[col].astype(float)
+            continue
+        values = df[col].astype(object).where(df[col].notna(), np.nan)
+        if factor.ordered:
+            unknown = set(values.dropna()) - set(factor.levels)
+            if unknown:
+                raise ValueError(f"column {col!r} has values outside {factor.levels}: {sorted(map(str, unknown))}")
+            values = pd.Categorical(values, categories=list(factor.levels), ordered=True)
+        df[col] = values
     return df[list(scenario.columns)]
