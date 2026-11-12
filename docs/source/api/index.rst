@@ -25,10 +25,21 @@ packages: ``imputation`` (imputation and pooling) and ``plotting``
      - impute, fit and pool (:doc:`mice`)
    * - :func:`imputation.quickpred`
      - predictor matrix by R's ``quickpred`` rule (:doc:`design`)
+   * - :func:`imputation.make_method`
+     - the default method of each column, by R's ``make.method`` rule
+       (``imputation.utils.make_method``, :doc:`utilities`)
    * - ``imputation.PMM.pmm``, ``imputation.midas.midas``,
        ``imputation.cart.cart``, ``imputation.rf.rf``,
        ``imputation.sample.sample``
-     - the univariate imputation methods (:doc:`methods`)
+     - the donor methods (:doc:`methods`)
+   * - ``imputation.norm.norm``, ``norm_nob``, ``norm_boot``,
+       ``norm_predict``, ``imputation.mean.mean``,
+       ``imputation.logreg.logreg``, ``logreg_boot``,
+       ``imputation.polyreg.polyreg``, ``imputation.polr.polr``
+     - the model-based methods (:doc:`methods`)
+   * - ``imputation.fitting``
+     - the fits behind the categorical methods: R's ``glm.fit``,
+       ``optim``'s BFGS, ``nnet::multinom``, ``MASS::polr`` (:doc:`methods`)
    * - ``imputation.design``
      - design matrix, removal of dependent and collinear predictors
        (:doc:`design`)

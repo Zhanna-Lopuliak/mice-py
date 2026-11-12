@@ -111,7 +111,7 @@ label raises ``ValueError``.
 
 The arguments ``min_cor``, ``min_puc``, ``include``, ``exclude`` and
 ``correlation_method`` of ``impute`` are deprecated: they call ``quickpred``
-and will be removed in the next version.
+and will be removed in version 0.4.
 
 Guidelines
 ----------

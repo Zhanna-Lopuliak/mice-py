@@ -56,7 +56,7 @@ A change that affects imputations should keep the parity tests passing. If R
 behaves differently from what you expect, check R first: the fixtures are
 produced by the scripts in ``tests/reference/r`` (see
 ``tests/reference/README.md``). To regenerate them you need R with mice
-3.19.0, ranger, rpart and jsonlite:
+3.19.0, ranger, rpart, nnet, MASS and jsonlite:
 
 .. code-block:: bash
 

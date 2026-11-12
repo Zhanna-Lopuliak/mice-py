@@ -21,5 +21,5 @@ online.
 **Rubin's rules**
    How the results of the completed datasets are combined.
 
-The algorithms of the five imputation methods are described on
+The algorithms of the imputation methods are described on
 :doc:`../user_guide/imputation_methods`.

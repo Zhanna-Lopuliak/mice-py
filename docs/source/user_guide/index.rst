@@ -25,7 +25,8 @@ quick start: run that block first, then the blocks of a page in order.
    What ``impute()`` does, step by step, and its arguments.
 
 **Imputation methods**
-   pmm, midas, cart, rf and sample: algorithms and parameters.
+   The fourteen methods, the defaults by column type, algorithms and
+   parameters.
 
 **Predictor matrices**
    Which variables predict which, ``quickpred``, and the setup step.

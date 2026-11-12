@@ -441,7 +441,7 @@ class MICE:
             - `output_dir`: deprecated and ignored; passing it issues a
               ``DeprecationWarning``.
 
-            Deprecated, to be removed in the next version: `min_cor`,
+            Deprecated, to be removed in version 0.4: `min_cor`,
             `min_puc`, `include`, `exclude` and `correlation_method`. When
             `predictor_matrix` is None, they build the predictor matrix with
             ``imputation.quickpred(data, mincor=min_cor, minpuc=min_puc,
@@ -552,7 +552,7 @@ class MICE:
         if deprecated:
             warnings.warn(
                 f"The arguments {', '.join(deprecated)} of impute() are deprecated and will be removed "
-                "in the next version. Build the predictor matrix with imputation.quickpred(data, "
+                "in version 0.4. Build the predictor matrix with imputation.quickpred(data, "
                 "mincor=..., minpuc=..., include=..., exclude=..., method=...) and pass it as "
                 "predictor_matrix.",
                 DeprecationWarning,

@@ -31,7 +31,7 @@ This installs two packages, ``imputation`` and ``plotting``:
    import imputation
    import plotting
 
-   print(imputation.__version__)   # 0.2.0
+   print(imputation.__version__)   # 0.3.0
 
 Optional extras:
 

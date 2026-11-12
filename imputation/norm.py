@@ -142,7 +142,9 @@ def norm_nob(
 
     Parameters
     ----------
-    y, id_obs, x, id_mis, ls_meth, ridge, rng
+    y, id_obs, x, id_mis : array-like
+        As in :func:`norm`.
+    ls_meth, ridge, rng
         As in :func:`norm`.
 
     Returns
@@ -207,7 +209,9 @@ def norm_boot(
 
     Parameters
     ----------
-    y, id_obs, x, id_mis, ls_meth, ridge, rng
+    y, id_obs, x, id_mis : array-like
+        As in :func:`norm`.
+    ls_meth, ridge, rng
         As in :func:`norm`.
 
     Returns
@@ -277,7 +281,9 @@ def norm_predict(
 
     Parameters
     ----------
-    y, id_obs, x, id_mis, ls_meth, ridge
+    y, id_obs, x, id_mis : array-like
+        As in :func:`norm`.
+    ls_meth, ridge
         As in :func:`norm`.
     rng : np.random.Generator, optional
         Not used (no random numbers are drawn); accepted for the common

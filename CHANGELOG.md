@@ -6,6 +6,148 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.3.0] - Unreleased
+
+This release ports nine model-based methods of R `mice` 3.19.0 (`norm`,
+`norm.nob`, `norm.boot`, `norm.predict`, `mean`, `logreg`, `logreg.boot`,
+`polyreg`, `polr`) and, as R does, chooses the default method of a column by
+its type. **Results change** for every call of `impute()` without `method`
+on data with boolean, categorical or text columns, and for every call with a
+`method` dict that leaves out such a column: those columns are now imputed
+with `logreg`, `polyreg` or `polr` instead of `pmm`. Data with numeric
+columns only give the same results as in 0.2. The documentation page
+"Upgrading from 0.2 to 0.3" (`docs/source/upgrading.rst`) says what to
+change; "Differences from R mice" lists where the new methods deliberately
+differ from R.
+
+The new methods were checked against R mice 3.19.0 in the layers of 0.2.
+Exact parity: with R's random numbers replayed, each method gives R's
+imputations, and the fits behind them (`glm.fit`, the BFGS of `optim`,
+`nnet::multinom`, `MASS::polr`) are reproduced step for step, within the
+tolerances the tests enforce. Distribution parity: the imputations of many
+calls on fixed inputs, including three new ones (F5 to F7), and full chains
+with the default methods on a mixed frame (200 in R, 120 in Python).
+Simulation study: new cells for the new methods and the defaults, with two
+new scenarios (S7 with a binary, S8 with an ordered categorical variable);
+none of the 270 new paired comparisons is flagged (largest |z| 3.14, limit
+4.2), and the 30 cells of 0.2 were reproduced exactly. See "Validation
+against R mice" (`docs/source/r_mice/validation.rst`).
+
+### Changed
+
+- **Default method by column type**, as R's `make.method` with
+  `defaultMethod = c("pmm", "logreg", "polyreg", "polr")`: `pmm` for a
+  numeric column, `logreg` for a boolean column or one with two categories,
+  `polyreg` for an unordered categorical, object or string column with more
+  categories, `polr` for an ordered categorical column with more categories.
+  This applies to `impute(method=None)` and to the columns a `method` dict
+  leaves out. `method="pmm"` restores the behaviour of 0.2 for a call without
+  `method`, `default_method=("pmm",) * 4` for a call with a partial dict.
+- **More than 50 categories**: a text or categorical column with more than
+  50 distinct observed values gets `polyreg` (`polr` if it is ordered) by
+  default, and R limits these methods to 50 categories; `impute` now raises
+  `ValueError` for it (0.2 imputed it with `pmm`). The message names the
+  column and the remedy: a donor method for that column
+  (`method={"name": "pmm"}`), or leaving out a column that only identifies
+  the rows.
+- **Checks before the chains start**, after the setup step, with the column
+  named: `ValueError` for `norm`, `norm.nob`, `norm.boot`, `norm.predict` or
+  `mean` on a boolean, categorical or text column, for `logreg` or
+  `logreg.boot` on a column with more than two distinct observed values, and
+  for `logreg`, `logreg.boot`, `polyreg` or `polr` on more than 50 distinct
+  observed values. `logreg`, `logreg.boot`, `polyreg` or `polr` on a numeric
+  column is allowed with R's `UserWarning` ("Type mismatch for
+  variable(s): ...").
+- **Errors from inside a chain name the column**: a `ValueError` raised by
+  an imputer is re-raised as "Column 'c', method 'm' (iteration i,
+  imputation k): <message>".
+- **Method parameters of dotted methods**: the prefix of a keyword argument
+  is the method name with every dot replaced by an underscore
+  (`norm_boot_ridge=1e-4` for parameter `ridge` of `norm.boot`); a keyword
+  goes to the method with the longest matching prefix that has the
+  parameter.
+- **Dtypes**: a nullable integer column (`Int64`, ...) imputed by `norm`,
+  `norm.nob`, `norm.boot`, `norm.predict` or `mean` becomes `Float64`, as R
+  turns an integer column into double; float columns keep their dtype. The
+  categorical methods return labels of the column.
+- `MICE.logged_events` can hold rows written by an imputer: with
+  `polr_log_fallback=True` each fallback of `polr` to the multinomial model
+  logs "polr falls back to multinom" (`meth` "polr"), and `impute` warns
+  "Number of logged events" as for the setup step.
+- The log record (level WARNING) of `imputation.sampler.estimice` about
+  (nearly) collinear predictors says that "the results can be unstable" (it
+  said "the coefficient draws"): it is also written for `norm.nob`,
+  `norm.boot` and `norm.predict`, which draw no coefficients.
+- `imputation.validators.check_method(method, columns, defaults=None)` takes
+  the default of each column for a partial dict.
+
+### Added
+
+- `imputation.norm.norm(y, id_obs, x, id_mis=None, ls_meth="qr",
+  ridge=1e-5, rng=None)` (R's `norm`, Bayesian linear regression), and with
+  the same signature `norm_nob` (`norm.nob`, without parameter
+  uncertainty), `norm_boot` (`norm.boot`, on a bootstrap sample) and
+  `norm_predict` (`norm.predict`, the predicted value). Through `impute`:
+  `norm_ls_meth`, `norm_ridge`, `norm_nob_ls_meth`, `norm_nob_ridge`,
+  `norm_boot_ls_meth`, `norm_boot_ridge`, `norm_predict_ls_meth`,
+  `norm_predict_ridge`.
+- `imputation.mean.mean(y, id_obs, x=None, id_mis=None, rng=None)` (R's
+  `mean`); no parameters.
+- `imputation.logreg.logreg(y, id_obs, x, id_mis=None, rng=None)` (R's
+  `logreg`, Bayesian logistic regression on augmented data) and
+  `imputation.logreg.logreg_boot(y, id_obs, x, id_mis=None, rng=None)`
+  (`logreg.boot`, on a bootstrap sample); no parameters. Also
+  `imputation.logreg.augment(y, id_obs, x, id_mis, max_categories=50)` (R's
+  `mice:::augment`, White, Daniel and Royston 2010) and
+  `imputation.logreg.target_categories(y, keep_unused=False)` (the order of
+  the categories).
+- `imputation.polyreg.polyreg(y, id_obs, x, id_mis=None, maxit=100,
+  max_weights=1500, rng=None)` (R's `polyreg`, multinomial logistic
+  regression as `nnet::multinom` fits it). Through `impute`:
+  `polyreg_maxit` (R's `nnet.maxit`), `polyreg_max_weights` (R's
+  `nnet.MaxNWts`).
+- `imputation.polr.polr(y, id_obs, x, id_mis=None, maxit=100,
+  max_weights=1500, log_fallback=False, rng=None, log_event=None)` (R's
+  `polr`, proportional-odds logistic regression as `MASS::polr` fits it,
+  with R's fallback to `nnet::multinom`). Through `impute`: `polr_maxit`,
+  `polr_max_weights`, `polr_log_fallback` (R's `polr.to.loggedEvents`).
+- `imputation.make_method(data, default_method=("pmm", "logreg",
+  "polyreg", "polr"))`, R's `make.method`: the default method of each
+  column.
+- `MICE.impute(default_method=("pmm", "logreg", "polyreg", "polr"))`, R's
+  `defaultMethod`; `imputation.constants.DEFAULT_METHODS` and
+  `ImputationMethod.get_default_methods()`.
+- `imputation.validators.check_default_method(default_method)` and
+  `imputation.validators.check_method_types(data, method)`.
+- `imputation.fitting`, the building blocks of the categorical methods:
+  `logit_fit(x, y, weights=None, maxit=25, epsilon=1e-8)` (R's `glm.fit`
+  with the logit link), `vmmin(fn, gr, par, maxit=100, abstol=-inf,
+  reltol=sqrt(machine epsilon))` (the BFGS minimiser of R's `optim`),
+  `multinom_fit(x, y, weights=None, n_classes=None, maxit=100,
+  max_weights=1500, abstol=1e-4, reltol=1e-8)` (`nnet::multinom`),
+  `polr_fit(x, y, weights=None, n_levels=None, maxit=100)` (`MASS::polr`)
+  and `PolrError`.
+- An imputer whose signature has a `log_event` parameter receives from
+  `impute` a callable that records one row of `MICE.logged_events`.
+- Tests: parity tests and R fixtures for every new method
+  (`tests/test_parity`, `tests/reference`), with defects put back on purpose
+  that the tests must catch (`test_l1_mutants.py`, `test_l2_mutants.py`);
+  invariant tests of the new methods and the defaults
+  (`tests/test_properties`). Simulation study: a table of cells (method ×
+  scenario) instead of a full grid, the scenarios S7 and S8, and an identity
+  rule for the deterministic methods (`simulations/`).
+- Documentation: "Upgrading from 0.2 to 0.3", a section on the model-based
+  methods in "Differences from R mice", the new methods in "Imputation
+  methods" and in the API reference.
+
+### Deprecated
+
+- `impute(min_cor=, min_puc=, include=, exclude=, correlation_method=)`,
+  deprecated in 0.2 "for removal in the next version", stay in 0.3 and will
+  be removed in version 0.4. `impute(output_dir=)` is still accepted and
+  ignored.
+
+
 ## [0.2.0] - Unreleased
 
 This release aligns mice-py with R `mice` 3.19.0 and adds a validation

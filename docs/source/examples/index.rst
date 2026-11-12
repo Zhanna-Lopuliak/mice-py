@@ -4,7 +4,8 @@ Examples
 Jupyter notebooks in the `examples/ folder
 <https://github.com/Zhanna-Lopuliak/mice-py/tree/main/examples>`_ of the
 repository. They use the ``nhanes`` data of R mice (25 rows, 4 columns), in
-``examples/data/nhanes.csv``, and run from top to bottom with mice-py 0.2.
+``examples/data/nhanes.csv``, and run from top to bottom with mice-py 0.3.
+The data are numeric, so the default method is pmm for every column.
 
 .. list-table::
    :header-rows: 1

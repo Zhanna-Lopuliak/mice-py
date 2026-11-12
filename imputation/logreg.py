@@ -221,7 +221,9 @@ def logreg_boot(
 
     Parameters
     ----------
-    y, id_obs, x, id_mis, rng
+    y, id_obs, x, id_mis : array-like
+        As in :func:`logreg`.
+    rng : np.random.Generator, optional
         As in :func:`logreg`.
 
     Returns

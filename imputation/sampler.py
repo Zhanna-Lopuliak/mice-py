@@ -17,8 +17,8 @@ ALIAS_TOL = 1e-7
 
 _COLLINEAR_MESSAGE = (
     "estimice: the predictors are (nearly) multi-collinear; a ridge penalty was "
-    "added to invert the cross-product matrix, so the coefficient draws can be "
-    "unstable. Does the data contain duplicated columns, linear transformations "
+    "added to invert the cross-product matrix, so the results can be unstable. "
+    "Does the data contain duplicated columns, linear transformations "
     "of other columns, or constant columns?"
 )
 

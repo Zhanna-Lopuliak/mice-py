@@ -207,14 +207,17 @@ z-scores need about 100 or more replications to mean anything.
 
 ## Results
 
-`results/` holds the run for mice-py 0.2.0 (the five donor methods on S1-S6)
-and `results/baseline/` the run on the code before the fixes (0.1.0 plus the
-seed fix, commit `fc1d3e8`); `BASELINE.md` describes that state. On 0.2.0,
-18 of 774 paired comparisons are flagged, all for `rf` in S5, where
-scikit-learn and ranger grow different trees with categorical predictors; on
-the baseline it was 184 of 738. The documentation page "Validation against R
-mice" (`docs/source/r_mice/validation.rst`) has the tables and the cause. The
-cells added in 0.3 are not in `results/` until the next full run.
+`results/` holds the run for mice-py 0.3.0 (all 41 cells of S1-S8) and
+`results/baseline/` the run on the code before the fixes (0.1.0 plus the
+seed fix, commit `fc1d3e8`); `BASELINE.md` describes that state. On 0.3.0,
+18 of 1044 paired comparisons are flagged, all for `rf` in S5, where
+scikit-learn and ranger grow different trees with categorical predictors;
+none of the 270 comparisons of the cells added in 0.3 is flagged (largest
+|z| 3.14), and both identity cells pass. The 30 cells of 0.2.0 reproduce
+the 0.2.0 run exactly (all 1248 rows of its `summary.csv`, which had 18 of
+774 comparisons flagged); on the baseline it was 184 of 738. The
+documentation page "Validation against R mice"
+(`docs/source/r_mice/validation.rst`) has the tables and the cause.
 
 midastouch cannot run on S5 in either engine: R's `midastouch` imputes
 level codes, which R turns into `NA` ("invalid factor level"), and mice-py's

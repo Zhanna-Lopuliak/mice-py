@@ -42,7 +42,7 @@ Impute, analyze, pool
    from imputation import MICE
 
    mice = MICE(df)
-   datasets = mice.impute(n_imputations=5, seed=1)   # pmm, 5 iterations, as R's mice()
+   datasets = mice.impute(n_imputations=5, seed=1)   # methods by column type, 5 iterations: as R's mice()
 
    mice.fit("chl ~ age + bmi + sex")                 # one OLS fit per completed dataset
    result = mice.pool()                              # Rubin's rules, Barnard-Rubin df
@@ -65,14 +65,17 @@ What ``impute`` decided
 
 .. code-block:: python
 
-   print(mice.method)            # {'age': '', 'sex': 'pmm', 'bmi': 'pmm', 'chl': 'pmm'}
+   print(mice.method)            # {'age': '', 'sex': 'logreg', 'bmi': 'pmm', 'chl': 'pmm'}
    print(mice.visit_sequence)    # ['sex', 'bmi', 'chl']
    print(mice.predictor_matrix)  # rows: targets, columns: predictors
    print(mice.logged_events)     # changes the setup step made; empty here
 
-A complete column gets the method ``""`` and is not imputed. If the setup
-step removes a constant or collinear variable, ``impute`` warns and the
-change appears in ``mice.logged_events``; see :doc:`user_guide/mice_overview`.
+As in R, each incomplete column gets the method of its type: ``pmm`` for
+the numeric ``bmi`` and ``chl``, ``logreg`` (logistic regression) for
+``sex``, which has two values. A complete column gets the method ``""`` and
+is not imputed. If the setup step removes a constant or collinear variable,
+``impute`` warns and the change appears in ``mice.logged_events``; see
+:doc:`user_guide/mice_overview`.
 
 Check the imputations
 ---------------------
@@ -94,10 +97,10 @@ notebook, leave out ``save_path`` to show the figures. See
 Next steps
 ----------
 
-- :doc:`user_guide/imputation_methods`: pmm, midas, cart, rf and sample, and
-  their parameters.
+- :doc:`user_guide/imputation_methods`: the fourteen methods, the defaults
+  by column type, and the parameters.
 - :doc:`user_guide/predictor_matrices`: choosing the predictors.
 - :doc:`user_guide/pooling_analysis`: other models, the pooled table, pooling
   without ``MICE``.
 - :doc:`r_mice/differences`: for users of R mice.
-- :doc:`upgrading`: for users of mice-py 0.1.
+- :doc:`upgrading`: for users of mice-py 0.1 and 0.2.

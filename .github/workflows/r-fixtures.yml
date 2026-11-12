@@ -23,17 +23,21 @@ jobs:
           r-version: release
           use-public-rspm: true
 
-      - name: Install mice 3.19.0, ranger, rpart, jsonlite
+      - name: Install mice 3.19.0, ranger, rpart, nnet, MASS, jsonlite
         shell: Rscript {0}
         run: |
           # current mice brings its dependencies as binaries; then mice itself
-          # is replaced by 3.19.0, built from the CRAN source archive
-          install.packages(c("remotes", "ranger", "rpart", "jsonlite", "mice"))
+          # is replaced by 3.19.0, built from the CRAN source archive. nnet
+          # and MASS (polyreg, polr) usually come with R; they are installed
+          # explicitly so that the job does not depend on the R build, and
+          # their versions are printed (the fixtures record them too)
+          install.packages(c("remotes", "ranger", "rpart", "nnet", "MASS", "jsonlite", "mice"))
           remotes::install_version(
             "mice", version = "3.19.0", upgrade = "never",
             repos = "https://cloud.r-project.org"
           )
           stopifnot(as.character(packageVersion("mice")) == "3.19.0")
+          for (pkg in c("nnet", "MASS")) cat(pkg, as.character(packageVersion(pkg)), "\n")
           print(sessionInfo())
 
       - name: Regenerate the fixtures
