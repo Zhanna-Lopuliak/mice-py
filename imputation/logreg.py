@@ -498,8 +498,8 @@ def _two_categories(y: Any, id_obs: np.ndarray, method: str) -> Categories:
         more = ", ..." if len(categories.levels) > 5 else ""
         raise ValueError(
             f"{method} imputes a target with two categories, but y has {len(categories.levels)} "
-            f"({shown}{more}). Use polyreg for more than two categories, or a donor method "
-            "(pmm, cart, rf, sample)."
+            f"({shown}{more}). Use polyreg for more than two categories (or polr for ordered ones), or a "
+            "donor method (pmm, cart, rf, sample)."
         )
     if np.any(categories.codes[id_obs] < 0):
         raise ValueError(f"{method}: y is missing in entries that id_obs marks as observed.")

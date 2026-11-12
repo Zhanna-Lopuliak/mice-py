@@ -488,9 +488,10 @@ def test_complete_rows_in_predictor_matrix_do_not_warn():
 
 
 def test_defaults_follow_r():
-    """Without arguments: pmm for every incomplete column (R uses pmm for
-    numeric columns; the port has no logreg / polyreg, so categorical columns
-    get pmm too), five iterations, data order and the full predictor matrix."""
+    """Without arguments: the method of each column's type as R's make.method
+    (pmm for numeric columns, polyreg for the text column and the unordered
+    Categorical with three categories), five iterations, data order and the
+    full predictor matrix."""
     from imputation import MICE
 
     from ._helpers import mixed_frame
@@ -500,7 +501,7 @@ def test_defaults_follow_r():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
         out = mice.impute(n_imputations=1, seed=1)
-    assert mice.method == {"a": "pmm", "b": "pmm", "g": "pmm", "h": "pmm", "d": ""}
+    assert mice.method == {"a": "pmm", "b": "pmm", "g": "polyreg", "h": "polyreg", "d": ""}
     assert mice.maxit == 5
     assert mice.chain_mean["a"].shape == (5, 1)
     assert mice.visit_sequence == ["a", "b", "g", "h"]
@@ -508,12 +509,16 @@ def test_defaults_follow_r():
     assert not out[0].isna().any().any()
 
 
-def test_method_dict_fills_unlisted_columns_with_pmm():
-    from ._helpers import numeric_frame
+def test_method_dict_fills_unlisted_columns_with_their_default():
+    """Numeric columns get pmm; other columns the default of their type."""
+    from ._helpers import numeric_frame, typed_frame
 
     df = numeric_frame(n=40)
     mice, _ = impute(df, {"a": "sample"}, n_imputations=1, maxit=1)
     assert mice.method == {"a": "sample", "b": "pmm", "c": "pmm", "d": "", "k": ""}
+    df = typed_frame()
+    mice, _ = impute(df, {"num": "norm", "three": "pmm"}, n_imputations=1, maxit=1)
+    assert mice.method == {"num": "norm", "flag": "logreg", "two": "logreg", "three": "pmm", "grade": "polr", "x": ""}
 
 
 def _visit_frame():

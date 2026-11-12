@@ -2,6 +2,8 @@
 Tests for the core MICE functionality.
 """
 
+import re
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -110,10 +112,13 @@ class TestMICEMethods:
     @pytest.mark.parametrize("method", ["logreg", "logreg.boot", "polyreg", "polr"])
     def test_methods_for_two_categories(self, sample_data_missing, method):
         """smoker holds 0 and 1: logistic and multinomial regression impute 0 or 1
-        (polr through its fallback to the multinomial model)."""
+        (polr through its fallback to the multinomial model), with R's warning
+        about a categorical method on a numeric column."""
         mice = MICE(sample_data_missing)
 
-        mice.impute(n_imputations=2, maxit=2, method={"smoker": method}, seed=1)
+        mismatch = rf"Type mismatch for variable\(s\): smoker\nImputation method {re.escape(method)} is for categorical"
+        with pytest.warns(UserWarning, match=mismatch):
+            mice.impute(n_imputations=2, maxit=2, method={"smoker": method}, seed=1)
         assert mice.method["smoker"] == method
         missing = sample_data_missing["smoker"].isna()
         for dataset in mice.imputed_datasets:

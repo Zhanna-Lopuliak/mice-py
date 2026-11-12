@@ -84,7 +84,8 @@ Written by `write_fixture(name, payload)` in `r/_common.R` and read by
 | `l1_quantify` | `mice:::quantify(y, ry, x)` | `imputation.PMM.quantify` (equal up to sign) |
 | `l1_pmm_one_donor` | `mice.impute.pmm(y, ry, x, donors = 1, matchtype)` with captured draws | `imputation.PMM.pmm` |
 | `l1_matchindex` | donors reached by 2000 calls of `matchindex(d, t, k)` | `imputation.PMM.matchindex` |
-| `l1_setup` | `mice(data, maxit = 0)`: method, predictorMatrix, visitSequence, loggedEvents | `MICE.impute`: `.method`, `.predictor_matrix`, `.visit_sequence` |
+| `l1_setup` | `mice(data, maxit = 0)`: method, predictorMatrix, visitSequence, loggedEvents | `MICE.impute`: `.method`, `.predictor_matrix`, `.visit_sequence`; `imputation.make_method` |
+| `l1_make_method` | `make.method(data)` and `make.method(data, defaultMethod = ...)` on one column of each type `assign.method` tells apart (numeric, integer 0/1, logical, factors with 1, 2 and 3 levels, a factor with 3 declared and 2 observed levels, ordered factors with 2 and 4 levels, character, complete), with `class()` of each column | `imputation.make_method` |
 | `l1_design` | `mice:::obtain.design`, `mice:::remove.lindep`, `mice:::find.collinear` | `imputation.design` |
 | `l1_quickpred` | `quickpred(data, ...)` on nhanes and boys | `imputation.quickpred` |
 | `l1_md_pattern` | `md.pattern(data, plot = FALSE)` | `plotting.utils.md_pattern_like` |
@@ -100,6 +101,11 @@ Written by `write_fixture(name, payload)` in `r/_common.R` and read by
 Behaviours of R mice 3.19.0 that the fixtures pin down and that are easy to
 get wrong:
 
+- `make.method()` counts the declared levels of a factor (`nlevels`), unused
+  ones included, and gives a character column the first default method
+  whatever its values (`l1_make_method`); `mice()` then finds that column
+  constant and does not impute it. mice-py treats text as an unordered
+  factor of its distinct values.
 - `visitSequence` from `mice()` can list variables that are never imputed:
   complete variables for the default order and for `"monotone"` /
   `"revmonotone"`, and variables whose method `mice.edit.setup()` set to `""`
@@ -235,9 +241,14 @@ for the missing rows that differ by at least 0.15 (they differ by up to
 | `l2_polyreg` | category | F3 | 20,000 |
 | `l2_polr` | category | F7 | 20,000 |
 
-`l2_chain` (200 full `mice()` chains with pmm) and `l3_mini_s4` (scenario S4
-of the simulation study with pmm, midastouch and norm, 20,000 replications)
-have their own formats, described at the top of their scripts.
+`l2_chain` (200 full `mice()` chains with pmm), `l2_chain_default` (200 full
+`mice()` chains with the default methods pmm, logreg, polyreg and polr on a
+mixed frame of 100 rows: per statistic of the last iteration, the mean,
+variance and kurtosis over the chains of the mean and variance of the
+imputed numeric values and of the share of each level but the first among
+the imputed labels) and `l3_mini_s4` (scenario S4 of the simulation study
+with pmm, midastouch and norm, 20,000 replications) have their own formats,
+described at the top of their scripts.
 
 ## Licence
 

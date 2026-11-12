@@ -791,10 +791,13 @@ def test_no_observed_target_and_nothing_to_impute_returns_empty(method):
 @pytest.mark.parametrize("method", ["pmm", "midas", *TREE_METHODS, "norm", "logreg"])
 def test_tree_method_without_usable_observed_row_through_impute(method):
     """``x`` has method "" and is missing wherever ``y`` is observed, so no row
-    with an observed ``y`` has a complete design."""
+    with an observed ``y`` has a complete design. (For logreg ``y`` holds two
+    labels: on a numeric column with more than two values it would be refused
+    before the chains start.)"""
     n = 20
     i = np.arange(n, dtype=float)
-    df = pd.DataFrame({"y": np.sin(i), "x": np.cos(i), "z": np.sin(2 * i)})
+    y = np.where(np.sin(i) > 0, "a", "b").astype(object) if method == "logreg" else np.sin(i)
+    df = pd.DataFrame({"y": y, "x": np.cos(i), "z": np.sin(2 * i)})
     df.loc[: n // 2 - 1, "y"] = np.nan
     df.loc[n // 2 :, "x"] = np.nan
     pm = full_predictor_matrix(df)
@@ -950,8 +953,9 @@ def test_numeric_model_method_rejects_non_numeric_target(method, kind, label):
 
 
 def test_norm_rejects_categorical_target_through_impute():
+    """Before the chains start, with the column named."""
     df = _categorical_target_frame()
-    with pytest.raises(ValueError, match="Target y must be numeric for norm"):
+    with pytest.raises(ValueError, match=r"Column 'g' is categorical or text .* norm imputes numeric columns only"):
         impute(df, {"g": "norm"}, n_imputations=1, maxit=1)
 
 
@@ -1060,11 +1064,14 @@ def test_two_category_column_types_keep_their_dtype(method, kind):
 @pytest.mark.parametrize("method", CATEGORICAL_METHODS)
 def test_numeric_zero_one_column(method):
     """R's logreg takes a numeric 0/1 target and imputes 0 and 1; polyreg
-    imputes the two values too (R's returns them as text)."""
+    imputes the two values too (R's returns them as text). As R, impute warns
+    about a categorical method on a numeric column."""
     df = regression_frame()
     df["z01"] = (df["x1"] + np.random.default_rng(2).normal(size=len(df)) > 0).astype(float)
     df.loc[[3, 8, 14, 27, 33], "z01"] = np.nan
-    mice, out = _check(df, {"z01": method})
+    mismatch = rf"Type mismatch for variable\(s\): z01\nImputation method {re.escape(method)} is for categorical"
+    with pytest.warns(UserWarning, match=mismatch):
+        mice, out = _check(df, {"z01": method})
     assert mice.method["z01"] == method
     for completed in out:
         assert completed["z01"].dtype == np.float64

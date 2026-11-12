@@ -10,15 +10,20 @@ the effective order: R's sequence restricted to variables with a non-empty
 method. The tests compare the Python sequence restricted to the same
 variables, and check separately that Python visits no complete variable.
 
-The port has no logreg / polyreg / polr, so methods are compared for
-numeric columns only.
+Methods are compared for every column: ``MICE.impute`` without ``method``
+must give R's ``imp$method`` (the default of each column's type, then the
+setup step), and ``imputation.make_method`` R's ``make.method`` where the
+setup step changed nothing (nhanes2: logreg for the factor ``hyp``; boys:
+polr for the ordered ``gen`` and ``phb``, polyreg for ``reg``).
 """
+
+import warnings
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from imputation import MICE
+from imputation import MICE, make_method
 
 from .._logged_events import impute_checking_log_warning
 from ._helpers import as_array, as_bool, decode_frame, load_fixture, str_list
@@ -31,8 +36,10 @@ VISITS = ["roman", "arabic", "monotone", "revmonotone"]
 
 
 def _impute(case, **kwargs):
+    """One imputation, one iteration; seeded, so that the chain is the same in every run."""
     df = decode_frame(case["data"])
     mice = MICE(df)
+    kwargs.setdefault("seed", 20261112)
     impute_checking_log_warning(mice, n_imputations=1, maxit=1, **kwargs)
     return df, mice
 
@@ -51,11 +58,46 @@ def _r_matrix(payload):
 
 
 @pytest.mark.parametrize("case", SETUP["cases"], ids=[c["name"] for c in SETUP["cases"]])
-def test_default_method_is_pmm_for_numeric_columns(case):
-    df, mice = _impute(case)
-    numeric = [col for col, meth in case["method"].items() if meth == "pmm" and pd.api.types.is_numeric_dtype(df[col])]
-    assert numeric, "fixture has no numeric incomplete column"
-    assert {col: mice.method[col] for col in numeric} == {col: "pmm" for col in numeric}
+def test_default_methods_match_r(case):
+    """Every column, after the setup step (which removes the method of a
+    constant or collinear column, as in R)."""
+    _, mice = _impute(case)
+    assert {str(col): meth for col, meth in mice.method.items()} == case["method"]
+
+
+# R's imp$method is make.method's result where the setup step logged nothing
+UNEDITED = [c for c in SETUP["cases"] if not c["logged_events"]]
+
+
+@pytest.mark.parametrize("case", UNEDITED, ids=[c["name"] for c in UNEDITED])
+def test_make_method_matches_r(case):
+    df = decode_frame(case["data"])
+    assert {str(col): meth for col, meth in make_method(df).items()} == case["method"]
+
+
+def test_cases_cover_every_default_method():
+    methods = {meth for case in UNEDITED for meth in case["method"].values()}
+    assert methods == {"", "pmm", "logreg", "polyreg", "polr"}
+
+
+def test_boys_is_imputed_with_the_default_methods():
+    """Smoke run on R's boys data: polr for gen and phb, polyreg for reg.
+
+    No numerical warning may reach the user: polr's line search tries steps
+    at which a cut point overflows, and rejects them silently, as R does.
+    """
+    case = next(c for c in SETUP["cases"] if c["name"] == "boys")
+    df = decode_frame(case["data"])
+    mice = MICE(df)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        out = impute_checking_log_warning(mice, n_imputations=1, maxit=2, seed=2)
+    assert {str(col): meth for col, meth in mice.method.items()} == case["method"]
+    completed = out[0]
+    assert not completed.isna().any().any()
+    for col in ("gen", "phb", "reg"):
+        assert completed[col].dtype == df[col].dtype  # same categories, same order
+        assert set(completed[col]) <= set(df[col].cat.categories)
 
 
 # ---------------------------------------------------------------------------

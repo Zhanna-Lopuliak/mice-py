@@ -16,7 +16,7 @@ import statsmodels.formula.api as smf
 
 from .constants import (
     DEFAULT_INITIAL_METHOD,
-    DEFAULT_METHOD,
+    DEFAULT_METHODS,
     DEFAULT_VISIT_SEQUENCE,
     ImputationMethod,
     InitialMethod,
@@ -25,11 +25,13 @@ from .constants import (
 from .design import _as_numeric, _column_kind, _remove_lindep, find_collinear, obtain_design, quickpred
 from .mice_result import MICEresult
 from .pooling import _residual_df, pool_estimates
-from .utils import get_imputer_func, get_imputer_params, method_prefix, split_method_param
+from .utils import get_imputer_func, get_imputer_params, make_method, method_prefix, split_method_param
 from .validators import (
+    check_default_method,
     check_initial_method,
     check_maxit,
     check_method,
+    check_method_types,
     check_n_imputations,
     check_visit_sequence,
     validate_columns,
@@ -191,12 +193,21 @@ class MICE:
     analyse the completed datasets, call `fit` with a model formula and
     combine the fits with `pool` (Rubin's rules, as R's ``pool``).
 
+    By default, as in R, each incomplete column is imputed with the method
+    of its type (`imputation.make_method`): predictive mean matching
+    (``"pmm"``) for numeric columns, logistic regression (``"logreg"``)
+    for boolean columns and columns with two categories, multinomial
+    logistic regression (``"polyreg"``) for unordered categorical and text
+    columns with more categories, and proportional-odds regression
+    (``"polr"``) for ordered categorical columns with more categories.
+
     Parameters
     ----------
     data : pd.DataFrame
         The incomplete data. Anything else is converted with
         ``pd.DataFrame(data)``. Columns may be numeric, boolean, categorical,
-        object or string.
+        object or string; object and string columns are treated as
+        unordered categorical.
 
     Attributes
     ----------
@@ -210,7 +221,9 @@ class MICE:
         The completed datasets of the last call of `impute`.
     method : dict of str to str
         The imputation method of each column used by the last `impute`
-        (``""`` for a column that is not imputed).
+        (``""`` for a column that is not imputed), as R's ``imp$method``:
+        after the setup step, which removes the method of a constant or
+        collinear column.
     predictor_matrix : pd.DataFrame
         The predictor matrix used by the last `impute`, after the setup step
         (square, in data order; rows are targets, columns predictors).
@@ -309,6 +322,7 @@ class MICE:
         method: str | dict[str, str] | None = None,
         visit_sequence: str | list[str] = DEFAULT_VISIT_SEQUENCE,
         seed: int | Sequence[int] | None = None,
+        default_method: Sequence[str] = DEFAULT_METHODS,
         **kwargs: Any,
     ) -> list[pd.DataFrame]:
         """
@@ -365,16 +379,22 @@ class MICE:
             The argument is:
 
             - str: the same method for all columns;
-            - dict: the method of each listed column; columns not in it get
-              ``"pmm"``;
-            - None: ``"pmm"`` for every incomplete column, whatever its type
-              (R uses ``pmm`` for numeric columns and logreg, polyreg or polr
-              for factors, which this package does not have).
+            - dict: the method of each listed column; the columns not in it
+              get the default method of their type (see None);
+            - None: the default method of each column's type, as R's
+              ``make.method`` chooses it (`imputation.make_method`):
+              ``"pmm"`` for a numeric column, ``"logreg"`` for a boolean
+              column or one with two categories, ``"polyreg"`` for an
+              unordered categorical, object or string column with more
+              categories, ``"polr"`` for an ordered categorical column with
+              more categories. `default_method` changes these four.
 
             As in R, a complete column always gets ``""``. A column with
             method ``""`` keeps its missing values; where it is used as a
             predictor, the rows in which it is missing are left out of the
-            imputation model and are not imputed.
+            imputation model and are not imputed. Before the chains start,
+            each method is checked against the type of its column (see
+            Raises and Warns).
         visit_sequence : str or list of str, default="roman"
             Order in which the columns are visited in each iteration. Only
             incomplete columns that are imputed are visited.
@@ -393,6 +413,16 @@ class MICE:
             Chain ``k`` always receives the same stream, whatever
             ``n_imputations`` is. The same seed gives identical results;
             ``None`` draws fresh entropy from the operating system.
+        default_method : list or tuple of str, default ("pmm", "logreg", "polyreg", "polr")
+            The default methods by column type, R's ``defaultMethod``: of
+            numeric columns, of boolean columns and columns with two
+            categories, of unordered categorical (and text) columns with
+            more than two categories, and of ordered categorical columns
+            with more than two categories. They apply where `method` is
+            None, and to the columns a `method` dict leaves out. Version 0.2
+            used ``"pmm"`` for every column; ``method="pmm"`` restores that
+            for a call without `method`, ``default_method=("pmm",) * 4`` for
+            a call with a partial `method` dict.
 
         **kwargs
             Parameters of the imputation methods, as
@@ -429,14 +459,24 @@ class MICE:
         ------
         ValueError
             For an invalid argument (number of imputations or iterations,
-            method, initial method, visit sequence, predictor matrix), or when
-            a method cannot impute a column (for example ``"midas"`` or
-            ``"norm"`` on a categorical column, ``"logreg"`` on a column with
-            more than two categories, ``"polyreg"`` on a column with more
-            than 50 categories or a model with more weights than
+            method, default method, initial method, visit sequence,
+            predictor matrix). Before the chains start, after the setup
+            step, for a method that cannot impute the type of its column,
+            with the column named (`imputation.validators.check_method_types`):
+            ``"norm"``, ``"norm.nob"``, ``"norm.boot"``, ``"norm.predict"``
+            or ``"mean"`` on a boolean, categorical or text column;
+            ``"logreg"`` or ``"logreg.boot"`` on a column with more than two
+            distinct observed values; ``"logreg"``, ``"logreg.boot"``,
+            ``"polyreg"`` or ``"polr"`` on a column with more than 50
+            distinct observed values (R's limit; for example a text column
+            of names, which gets ``"polyreg"`` by default). Inside a chain,
+            when an imputer cannot impute a column (for example ``"midas"``
+            on a categorical column, a model with more weights than
             ``polyreg_max_weights``, ``"norm.nob"`` with too few observed
-            values for its predictors, or a column without observed value in
-            the rows usable for its model).
+            values for its predictors, or a column without observed value
+            in the rows usable for its model); the message starts with the
+            column, the method, the iteration and the imputation, followed
+            by the imputer's message.
         TypeError
             For an unknown keyword argument.
 
@@ -445,7 +485,10 @@ class MICE:
         UserWarning
             When the imputation model was changed (see Notes), with the
             number of logged events, as R's "Number of logged events"; also
-            for more than 100 imputations or 50 iterations.
+            for more than 100 imputations or 50 iterations, and for
+            ``"logreg"``, ``"logreg.boot"``, ``"polyreg"`` or ``"polr"`` on a
+            numeric column, with R's text "Type mismatch for variable(s):
+            <column>\\nImputation method <method> is for categorical data."
         DeprecationWarning
             For the deprecated keyword arguments listed above.
 
@@ -477,7 +520,7 @@ class MICE:
         logger.info("Starting imputation process")
         logger.debug(
             f"Parameters: n_imputations={n_imputations}, maxit={maxit}, "
-            f"initial={initial}, method={method}, visit_sequence={visit_sequence}"
+            f"initial={initial}, method={method}, visit_sequence={visit_sequence}, default_method={default_method}"
         )
 
         start_time = time.time()
@@ -485,6 +528,7 @@ class MICE:
         check_n_imputations(n_imputations)
         check_maxit(maxit)
         check_initial_method(initial)
+        default_method = check_default_method(default_method)
         n_imputations = int(n_imputations)
         maxit = int(maxit)
 
@@ -529,10 +573,14 @@ class MICE:
         columns = list(self.data.columns)
         predictor_matrix = predictor_matrix.reindex(index=columns, columns=columns, fill_value=0).astype(int)
 
-        if method is not None:
-            self.method = check_method(method, list(self.data.columns))
+        # The default method of each column's type (R's make.method), for
+        # method=None and for the columns a method dict leaves out
+        if method is None:
+            self.method = make_method(self.data, default_method)
+        elif isinstance(method, dict):
+            self.method = check_method(method, columns, defaults=make_method(self.data, default_method))
         else:
-            self.method = check_method(DEFAULT_METHOD, list(self.data.columns))
+            self.method = check_method(method, columns)
         # As in R, a complete column has no imputation method
         for col in columns:
             if not self.id_mis[col].any():
@@ -565,6 +613,8 @@ class MICE:
         # Edit the model before the chains start, as R's mice.edit.setup
         self._log = []
         self.predictor_matrix = self._edit_setup(predictor_matrix)
+        # Each method must suit the type of the column it imputes (R's check.method)
+        check_method_types(self.data, {col: meth for col, meth in self.method.items() if meth != ""})
 
         self._set_visit_sequence(visit_sequence, np.random.default_rng(visit_stream))
         logger.debug(f"Visit sequence set to: {self.visit_sequence}")
@@ -1130,7 +1180,14 @@ class MICE:
                 method_params["log_event"] = functools.partial(
                     self._log_event, meth=method_name, it=iter_idx + 1, im=chain_idx + 1, dep=col
                 )
-            imputed_values = imputer_func(y=y, id_obs=id_obs, id_mis=id_mis, x=x_values, **method_params)
+            try:
+                imputed_values = imputer_func(y=y, id_obs=id_obs, id_mis=id_mis, x=x_values, **method_params)
+            except ValueError as err:
+                # The imputer does not know which column it imputes
+                raise ValueError(
+                    f"Column {col!r}, method {method_name!r} (iteration {iter_idx + 1}, imputation {chain_idx + 1}): "
+                    f"{err}"
+                ) from err
             logger.debug(f"Successfully imputed {len(imputed_values)} values for column '{col}'")
 
             # Assign imputed values; new floats take the float dtype of the column

@@ -6,6 +6,7 @@ import logging
 import numbers
 import re
 import warnings
+from collections.abc import Hashable, Mapping
 from typing import Any
 
 import numpy as np
@@ -13,6 +14,7 @@ import pandas as pd
 
 from .constants import (
     DEFAULT_METHOD,
+    DEFAULT_METHODS,
     SUPPORTED_INITIAL_METHODS,
     SUPPORTED_METHODS,
     SUPPORTED_VISIT_SEQUENCES,
@@ -20,8 +22,29 @@ from .constants import (
     InitialMethod,
     VisitSequence,
 )
+from .design import _column_kind
+from .logreg import MAX_CATEGORIES, _plain
+from .norm import _KIND_NAMES
 
 logger = logging.getLogger(__name__)
+
+# Methods that impute numbers: the column must be numeric
+_NUMERIC_METHODS = frozenset(
+    method.value
+    for method in (
+        ImputationMethod.NORM,
+        ImputationMethod.NORM_NOB,
+        ImputationMethod.NORM_BOOT,
+        ImputationMethod.NORM_PREDICT,
+        ImputationMethod.MEAN,
+    )
+)
+# Methods for a column with two categories
+_TWO_CATEGORY_METHODS = frozenset((ImputationMethod.LOGREG.value, ImputationMethod.LOGREG_BOOT.value))
+# Methods for categorical columns: they model at most MAX_CATEGORIES categories
+_CATEGORICAL_METHODS = _TWO_CATEGORY_METHODS | {ImputationMethod.POLYREG.value, ImputationMethod.POLR.value}
+# Donor methods that impute a column of any type
+_DONORS = "a donor method (pmm, cart, rf, sample)"
 
 
 def _is_integer(value: Any) -> bool:
@@ -87,9 +110,14 @@ def check_maxit(maxit: int) -> None:
         warnings.warn("maxit is greater than 50, imputations will take a lot of time", UserWarning, stacklevel=3)
 
 
-def check_method(method: str | dict[str, str], columns: list[str]) -> dict[str, str]:
+def check_method(
+    method: str | dict[str, str], columns: list[str], defaults: Mapping[Any, str] | None = None
+) -> dict[str, str]:
     """
     Check and process the method parameter for MICE imputation.
+
+    Only the names are checked here; whether a method suits the type of its
+    column is checked by `check_method_types`.
 
     Parameters
     ----------
@@ -97,13 +125,17 @@ def check_method(method: str | dict[str, str], columns: list[str]) -> dict[str, 
         Method specification:
 
         - str: use the same method for all columns;
-        - dict: the method of each listed column; columns not in it get
-          DEFAULT_METHOD (``"pmm"``).
+        - dict: the method of each listed column; the other columns get
+          their method in `defaults`.
 
         A method is one of SUPPORTED_METHODS, or "" for a column that is
         not imputed.
     columns : list of str
         List of column names in the data
+    defaults : mapping of column to str, optional
+        The method of each column that a dict `method` does not list, as
+        `imputation.make_method` returns it (the default of the column's
+        type). If None, DEFAULT_METHOD (``"pmm"``) for every column.
 
     Returns
     -------
@@ -133,12 +165,163 @@ def check_method(method: str | dict[str, str], columns: list[str]) -> dict[str, 
         if invalid_methods:
             raise ValueError(f"Unsupported methods: {invalid_methods}. Supported methods are: {SUPPORTED_METHODS}")
 
-        # Columns not in the dict get the default method (pmm)
-        result = {col: DEFAULT_METHOD for col in columns}
+        # Columns not in the dict get their default method
+        if defaults is None:
+            result = {col: DEFAULT_METHOD for col in columns}
+        else:
+            result = {col: defaults[col] for col in columns}
         result.update(method)  # Override with specified methods
         return result
 
     raise ValueError("method must be either a string or a dictionary")
+
+
+def check_default_method(default_method: Any) -> tuple[str, ...]:
+    """
+    Check the default methods by column type (R's ``defaultMethod``).
+
+    Parameters
+    ----------
+    default_method : list or tuple of str
+        Four supported method names: for numeric columns, for columns with
+        two categories (and boolean ones), for unordered categorical (and
+        text) columns with more than two categories, and for ordered
+        categorical columns with more than two categories.
+
+    Returns
+    -------
+    tuple of str
+        The four names.
+
+    Raises
+    ------
+    ValueError
+        If `default_method` is not a list or tuple of four names, or names a
+        method that is not supported.
+
+    Examples
+    --------
+    >>> check_default_method(["pmm", "logreg", "polyreg", "polr"])
+    ('pmm', 'logreg', 'polyreg', 'polr')
+    """
+    if not isinstance(default_method, (list, tuple)) or len(default_method) != 4:
+        raise ValueError(
+            "default_method must be a list or tuple of four method names: the methods of numeric columns, of "
+            "columns with two categories, and of unordered and of ordered categorical columns with more "
+            f"(R's defaultMethod; the default is {DEFAULT_METHODS}). Got {default_method!r}."
+        )
+    invalid = [method for method in default_method if not ImputationMethod.is_valid_method(method)]
+    if invalid:
+        raise ValueError(
+            f"default_method contains unsupported methods: {invalid}. Supported methods are: {SUPPORTED_METHODS}"
+        )
+    return tuple(default_method)
+
+
+def _shown_categories(series: pd.Series) -> str:
+    """The first five distinct observed values of a column (sorted if they can be), for a message."""
+    values = list(pd.unique(series.dropna()))
+    try:
+        values = sorted(values)
+    except TypeError:  # labels of mixed types: in order of appearance
+        pass
+    shown = ", ".join(repr(_plain(value)) for value in values[:5])
+    return shown + (", ..." if len(values) > 5 else "")
+
+
+def _suitable_methods(kind: str, n_categories: int) -> str:
+    """The methods that can impute a non-numeric column, for an error message."""
+    if n_categories > MAX_CATEGORIES:
+        return _DONORS
+    if kind == "bool" or n_categories <= 2:
+        return f"logreg, logreg.boot, or {_DONORS}"
+    if kind == "ordered":
+        return f"polr, polyreg, or {_DONORS}"
+    return f"polyreg, or {_DONORS}"
+
+
+def check_method_types(data: pd.DataFrame, method: Mapping[Hashable, str]) -> None:
+    """
+    Check that each method suits the type of the column it imputes, as R's ``check.method``.
+
+    R only warns about a mismatch, and the imputation then fails later or
+    imputes missing values. Here the pairings that cannot work raise before
+    any imputation is drawn, with the column named:
+
+    - a method for numeric columns (``"norm"``, ``"norm.nob"``,
+      ``"norm.boot"``, ``"norm.predict"``, ``"mean"``) on a boolean,
+      categorical or text column;
+    - ``"logreg"`` or ``"logreg.boot"`` on a column with more than two
+      distinct observed values;
+    - ``"logreg"``, ``"logreg.boot"``, ``"polyreg"`` or ``"polr"`` on a
+      column with more than 50 distinct observed values (R's limit, for
+      example a text column of names or identifiers).
+
+    A categorical method on a numeric column that passes these checks is
+    allowed, with R's warning. ``"midas"`` is checked by its imputer.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        The data.
+    method : mapping of column to str
+        The method of each column; columns with ``""`` are not checked.
+
+    Raises
+    ------
+    ValueError
+        For an impossible pairing; the message names the column and the
+        methods that suit it.
+
+    Warns
+    -----
+    UserWarning
+        For ``"logreg"``, ``"logreg.boot"``, ``"polyreg"`` or ``"polr"`` on
+        a numeric column, with R's text: "Type mismatch for variable(s):
+        <column>\\nImputation method <method> is for categorical data."
+    """
+    for col, meth in method.items():
+        if meth not in _NUMERIC_METHODS and meth not in _CATEGORICAL_METHODS:
+            continue
+        series = data[col]
+        kind = _column_kind(series)
+        if meth in _NUMERIC_METHODS:
+            if kind != "numeric":
+                suitable = _suitable_methods(kind, int(series.nunique(dropna=True)))
+                raise ValueError(
+                    f"Column {col!r} is {_KIND_NAMES.get(kind, kind)} (dtype {series.dtype}), but {meth} imputes "
+                    f"numeric columns only (R's mice.impute.{meth} imputes NA here). Methods for this column: "
+                    f"{suitable}."
+                )
+            continue
+        # The categories the imputer will model: the distinct observed values
+        n_categories = int(series.nunique(dropna=True))
+        if n_categories > MAX_CATEGORIES:
+            raise ValueError(
+                f"Column {col!r} has {n_categories} distinct observed values, more categories than {meth} can "
+                f"model: R's mice allows at most {MAX_CATEGORIES} ('Maximum number of categories "
+                f"({MAX_CATEGORIES}) exceeded'). Text columns of names or identifiers often look like this, and "
+                "the default method of a text column with more than two values is polyreg. Impute the column "
+                f"with a donor method instead, for example method={{{col!r}: 'pmm'}}, or remove it from the data "
+                "if it identifies the rows."
+            )
+        if meth in _TWO_CATEGORY_METHODS and n_categories > 2:
+            if kind == "numeric":
+                alternatives = "polyreg for more than two categories, or a method for numeric columns such as pmm"
+            elif kind == "ordered":
+                alternatives = f"polr or polyreg for more than two categories, or {_DONORS}"
+            else:
+                alternatives = f"polyreg for more than two categories, or {_DONORS}"
+            raise ValueError(
+                f"Column {col!r}: {meth} imputes a target with two categories, but the column has {n_categories} "
+                f"distinct observed values ({_shown_categories(series)}). Use {alternatives}."
+            )
+        if kind == "numeric":
+            warnings.warn(
+                f"Type mismatch for variable(s): {col}\nImputation method {meth} is for categorical data.",
+                UserWarning,
+                stacklevel=3,
+            )
 
 
 def check_initial_method(initial_method: str) -> None:

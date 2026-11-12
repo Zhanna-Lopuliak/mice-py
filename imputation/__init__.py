@@ -2,7 +2,8 @@
 Multiple Imputation by Chained Equations (MICE), a Python port of R's ``mice``.
 
 The main entry point is :class:`MICE`; :func:`quickpred` builds a predictor
-matrix as R's ``quickpred`` does.
+matrix as R's ``quickpred`` does, and :func:`make_method` gives each column
+the default imputation method of its type, as R's ``make.method``.
 
 Logging
 -------
@@ -19,6 +20,7 @@ from importlib.metadata import PackageNotFoundError, version
 from .design import quickpred
 from .logging_config import disable_logging, get_logger, reset_logging, setup_logging
 from .MICE import MICE
+from .utils import make_method
 
 try:
     __version__ = version("mice-py")
@@ -27,7 +29,16 @@ except PackageNotFoundError:  # not installed, e.g. imported from a source tree
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
-__all__ = ["MICE", "quickpred", "setup_logging", "get_logger", "disable_logging", "reset_logging", "configure_logging"]
+__all__ = [
+    "MICE",
+    "quickpred",
+    "make_method",
+    "setup_logging",
+    "get_logger",
+    "disable_logging",
+    "reset_logging",
+    "configure_logging",
+]
 
 
 def configure_logging(**kwargs) -> logging.Logger:

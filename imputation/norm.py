@@ -349,8 +349,9 @@ def _numeric_target(y: Any, method: str) -> np.ndarray:
     if kind != "numeric":
         raise ValueError(
             f"Target y must be numeric for {method}, got {_KIND_NAMES.get(kind, kind)} values. {method} "
-            f"imputes numbers (R's mice.impute.{method} imputes NA here); impute boolean, categorical or "
-            "text columns with pmm, cart, rf or sample."
+            f"imputes numbers (R's mice.impute.{method} imputes NA here); impute a boolean column or one with "
+            "two categories with logreg or logreg.boot, a categorical or text column with polyreg (polr if "
+            "it is ordered), or any of them with pmm, cart, rf or sample."
         )
     return series.to_numpy(dtype=float, na_value=np.nan)
 

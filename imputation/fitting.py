@@ -960,8 +960,15 @@ def _polr_objective(
 
 
 def _cut_points(theta: np.ndarray) -> np.ndarray:
-    """``MASS::polr``'s cut points ``cumsum(c(theta_1, exp(theta_2), ..., exp(theta_q)))``."""
-    return np.cumsum(np.r_[theta[:1], np.exp(theta[1:])])
+    """``MASS::polr``'s cut points ``cumsum(c(theta_1, exp(theta_2), ..., exp(theta_q)))``.
+
+    A trial step of the line search can make ``theta`` large enough for
+    ``exp`` to overflow. The cut point is then infinite, the objective
+    infinite, and :func:`vmmin` rejects the step, as in R, which computes
+    the same ``Inf`` without a warning.
+    """
+    with np.errstate(over="ignore"):
+        return np.cumsum(np.r_[theta[:1], np.exp(theta[1:])])
 
 
 def _logit(p: np.ndarray) -> np.ndarray:

@@ -3,20 +3,24 @@
 This module offers :func:`get_imputer_func`, which maps a string identifying
 an imputation method to the concrete callable that implements that method,
 :func:`get_imputer_params`, which lists the parameters a user may set for it,
-and :func:`method_prefix` and :func:`split_method_param`, which relate a
-keyword argument ``<prefix>_<param>`` of ``MICE.impute`` to its method.
+:func:`method_prefix` and :func:`split_method_param`, which relate a
+keyword argument ``<prefix>_<param>`` of ``MICE.impute`` to its method, and
+:func:`make_method`, which gives each column the default method of its type
+(also available as ``imputation.make_method``).
 """
 
 from __future__ import annotations
 
 import inspect
-from collections.abc import Collection, Mapping
-from typing import Callable
+from collections.abc import Collection, Mapping, Sequence
+from typing import Any, Callable
 
 import numpy as np
+import pandas as pd
 
 from .cart import cart
-from .constants import ImputationMethod
+from .constants import DEFAULT_METHODS, ImputationMethod
+from .design import _column_kind
 from .logreg import logreg, logreg_boot
 from .mean import mean
 from .midas import midas
@@ -28,6 +32,7 @@ from .polr import polr
 from .polyreg import polyreg
 from .rf import rf
 from .sample import sample
+from .validators import check_default_method
 
 # ---------------------------------------------------------------------------
 # Public helpers
@@ -184,3 +189,102 @@ def split_method_param(key: str, method_params: Mapping[str, Collection[str]]) -
     if not matches:
         return None
     return matches[0], key[len(method_prefix(matches[0])) + 1 :]
+
+
+def make_method(data: pd.DataFrame, default_method: Sequence[str] = DEFAULT_METHODS) -> dict[Any, str]:
+    """The default imputation method of each column, as R's ``make.method``.
+
+    Each incomplete column gets one of the four entries of `default_method`
+    by its type, with the rule of R's ``assign.method``:
+
+    1. a numeric column: the first (``"pmm"``);
+    2. a boolean column, or a column with exactly two categories: the second
+       (``"logreg"``);
+    3. an unordered categorical, object or string column with more than two
+       categories: the third (``"polyreg"``);
+    4. an ordered categorical column with more than two categories: the
+       fourth (``"polr"``);
+    5. anything else (a categorical column with a single category, a text
+       column without any observed value): the first.
+
+    A complete column gets ``""``: it is not imputed. The categories of a
+    ``category`` column are its declared categories, unused ones included,
+    as R's ``nlevels`` counts the levels of a factor; those of an object or
+    string column are its distinct observed values.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        The data. Anything else is converted with ``pd.DataFrame(data)``.
+    default_method : list or tuple of str, default ("pmm", "logreg", "polyreg", "polr")
+        The methods of the four column types above, in that order (R's
+        ``defaultMethod``); four supported method names.
+
+    Returns
+    -------
+    dict
+        The method of each column, in data order. It can be edited and
+        passed as `method` to :meth:`imputation.MICE.impute`, which uses
+        this function when `method` is None and for the columns a `method`
+        dict leaves out.
+
+    Raises
+    ------
+    ValueError
+        If `default_method` is not four supported method names.
+    TypeError
+        If a column has a dtype that cannot be imputed (datetime, complex,
+        ...).
+
+    Notes
+    -----
+    Object and string columns count as unordered categorical columns, as
+    everywhere in this package, so a text column gets ``"logreg"`` or
+    ``"polyreg"`` by its number of distinct values. R gives a character
+    column ``"pmm"`` whatever its values, and then does not impute it: its
+    setup step finds the column constant. An object column that holds only
+    booleans and missing values counts as boolean.
+
+    Whether a method suits its column is checked when `MICE.impute` runs:
+    a column with more than 50 distinct values, for example a text column
+    of names, cannot be imputed with ``"polyreg"`` (R's limit).
+
+    Examples
+    --------
+    >>> import numpy as np, pandas as pd
+    >>> df = pd.DataFrame({
+    ...     "age": [31.0, np.nan, 52.0, 47.0],
+    ...     "smoker": [True, False, None, True],
+    ...     "region": ["north", "south", None, "east"],
+    ...     "grade": pd.Categorical(["low", None, "high", "mid"], categories=["low", "mid", "high"], ordered=True),
+    ...     "id": [1, 2, 3, 4],
+    ... })
+    >>> make_method(df)
+    {'age': 'pmm', 'smoker': 'logreg', 'region': 'polyreg', 'grade': 'polr', 'id': ''}
+    >>> make_method(df, default_method=("norm", "logreg.boot", "polyreg", "polyreg"))["grade"]
+    'polyreg'
+    """
+    defaults = check_default_method(default_method)
+    if not isinstance(data, pd.DataFrame):
+        data = pd.DataFrame(data)
+    methods: dict[Any, str] = {}
+    for j, col in enumerate(data.columns):
+        series = data.iloc[:, j]
+        methods[col] = defaults[_default_position(series)] if series.isna().any() else ""
+    return methods
+
+
+def _default_position(series: pd.Series) -> int:
+    """The position of a column's type in R's ``defaultMethod`` (from 0), as R's ``assign.method``."""
+    kind = _column_kind(series)
+    if kind == "numeric":
+        return 0
+    if isinstance(series.dtype, pd.CategoricalDtype):
+        n_levels = len(series.cat.categories)  # declared, unused ones included, as R's nlevels
+    else:
+        n_levels = int(series.nunique(dropna=True))
+    if kind == "bool" or n_levels == 2:
+        return 1
+    if n_levels > 2:
+        return 3 if kind == "ordered" else 2
+    return 0
