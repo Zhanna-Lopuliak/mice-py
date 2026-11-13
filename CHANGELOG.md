@@ -28,13 +28,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values, and its categories from all of the target, as R's `augment`
   does. `logreg.boot` takes its categories from the rows of the two masks.
   With complementary masks and complete predictors the results are
-  unchanged. `MICE` still passes the rows with complete predictors only.
+  unchanged.
 - `cart` and `rf` raise `ValueError` for a missing predictor value in a row
   they fit on or impute; they passed it to scikit-learn before, whose trees
   accepted it. Every imputer that reads the predictors checks them in the
   same way, with the same message: `pmm`, `midas`, `cart` and `rf` also
   take `x=None` for no predictor and refuse `x` with another number of rows
   than `y`, as the norm methods did.
+- `impute()` passes every row to the imputer, as R's `sampler.univ` does.
+  Before, it left out the rows in which a predictor keeps a missing value
+  (a column with method `""` that predicts another column); these rows are
+  now in neither mask, so only `logreg`, `polyreg` and `polr` use them, for
+  the categories of the target and the rows they add (R's `augment`). In
+  that case the imputations of these three methods can change, and with
+  them the columns they predict. Every other call gives the same results
+  for the same seed.
+- `impute()` empties `model_results` and removes `pooled_result`, so that
+  `pool()` cannot combine the fits of earlier datasets: call `fit()` again
+  after `impute()`. Before, `pool()` combined the fits of the last `fit()`.
 
 ### Removed
 

@@ -849,12 +849,13 @@ def test_meanobs_initial_imputation_of_non_numeric_columns():
     Other columns: the most frequent observed value; a tie (cat: y, x, z
     twice each) goes to the first level in category order."""
     from imputation import MICE
+    from imputation.MICE import _complete
 
     df = _meanobs_frame()
     mice = MICE(df)
     impute_checking_log_warning(mice, n_imputations=1, maxit=1, initial="meanobs", method="sample", seed=1)
-    data = df.copy()
-    mice._initial_imputation(data, np.random.default_rng(0))
+    # the start of a chain, written into the data
+    data = _complete(mice._chain_data, mice._initial_imputation(np.random.default_rng(0)), mice._where)
     assert data.loc[[3, 5], "num"].tolist() == [4.0, 4.0]
     assert data.loc[[3, 6], "obj"].tolist() == ["b", "b"]
     assert data.loc[[1, 6], "cat"].tolist() == ["z", "z"]

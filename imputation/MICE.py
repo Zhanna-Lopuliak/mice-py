@@ -8,6 +8,7 @@ import logging
 import time
 import warnings
 from collections.abc import Hashable, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
@@ -149,6 +150,97 @@ def _in_float_dtype(values, dtype):
     return np.asarray(values, dtype=getattr(dtype, "numpy_dtype", dtype))
 
 
+@dataclass
+class _ChainState:
+    """One chain between two iterations, as R keeps it in ``imp`` and ``.Random.seed``.
+
+    Attributes
+    ----------
+    imp : dict of column label to pd.Series
+        For each column with where-cells (cells that get an imputation),
+        the current imputation of each of them: index their row labels in
+        row order, dtype that of the column in the chains. NaN where a cell
+        could not be imputed, and in every where-cell of a column without a
+        method.
+    rng : np.random.Generator
+        The generator of the chain; its state advances through the start
+        and every iteration.
+    """
+
+    imp: dict[Hashable, pd.Series]
+    rng: np.random.Generator
+
+
+def _values(series: pd.Series):
+    """The values of `series` in its own dtype, without the index, so that writing them does not align labels."""
+    return series.to_numpy() if isinstance(series.dtype, np.dtype) else series.array
+
+
+def _fit_rows(cx: np.ndarray, observed: np.ndarray, ignore: np.ndarray) -> np.ndarray:
+    """The rows the model of a column is fitted on, R's ``ry``.
+
+    The predictors of the row are complete in the working data (`cx`), the
+    cell of the column is observed and the row is not ignored.
+    """
+    return cx & observed & ~ignore
+
+
+def _rows_to_impute(cx: np.ndarray, where: np.ndarray) -> np.ndarray:
+    """The rows the imputer of a column fills, R's ``wy``: where-cells whose predictors are complete (`cx`)."""
+    return cx & where
+
+
+def _store_imputations(imp: pd.Series, imputable: np.ndarray, values) -> None:
+    """Write the imputations of one visit of a column into its `imp`, in place.
+
+    `imputable` marks the where-cells whose predictors are complete (R's
+    ``cc``, one entry per where-cell); they get `values`, in row order. Every
+    other where-cell gets NaN, also over its start value, as R's
+    ``imputes[!cc] <- NA``.
+    """
+    if not imputable.all():
+        imp.iloc[np.flatnonzero(~imputable)] = np.nan
+    if imputable.any():
+        imp.iloc[np.flatnonzero(imputable)] = values
+
+
+def _refresh_working_column(
+    working: pd.DataFrame, column: Hashable, imp: pd.Series, where: np.ndarray, observed: np.ndarray
+) -> None:
+    """Write the imputations of the missing where-cells of one column into the working data, in place.
+
+    As R's ``data[(!ry) & wy, j] <- imp[[j]][(!ry)[wy], i]``: an observed
+    where-cell keeps its observed value in the working data, so that the
+    other columns are predicted from it.
+
+    Parameters
+    ----------
+    working : pd.DataFrame
+        The working data of a chain.
+    column : label
+        The column.
+    imp : pd.Series
+        The imputations of the where-cells of the column, in row order.
+    where, observed : np.ndarray of bool
+        One entry per row: the where-cells and the observed cells of the column.
+    """
+    missing = ~observed[where]
+    if missing.any():
+        working.loc[where & ~observed, column] = _values(imp)[missing]
+
+
+def _complete(data: pd.DataFrame, imp: dict[Hashable, pd.Series], where: pd.DataFrame) -> pd.DataFrame:
+    """A completed dataset, as R's ``complete``: a copy of `data` with every where-cell replaced by `imp`.
+
+    An observed where-cell gets its imputation too, and a where-cell whose
+    imputation is missing becomes missing.
+    """
+    completed = data.copy(deep=True)
+    for column, values in imp.items():
+        completed.loc[where[column].to_numpy(), column] = _values(values)
+    return completed
+
+
 def _method_param_names() -> dict[str, list[str]]:
     """The parameters a user may set for each supported method (see `get_imputer_params`)."""
     return {method: get_imputer_params(method) for method in ImputationMethod.get_all_methods()}
@@ -246,8 +338,10 @@ class MICE:
         nothing was logged. See `impute`.
     model_results : list
         The fitted models of the last call of `fit`, one per dataset.
+        `impute` empties it, so that `pool` cannot combine fits of earlier
+        datasets.
     pooled_result : MICEresult
-        The pooled estimates of the last call of `pool`.
+        The pooled estimates of the last call of `pool`; `impute` removes it.
 
     Examples
     --------
@@ -398,10 +492,13 @@ class MICE:
 
             As in R, a complete column always gets ``""``. A column with
             method ``""`` keeps its missing values; where it is used as a
-            predictor, the rows in which it is missing are left out of the
-            imputation model and are not imputed. Before the chains start,
-            each method is checked against the type of its column (see
-            Raises and Warns).
+            predictor, the rows in which it is missing are not used to fit
+            the imputation model and are not imputed. As in R, the imputer
+            still receives these rows; only ``"logreg"``, ``"polyreg"`` and
+            ``"polr"`` use them, for the categories of the target and for
+            the rows they add to the data (R's ``augment``). Before the
+            chains start, each method is checked against the type of its
+            column (see Raises and Warns).
         visit_sequence : str or list of str, default="roman"
             Order in which the columns are visited in each iteration. Only
             incomplete columns that are imputed are visited.
@@ -589,6 +686,11 @@ class MICE:
         self.maxit = maxit
         self.initial = initial
 
+        # The cells that get an imputation and the rows the models leave
+        # out, R's where and ignore: the missing cells, and no row
+        self._where = self.data.isna()
+        self._ignore = np.zeros(len(self.data), dtype=bool)
+
         # Edit the model before the chains start, as R's mice.edit.setup
         self._log = []
         self.predictor_matrix = self._edit_setup(predictor_matrix)
@@ -624,14 +726,29 @@ class MICE:
             if match is not None and match[0] in self._method_params:
                 self._method_params[match[0]][match[1]] = value
 
+        # The data the chains start from. The norm methods and mean impute
+        # floats: a nullable integer column they impute becomes Float64, as R
+        # turns an integer column into double
+        self._chain_data = self.data.copy(deep=True)
+        for col in self.visit_sequence:
+            if self.method[col] in _FLOAT_METHODS and _is_nullable_integer(self._chain_data[col].dtype):
+                self._chain_data[col] = self._chain_data[col].astype("Float64")
+
         self.imputed_datasets = []
+        # Fits of the earlier datasets must not be pooled any more
+        self.model_results = []
+        if hasattr(self, "pooled_result"):
+            del self.pooled_result
+        self._chain_states: list[_ChainState] = []
         individual_times = []
 
         for chain_idx in range(self.n_imputations):
             chain_start_time = time.time()
             logger.info(f"Starting imputation chain {chain_idx + 1}/{self.n_imputations}")
             chain_rng = np.random.default_rng(chain_streams[chain_idx])
-            self.imputed_datasets.append(self._impute_once(chain_idx, chain_rng))
+            state = _ChainState(imp=self._initial_imputation(chain_rng), rng=chain_rng)
+            self._chain_states.append(state)
+            self.imputed_datasets.append(self._impute_once(state, chain_idx))
             chain_end_time = time.time()
             chain_duration = chain_end_time - chain_start_time
             individual_times.append(chain_duration)
@@ -1055,99 +1172,109 @@ class MICE:
 
         return comprehensive_result
 
-    def _impute_once(self, chain_idx: int, rng: np.random.Generator):
+    def _impute_once(self, state: _ChainState, chain_idx: int) -> pd.DataFrame:
         """
-        Perform one complete imputation cycle.
+        Run the iterations of one chain from its state, as R's ``sampler``.
+
+        The working data are built from the data and ``state.imp``; each
+        iteration updates both, and ``state.rng`` advances.
 
         Parameters
         ----------
+        state : _ChainState
+            The chain after its start (`_initial_imputation`); updated in place.
         chain_idx : int
-            Index of the chain
-        rng : np.random.Generator
-            Random number generator of this chain; its state advances through
-            the initial imputation and all iterations
+            Index of the chain.
 
         Returns
         -------
         pd.DataFrame
-            A copy of the data with one complete imputation cycle applied
+            The completed dataset of the chain, a new frame: the data with
+            every where-cell replaced by its imputation (`_complete`).
         """
         logger.debug(f"Starting imputation cycle for chain {chain_idx}")
-        current_data = self.data.copy(deep=True)
-        # The norm methods and mean impute floats: a nullable integer column
-        # they impute becomes Float64, as R turns an integer column into double
-        for col in self.visit_sequence:
-            if self.method[col] in _FLOAT_METHODS and _is_nullable_integer(current_data[col].dtype):
-                current_data[col] = current_data[col].astype("Float64")
-
-        logger.debug("Performing initial imputation")
-        self._initial_imputation(current_data, rng)
+        working = self._working_frame(state.imp)
 
         for iter_idx in range(self.maxit):
             logger.debug(f"Starting iteration {iter_idx + 1}/{self.maxit} for chain {chain_idx}")
-            # Pass the same RNG to each iteration - it will advance with each call
-            current_data = self._iterate(current_data, iter_idx, chain_idx, rng)
+            self._iterate(working, state, iter_idx, chain_idx)
             logger.debug(f"Completed iteration {iter_idx + 1}")
 
         logger.debug(f"Completed imputation cycle for chain {chain_idx}")
-        return current_data
+        return _complete(self._chain_data, state.imp, self._where)
 
-    def _iterate(self, data: pd.DataFrame, iter_idx: int, chain_idx: int, rng: np.random.Generator):
+    def _working_frame(self, imp: dict[Hashable, pd.Series]) -> pd.DataFrame:
+        """The working data of a chain, R's ``data`` inside ``sampler``.
+
+        A copy of the data in which the missing where-cells of each visited
+        column hold their imputations from `imp`; observed cells keep their
+        values.
         """
-        Perform one iteration of the imputation cycle.
+        working = self._chain_data.copy(deep=True)
+        for col in self.visit_sequence:
+            _refresh_working_column(working, col, imp[col], self._where[col].to_numpy(), self.id_obs[col].to_numpy())
+        return working
+
+    def _iterate(self, working: pd.DataFrame, state: _ChainState, iter_idx: int, chain_idx: int) -> None:
+        """
+        One iteration of a chain: each column of the visit sequence in turn, as R's ``sampler.univ``.
+
+        For a column, the design matrix of its predictors is built from all
+        rows of the working data, and ``cx`` marks the rows where it is
+        complete. The model is fitted on the rows `_fit_rows` gives and the
+        imputer fills those of `_rows_to_impute`; it receives all rows, with
+        NaN in the predictors outside ``cx``. Its values go to
+        ``state.imp`` (`_store_imputations`: NaN for a where-cell outside
+        ``cx``) and from there to the working data
+        (`_refresh_working_column`). After the last column, the chain
+        statistics are computed from ``state.imp``.
 
         Parameters
         ----------
-        data : pd.DataFrame
-            Data to iterate over
+        working : pd.DataFrame
+            The working data of the chain; updated in place.
+        state : _ChainState
+            The state of the chain; ``imp`` is updated in place and ``rng``
+            advances.
         iter_idx : int
-            Current iteration index
+            Index of the iteration (0 for R's iteration 1).
         chain_idx : int
-            Current chain index
-        rng : np.random.Generator
-            Random number generator for this chain (state advances across iterations)
-
-        Returns
-        -------
-        pd.DataFrame
-            A copy of the data with one iteration of the imputation cycle applied
+            Index of the chain.
         """
-        updated_data = data
         iteration_start_time = time.time()
+        rng = state.rng
 
         for col in self.visit_sequence:
             logger.debug(f"Processing column '{col}' (iteration {iter_idx + 1}, chain {chain_idx})")
             method_name = self.method[col]
             predictor_cols = self._predictors[col]
             logger.debug(f"Using {len(predictor_cols)} predictors for column '{col}'")
+            observed = self.id_obs[col].to_numpy()
+            where = self._where[col].to_numpy()
+            imp = state.imp[col]
 
-            # Design matrix of the current completed data, as R's sampler.univ
-            x = obtain_design(updated_data, predictor_cols)
+            # Design matrix of all rows of the working data, as R's sampler.univ
+            x = obtain_design(working, predictor_cols)
             x_values = x.to_numpy()
-            complete = ~np.isnan(x_values).any(axis=1)
-            id_obs = self.id_obs[col].to_numpy() & complete
-            id_mis = self.id_mis[col].to_numpy() & complete
-            # A missing cell whose predictors are incomplete (a predictor that
-            # is not imputed) is not imputed either and stays missing
-            unimputable = self.id_mis[col].to_numpy() & ~complete
-            if unimputable.any():
-                updated_data.loc[unimputable, col] = np.nan
-            if not id_mis.any():
+            cx = ~np.isnan(x_values).any(axis=1)
+            ry = _fit_rows(cx, observed, self._ignore)
+            wy = _rows_to_impute(cx, where)
+            if not wy.any():
+                # No where-cell has complete predictors: all are missing
+                _store_imputations(imp, cx[where], None)
+                _refresh_working_column(working, col, imp, where, observed)
                 continue
 
             if iter_idx == 0:
-                self._check_df(x_values.shape[1], int(id_obs.sum()), col, method_name, chain_idx)
+                self._check_df(x_values.shape[1], int(ry.sum()), col, method_name, chain_idx)
 
             # Drop constant and linearly dependent columns, as R's remove.lindep
-            keep, event = _remove_lindep(x, updated_data[col], id_obs)
+            keep, event = _remove_lindep(x, working[col], ry)
             if event is not None:
                 self._log_event(out=event, meth=method_name, it=iter_idx + 1, im=chain_idx + 1, dep=col)
             x_values = x_values[:, keep]
 
-            y = _target_values(updated_data[col])
-            if not complete.all():
-                y, x_values = y[complete], x_values[complete]
-                id_obs, id_mis = id_obs[complete], id_mis[complete]
+            y = _target_values(working[col])
 
             imputer_func = get_imputer_func(method_name)
             logger.debug(f"Using imputation method '{method_name}' for column '{col}'")
@@ -1160,7 +1287,7 @@ class MICE:
                     self._log_event, meth=method_name, it=iter_idx + 1, im=chain_idx + 1, dep=col
                 )
             try:
-                imputed_values = imputer_func(y=y, id_obs=id_obs, id_mis=id_mis, x=x_values, **method_params)
+                imputed_values = imputer_func(y=y, id_obs=ry, id_mis=wy, x=x_values, **method_params)
             except ValueError as err:
                 # The imputer does not know which column it imputes
                 raise ValueError(
@@ -1169,28 +1296,32 @@ class MICE:
                 ) from err
             logger.debug(f"Successfully imputed {len(imputed_values)} values for column '{col}'")
 
-            # Assign imputed values; new floats take the float dtype of the column
+            # New floats take the float dtype of the column
             if method_name in _FLOAT_METHODS:
-                imputed_values = _in_float_dtype(imputed_values, updated_data[col].dtype)
-            updated_data.loc[self.id_mis[col].to_numpy() & complete, col] = imputed_values
+                imputed_values = _in_float_dtype(imputed_values, working[col].dtype)
+            _store_imputations(imp, cx[where], imputed_values)
+            _refresh_working_column(working, col, imp, where, observed)
 
-            # Record chain statistics (only for numeric columns)
-            if col in self.chain_mean:
-                imputed_arr = np.asarray(imputed_values, dtype=float)
-                mean_val = np.nanmean(imputed_arr)
-                self.chain_mean[col][iter_idx, chain_idx] = mean_val
-
-                if imputed_arr.size > 1:
-                    var_val = np.nanvar(imputed_arr, ddof=1)
-                    self.chain_var[col][iter_idx, chain_idx] = var_val
-                    logger.debug(f"Chain statistics for '{col}': mean={mean_val:.4f}, variance={var_val:.4f}")
-                else:
-                    self.chain_var[col][iter_idx, chain_idx] = np.nan
-                    logger.debug(f"Chain statistics for '{col}': mean={mean_val:.4f}, variance=N/A (single value)")
-
+        self._record_chain_statistics(state.imp, iter_idx, chain_idx)
         iteration_time = time.time() - iteration_start_time
         logger.debug(f"Iteration {iter_idx + 1} completed in {iteration_time:.2f} seconds")
-        return updated_data
+
+    def _record_chain_statistics(self, imp: dict[Hashable, pd.Series], iter_idx: int, chain_idx: int) -> None:
+        """Store the mean and variance of the imputations of each numeric visited column, as R's ``sampler``.
+
+        Computed from `imp` at the end of the iteration, over all where-cells
+        of the column; missing imputations are skipped (R's ``na.rm =
+        TRUE``). The mean is NaN without any imputation, the variance with
+        fewer than two, as R's ``NA``.
+        """
+        for col in self.chain_mean:
+            values = imp[col].to_numpy(dtype=float, na_value=np.nan)
+            values = values[~np.isnan(values)]
+            mean_val = np.nanmean(values) if values.size > 0 else np.nan
+            var_val = np.nanvar(values, ddof=1) if values.size > 1 else np.nan
+            self.chain_mean[col][iter_idx, chain_idx] = mean_val
+            self.chain_var[col][iter_idx, chain_idx] = var_val
+            logger.debug(f"Chain statistics for '{col}': mean={mean_val:.4f}, variance={var_val:.4f}")
 
     def _check_df(self, n_predictors, n_observed, col, method_name, chain_idx):
         """Log a model with fewer observed cases than parameters, as R's ``check.df``."""
@@ -1203,38 +1334,58 @@ class MICE:
                 dep=col,
             )
 
-    def _initial_imputation(self, data, rng=None):
+    def _initial_imputation(self, rng: np.random.Generator) -> dict[Hashable, pd.Series]:
         """
-        Initialize missing values based on the initial method.
+        The start of one chain, as R's ``initialize.imp``.
 
-        "sample" draws from the observed values of each column, as R does.
-        "meanobs" (not in R) fills a numeric column with the observed value
-        closest to its mean and any other column with its most frequent
-        observed value.
+        Each column with a method gets a value in each of its where-cells,
+        taken from its observed values in the rows that are not ignored.
+        "sample" draws them, as R does, column by column in data order.
+        "meanobs" (not in R) gives a numeric column the observed value
+        closest to its mean and any other column its most frequent observed
+        value. A column without a method is not started: its where-cells are
+        missing.
+
+        Parameters
+        ----------
+        rng : np.random.Generator
+            The generator of the chain; "sample" draws from it.
+
+        Returns
+        -------
+        dict of column label to pd.Series
+            The chain's ``imp`` (see `_ChainState`), one entry per column
+            with where-cells.
         """
-        if rng is None:
-            rng = np.random.default_rng()  # fresh random generator
-
-        # Columns without a method are not imputed, not even initially
-        if self.initial == InitialMethod.SAMPLE.value:
-            for col in data.columns:
-                if self.method[col] != "" and data[col].isna().any():
-                    observed_values = data.loc[self.id_obs[col], col].values
-                    data.loc[self.id_mis[col], col] = rng.choice(observed_values, size=self.id_mis[col].sum())
-
-        elif self.initial == InitialMethod.MEANOBS.value:
-            for col in data.columns:
-                if self.method[col] != "" and data[col].isna().any():
-                    observed_values = data.loc[self.id_obs[col], col]
-                    if _column_kind(observed_values) == "numeric":
-                        # the observed value closest to the mean (the first if tied)
-                        values = observed_values.to_numpy(dtype=float)
-                        closest_value = observed_values.iloc[int(np.argmin(np.abs(values - values.mean())))]
-                    else:
-                        # categorical, object, string or boolean: the most
-                        # frequent observed value (ties: the first level)
-                        closest_value = observed_values.mode().iloc[0]
-                    data.loc[self.id_mis[col], col] = closest_value
+        data = self._chain_data
+        imp = {}
+        for col in data.columns:
+            where = self._where[col].to_numpy()
+            if not where.any():
+                continue
+            start = data[col][where].copy()
+            observed = self.id_obs[col].to_numpy()
+            # R's ry at the start: observed and not ignored, whatever the predictors
+            donors = observed & ~self._ignore
+            if self.method[col] == "":
+                if observed[where].any():
+                    start.iloc[np.flatnonzero(observed[where])] = np.nan
+            elif self.initial == InitialMethod.SAMPLE.value:
+                observed_values = data.loc[donors, col].values
+                start.iloc[:] = rng.choice(observed_values, size=where.sum())
+            elif self.initial == InitialMethod.MEANOBS.value:
+                observed_values = data.loc[donors, col]
+                if _column_kind(observed_values) == "numeric":
+                    # the observed value closest to the mean (the first if tied)
+                    values = observed_values.to_numpy(dtype=float)
+                    closest_value = observed_values.iloc[int(np.argmin(np.abs(values - values.mean())))]
+                else:
+                    # categorical, object, string or boolean: the most
+                    # frequent observed value (ties: the first level)
+                    closest_value = observed_values.mode().iloc[0]
+                start.iloc[:] = closest_value
+            imp[col] = start
+        return imp
 
     def _set_visit_sequence(self, visit_sequence, rng=None):
         """
