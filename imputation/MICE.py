@@ -22,7 +22,7 @@ from .constants import (
     InitialMethod,
     VisitSequence,
 )
-from .design import _as_numeric, _column_kind, _remove_lindep, find_collinear, obtain_design, quickpred
+from .design import _as_numeric, _column_kind, _remove_lindep, find_collinear, obtain_design
 from .mice_result import MICEresult
 from .pooling import _residual_df, pool_estimates
 from .utils import get_imputer_func, get_imputer_params, make_method, method_prefix, split_method_param
@@ -45,14 +45,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Deprecated keyword arguments of `MICE.impute`, and the matching arguments
-# of `imputation.quickpred`
-_QUICKPRED_ARGUMENTS = {
-    "min_cor": "mincor",
-    "min_puc": "minpuc",
-    "include": "include",
-    "exclude": "exclude",
-    "correlation_method": "method",
+# Keyword arguments of `MICE.impute` removed in version 0.4, and the hint
+# that the error for each of them gives
+_QUICKPRED_HINT = (
+    "It was removed in version 0.4: build the predictor matrix with imputation.quickpred(data, mincor=..., "
+    "minpuc=..., include=..., exclude=..., method=...) and pass it as predictor_matrix."
+)
+_REMOVED_ARGUMENTS = {
+    "min_cor": _QUICKPRED_HINT,
+    "min_puc": _QUICKPRED_HINT,
+    "include": _QUICKPRED_HINT,
+    "exclude": _QUICKPRED_HINT,
+    "correlation_method": _QUICKPRED_HINT,
+    "output_dir": "It was removed in version 0.4 and never had an effect.",
 }
 
 # Columns of `MICE.logged_events`, as R's `loggedEvents`
@@ -163,7 +168,8 @@ def _check_method_params(params):
     Raises
     ------
     TypeError
-        For the first invalid name; the message lists the valid names.
+        For the first invalid name; the message lists the valid names, or,
+        for an argument removed in version 0.4, says what replaces it.
     """
     valid = _method_param_names()
     for key in params:
@@ -171,7 +177,9 @@ def _check_method_params(params):
         if match is not None and match[1] in valid[match[0]]:
             continue
         method = match[0] if match is not None else None
-        if method is not None and not valid[method]:
+        if key in _REMOVED_ARGUMENTS:
+            hint = _REMOVED_ARGUMENTS[key]
+        elif method is not None and not valid[method]:
             hint = f"Method '{method}' takes no parameters."
         elif method is not None:
             prefix = method_prefix(method)
@@ -179,8 +187,7 @@ def _check_method_params(params):
         else:
             hint = (
                 "Method parameters take the form <method>_<parameter>; valid ones: "
-                f"{', '.join(f'{method_prefix(m)}_{p}' for m, names in valid.items() for p in names)}. "
-                f"Deprecated keyword arguments: {', '.join(_QUICKPRED_ARGUMENTS)}."
+                f"{', '.join(f'{method_prefix(m)}_{p}' for m, names in valid.items() for p in names)}."
             )
         raise TypeError(f"impute() got an unexpected keyword argument '{key}'. {hint}")
 
@@ -438,18 +445,6 @@ class MICE:
             parameter must exist in that imputer's signature; any other
             keyword argument raises ``TypeError``.
 
-            - `output_dir`: deprecated and ignored; passing it issues a
-              ``DeprecationWarning``.
-
-            Deprecated, to be removed in version 0.4: `min_cor`,
-            `min_puc`, `include`, `exclude` and `correlation_method`. When
-            `predictor_matrix` is None, they build the predictor matrix with
-            ``imputation.quickpred(data, mincor=min_cor, minpuc=min_puc,
-            include=include, exclude=exclude, method=correlation_method)``;
-            otherwise they are ignored. Passing any of them issues a
-            ``DeprecationWarning``. Call `imputation.quickpred` and pass its
-            result as `predictor_matrix` instead.
-
         Returns
         -------
         list of pd.DataFrame
@@ -469,16 +464,25 @@ class MICE:
             distinct observed values; ``"logreg"``, ``"logreg.boot"``,
             ``"polyreg"`` or ``"polr"`` on a column with more than 50
             distinct observed values (R's limit; for example a text column
-            of names, which gets ``"polyreg"`` by default). Inside a chain,
-            when an imputer cannot impute a column (for example ``"midas"``
-            on a categorical column, a model with more weights than
-            ``polyreg_max_weights``, ``"norm.nob"`` with too few observed
-            values for its predictors, or a column without observed value
-            in the rows usable for its model); the message starts with the
-            column, the method, the iteration and the imputation, followed
-            by the imputer's message.
+            of names, which gets ``"polyreg"`` by default); the message says
+            to remove such a column from the data if it identifies the rows,
+            and otherwise to impute it with a donor method, under which the
+            column stays a predictor of the other columns, with one dummy
+            column per value, unless the predictor matrix excludes it.
+            Inside a chain, when an imputer cannot impute a column (for
+            example ``"midas"`` on a categorical column, a model with more
+            weights than ``polyreg_max_weights``, ``"norm.nob"`` with too
+            few observed values for its predictors, or a column without
+            observed value in the rows usable for its model); the message
+            starts with the column, the method, the iteration and the
+            imputation, followed by the imputer's message.
         TypeError
-            For an unknown keyword argument.
+            For an unknown keyword argument. For one of the arguments
+            removed in version 0.4 (`min_cor`, `min_puc`, `include`,
+            `exclude`, `correlation_method`, `output_dir`), the message says
+            what replaces it: `imputation.quickpred`, whose result is passed
+            as `predictor_matrix`, or nothing for `output_dir`, which never
+            had an effect.
 
         Warns
         -----
@@ -489,8 +493,6 @@ class MICE:
             ``"logreg"``, ``"logreg.boot"``, ``"polyreg"`` or ``"polr"`` on a
             numeric column, with R's text "Type mismatch for variable(s):
             <column>\\nImputation method <method> is for categorical data."
-        DeprecationWarning
-            For the deprecated keyword arguments listed above.
 
         Notes
         -----
@@ -539,34 +541,11 @@ class MICE:
         visit_stream = seed_sequence.spawn(1)[0]
         chain_streams = seed_sequence.spawn(n_imputations)
 
-        if "output_dir" in kwargs:
-            kwargs.pop("output_dir")
-            warnings.warn(
-                "The 'output_dir' argument of impute() is deprecated and ignored.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        deprecated = [name for name in _QUICKPRED_ARGUMENTS if name in kwargs]
-        quickpred_args = {_QUICKPRED_ARGUMENTS[name]: kwargs.pop(name) for name in deprecated}
         _check_method_params(kwargs)
-        if deprecated:
-            warnings.warn(
-                f"The arguments {', '.join(deprecated)} of impute() are deprecated and will be removed "
-                "in version 0.4. Build the predictor matrix with imputation.quickpred(data, "
-                "mincor=..., minpuc=..., include=..., exclude=..., method=...) and pass it as "
-                "predictor_matrix.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
 
-        if predictor_matrix is None and not quickpred_args:
+        if predictor_matrix is None:
             predictor_matrix = _full_predictor_matrix(list(self.data.columns))
-        elif predictor_matrix is None:
-            predictor_matrix = quickpred(self.data, **quickpred_args)
-            logger.debug(f"Predictor matrix from quickpred:\n{predictor_matrix}")
         else:
-            if quickpred_args:
-                logger.warning("Arguments %s only apply when predictor_matrix is None; they are ignored.", deprecated)
             predictor_matrix = validate_predictor_matrix(predictor_matrix, list(self.data.columns), self.data)
             logger.debug("Predictor matrix validated successfully")
         # Square over all columns, in data order; absent entries are 0

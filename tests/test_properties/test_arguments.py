@@ -76,36 +76,46 @@ def test_valid_parameter_of_another_method_is_accepted():
     assert len(out) == 1
 
 
-def test_quickpred_arguments_still_accepted():
-    """Deprecated for one version; they build the matrix with imputation.quickpred,
-    whose rows of complete columns (d, k) are 0, as in R."""
+QUICKPRED_HINT = (
+    "It was removed in version 0.4: build the predictor matrix with imputation.quickpred(data, mincor=..., "
+    "minpuc=..., include=..., exclude=..., method=...) and pass it as predictor_matrix."
+)
+
+
+@pytest.mark.parametrize(
+    "name, value",
+    [
+        ("min_cor", 0.0),
+        ("min_puc", 0.0),
+        ("include", ["d"]),
+        ("exclude", ["k"]),
+        ("correlation_method", "spearman"),
+    ],
+)
+@pytest.mark.parametrize("predictor_matrix", [None, "full"])
+def test_removed_quickpred_arguments_raise_with_the_replacement(name, value, predictor_matrix):
+    """Removed in 0.4: the TypeError of an unknown keyword, which names imputation.quickpred
+    instead of listing the method parameters, with or without a predictor matrix."""
     df = numeric_frame(n=30)
-    with pytest.warns(DeprecationWarning, match="imputation.quickpred"):
-        mice, _ = impute(
-            df,
-            "pmm",
-            n_imputations=1,
-            maxit=1,
-            predictor_matrix=None,
-            min_cor=0.0,
-            min_puc=0.0,
-            include=["d"],
-            exclude=["k"],
-            correlation_method="spearman",
-        )
+    message = f"impute() got an unexpected keyword argument '{name}'. {QUICKPRED_HINT}"
+    with pytest.raises(TypeError, match=f"^{re.escape(message)}$"):
+        impute(df, "pmm", n_imputations=1, maxit=1, predictor_matrix=predictor_matrix, **{name: value})
+
+
+def test_the_matrix_of_quickpred_replaces_the_removed_arguments():
+    """What the removed arguments did: the matrix of imputation.quickpred, whose rows
+    of complete columns (d, k) are 0 as in R, passed as predictor_matrix."""
+    import imputation
+
+    df = numeric_frame(n=30)
+    pred = imputation.quickpred(df, mincor=0.0, minpuc=0.0, include=["d"], exclude=["k"], method="spearman")
+    mice, _ = impute(df, "pmm", n_imputations=1, maxit=1, predictor_matrix=pred)
     assert mice.predictor_matrix.loc[["a", "b", "c"], "d"].eq(1).all()
     assert mice.predictor_matrix["k"].eq(0).all()
     assert mice.predictor_matrix.loc[["d", "k"]].eq(0).all().all()
 
 
-def test_quickpred_arguments_with_predictor_matrix_are_ignored_and_deprecated():
-    df = numeric_frame(n=30)
-    with pytest.warns(DeprecationWarning, match="min_cor"):
-        mice, _ = impute(df, "pmm", n_imputations=1, maxit=1, min_cor=0.9)
-    pd.testing.assert_frame_equal(mice.predictor_matrix, full_predictor_matrix(df), check_dtype=False)
-
-
-def test_without_quickpred_arguments_the_full_matrix_is_used_without_warning():
+def test_without_predictor_matrix_the_full_matrix_is_used_without_warning():
     df = numeric_frame(n=30)
     with warnings.catch_warnings():
         warnings.simplefilter("error", DeprecationWarning)
@@ -113,13 +123,25 @@ def test_without_quickpred_arguments_the_full_matrix_is_used_without_warning():
     pd.testing.assert_frame_equal(mice.predictor_matrix, full_predictor_matrix(df), check_dtype=False)
 
 
-def test_output_dir_is_deprecated_and_ignored(tmp_path):
+def test_removed_output_dir_raises(tmp_path):
     df = numeric_frame(n=30)
     target = tmp_path / "out"
-    with pytest.warns(DeprecationWarning, match="output_dir"):
-        _, out = impute(df, "sample", n_imputations=1, maxit=1, output_dir=str(target))
-    assert len(out) == 1
+    message = (
+        "impute() got an unexpected keyword argument 'output_dir'. "
+        "It was removed in version 0.4 and never had an effect."
+    )
+    with pytest.raises(TypeError, match=f"^{re.escape(message)}$"):
+        impute(df, "sample", n_imputations=1, maxit=1, output_dir=str(target))
     assert not target.exists()
+
+
+def test_unknown_argument_message_no_longer_lists_the_removed_arguments():
+    df = numeric_frame(n=30)
+    with pytest.raises(TypeError) as info:
+        impute(df, "pmm", n_imputations=1, maxit=1, n_imputation=3)
+    message = str(info.value)
+    assert message.startswith("impute() got an unexpected keyword argument 'n_imputation'. Method parameters")
+    assert not any(name in message for name in ("min_cor", "correlation_method", "output_dir", "Deprecated"))
 
 
 def test_formerly_implicit_parameters_reach_the_backend(monkeypatch):

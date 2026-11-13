@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.4.0] - Unreleased
+
+### Changed
+
+- The error for a column with more than 50 distinct observed values under
+  `logreg`, `logreg.boot`, `polyreg` or `polr` names removing the column
+  from the data first, for a column that identifies the rows, and then a
+  donor method (`pmm`, `cart`, `rf`, `sample`), under which the column
+  stays a predictor of the other columns, with one dummy column per value,
+  unless the predictor matrix excludes it. It recommended the donor method
+  first.
+
+### Removed
+
+- `impute(min_cor=, min_puc=, include=, exclude=, correlation_method=)`,
+  deprecated since 0.2. Build the predictor matrix with
+  `imputation.quickpred(data, mincor=..., minpuc=..., include=...,
+  exclude=..., method=...)` and pass it as `predictor_matrix`. Passing one
+  of them raises the `TypeError` of an unknown keyword argument, which says
+  so.
+- `impute(output_dir=)`, deprecated and ignored since 0.2; it never had an
+  effect. Passing it raises `TypeError`.
+
+
 ## [0.3.0] - 2026-11-13
 
 This release ports nine model-based methods of R `mice` 3.19.0 (`norm`,

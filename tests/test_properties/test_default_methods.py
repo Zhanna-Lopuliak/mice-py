@@ -326,7 +326,8 @@ def _names_frame(n=80, n_names=60, seed=4):
 
 @pytest.mark.parametrize("method", [None, "polyreg", "polr", "logreg", "logreg.boot"])
 def test_more_than_50_categories_raises_with_the_remedy(method, chains_started):
-    """A text column of names reaches polyreg with the defaults; the message says why and what to do."""
+    """A text column of names reaches polyreg with the defaults; the message says why and what to do:
+    removing a column that identifies the rows first, then a donor method, under which it stays a predictor."""
     from imputation import MICE
 
     df = _names_frame()
@@ -334,7 +335,12 @@ def test_more_than_50_categories_raises_with_the_remedy(method, chains_started):
     pattern = (
         rf"^Column 'name' has 60 distinct observed values, more categories than {re.escape(expected)} can model: "
         r"R's mice allows at most 50 \('Maximum number of categories \(50\) exceeded'\)\. .*"
-        r"for example method=\{'name': 'pmm'\}"
+        + re.escape(
+            "If the column identifies the rows, remove it from the data. Otherwise impute it with a donor method "
+            "(pmm, cart, rf, sample), for example method={'name': 'pmm'}; the column then stays a predictor of the "
+            "other columns, with one dummy column per value, unless the predictor matrix excludes it."
+        )
+        + "$"
     )
     with pytest.raises(ValueError, match=pattern):
         MICE(df).impute(n_imputations=1, maxit=1, method=None if method is None else {"name": method}, seed=1)

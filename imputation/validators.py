@@ -255,7 +255,11 @@ def check_method_types(data: pd.DataFrame, method: Mapping[Hashable, str]) -> No
       distinct observed values;
     - ``"logreg"``, ``"logreg.boot"``, ``"polyreg"`` or ``"polr"`` on a
       column with more than 50 distinct observed values (R's limit, for
-      example a text column of names or identifiers).
+      example a text column of names or identifiers). The message names
+      the remedies in this order: remove the column from the data if it
+      identifies the rows; otherwise impute it with a donor method, under
+      which it stays a predictor of the other columns, with one dummy
+      column per value, unless the predictor matrix excludes it.
 
     A categorical method on a numeric column that passes these checks is
     allowed, with R's warning. ``"midas"`` is checked by its imputer.
@@ -271,7 +275,7 @@ def check_method_types(data: pd.DataFrame, method: Mapping[Hashable, str]) -> No
     ------
     ValueError
         For an impossible pairing; the message names the column and the
-        methods that suit it.
+        methods that suit it (for more than 50 values, the remedies above).
 
     Warns
     -----
@@ -301,9 +305,10 @@ def check_method_types(data: pd.DataFrame, method: Mapping[Hashable, str]) -> No
                 f"Column {col!r} has {n_categories} distinct observed values, more categories than {meth} can "
                 f"model: R's mice allows at most {MAX_CATEGORIES} ('Maximum number of categories "
                 f"({MAX_CATEGORIES}) exceeded'). Text columns of names or identifiers often look like this, and "
-                "the default method of a text column with more than two values is polyreg. Impute the column "
-                f"with a donor method instead, for example method={{{col!r}: 'pmm'}}, or remove it from the data "
-                "if it identifies the rows."
+                "the default method of a text column with more than two values is polyreg. If the column "
+                f"identifies the rows, remove it from the data. Otherwise impute it with {_DONORS}, for example "
+                f"method={{{col!r}: 'pmm'}}; the column then stays a predictor of the other columns, with one "
+                "dummy column per value, unless the predictor matrix excludes it."
             )
         if meth in _TWO_CATEGORY_METHODS and n_categories > 2:
             if kind == "numeric":

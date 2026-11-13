@@ -110,8 +110,8 @@ R. Unlike R, ``include`` and ``exclude`` take exact labels, and an unknown
 label raises ``ValueError``.
 
 The arguments ``min_cor``, ``min_puc``, ``include``, ``exclude`` and
-``correlation_method`` of ``impute`` are deprecated: they call ``quickpred``
-and will be removed in version 0.4.
+``correlation_method`` of ``impute`` were removed in version 0.4: call
+``quickpred`` and pass its result as ``predictor_matrix``, as above.
 
 Guidelines
 ----------
