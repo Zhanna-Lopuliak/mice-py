@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 from numpy.typing import ArrayLike
 
-from .design import _column_kind, obtain_design
+from .design import _column_kind, _predictor_values
 from .sampler import estimice, norm_draw
 
 # How the target kinds of `design._column_kind` are named in error messages
@@ -56,19 +56,23 @@ def norm(
     ----------
     y : array-like of shape (n_samples,)
         Numeric target. Only the entries where `id_obs` is True are used, so
-        the missing entries may hold anything (inside MICE they hold the
+        the other entries may hold anything (inside MICE they hold the
         current imputations). Boolean, categorical and text targets raise
         ``ValueError``.
     id_obs : array-like of bool of shape (n_samples,)
-        True where `y` is observed.
+        The rows the model is fitted on (R's ``ry``), where `y` is
+        observed.
     x : array-like or pd.DataFrame of shape (n_samples, n_features)
-        Predictors without the intercept, without missing values; zero
-        columns (or None) for the intercept-only model. A DataFrame with
-        categorical, object, string or boolean columns is dummy-coded first
-        by :func:`imputation.design.obtain_design`, as MICE does.
+        Predictors without the intercept; zero columns (or None) for the
+        intercept-only model. They must be complete in the rows of `id_obs`
+        and `id_mis`; a row in neither may hold missing values, and is not
+        used. A DataFrame with categorical, object, string or boolean
+        columns is dummy-coded first by
+        :func:`imputation.design.obtain_design`, as MICE does.
     id_mis : array-like of bool of shape (n_samples,), optional
         The cells to impute (R's ``wy``). If None, those where `id_obs` is
-        False.
+        False. The two masks may overlap (a row both fitted on and imputed,
+        as under R's ``where``), and a row may be in neither.
     ls_meth : {"qr", "ridge", "svd"}, default="qr"
         Least squares method of :func:`imputation.sampler.estimice`.
     ridge : float, default=1e-5
@@ -85,7 +89,8 @@ def norm(
     ------
     ValueError
         If `y` is not numeric, if `y` has no observed value and some value
-        is to be imputed, or if `x` is not numeric or has missing values.
+        is to be imputed, or if `x` is not numeric or has missing values in
+        a row of `id_obs` or `id_mis`.
 
     Notes
     -----
@@ -368,41 +373,17 @@ def _model_inputs(
     """Validated inputs of a norm method: (y as float, id_obs, id_mis, design matrix ``[1, x]``)."""
     id_obs, id_mis = _masks(id_obs, id_mis, method)
     ynum = _numeric_target(y, method)
-    return ynum, id_obs, id_mis, _design_matrix(x, len(ynum), method)
+    return ynum, id_obs, id_mis, _design_matrix(x, len(ynum), id_obs | id_mis, method)
 
 
-def _design_matrix(x: Any, n_rows: int, method: str) -> np.ndarray:
-    """``[1, x]`` as a float array; `x` must be numeric (or dummy-coded) and complete.
+def _design_matrix(x: Any, n_rows: int, used: np.ndarray, method: str) -> np.ndarray:
+    """``[1, x]`` of all rows as a float array; `x` must be numeric and complete in the rows `used`.
 
-    A DataFrame with non-numeric columns is dummy-coded by
-    :func:`imputation.design.obtain_design`, as MICE does. None or zero
-    columns give the intercept-only design.
+    See :func:`imputation.design._predictor_values`: a DataFrame with
+    non-numeric columns is dummy-coded, as MICE does; None or zero columns
+    give the intercept-only design. Rows outside `used` may be NaN.
     """
-    if x is None:
-        x = np.empty((n_rows, 0))
-    if isinstance(x, pd.DataFrame):
-        if not x.select_dtypes(exclude=[np.number]).columns.empty:
-            x = obtain_design(x, list(x.columns))
-        missing_cols = x.columns[x.isna().any()].tolist()
-        if missing_cols:
-            raise ValueError(
-                f"Predictors must not contain missing values for {method}. Columns with missing values: {missing_cols}"
-            )
-        values = x.to_numpy(dtype=float)
-    else:
-        try:
-            values = np.asarray(x, dtype=float)
-        except (TypeError, ValueError):
-            raise ValueError(
-                f"Predictors must be numeric for {method}. Could not convert 'x' to numeric array."
-            ) from None
-        if np.isnan(values).any():
-            raise ValueError(f"Predictors must not contain missing values for {method}.")
-    if values.ndim == 1:
-        values = values.reshape(-1, 1)
-    if values.shape[0] != n_rows:
-        raise ValueError(f"{method}: x has {values.shape[0]} rows, but y has {n_rows} entries.")
-    return np.c_[np.ones(n_rows), values]
+    return np.c_[np.ones(n_rows), _predictor_values(x, n_rows, used, method)]
 
 
 def _require_residual_df(n_obs: int, n_coef: int, method: str) -> None:

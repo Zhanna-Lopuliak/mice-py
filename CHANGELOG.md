@@ -17,6 +17,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stays a predictor of the other columns, with one dummy column per value,
   unless the predictor matrix excludes it. It recommended the donor method
   first.
+- The imputers (`imputation.norm.norm` and the other functions behind the
+  methods) accept every row, as R's `sampler.univ` passes them: `id_obs`
+  (the rows the model is fitted on) and `id_mis` (the rows to impute) may
+  overlap, and a row may be in neither mask. The predictors must be
+  complete in the rows of the two masks only; a row in neither may have
+  missing values. Such rows are not used, except by the augmentation of
+  `logreg`, `polyreg` and `polr`, which takes its means, standard
+  deviations and ranges over all rows, column by column without missing
+  values, and its categories from all of the target, as R's `augment`
+  does. `logreg.boot` takes its categories from the rows of the two masks.
+  With complementary masks and complete predictors the results are
+  unchanged. `MICE` still passes the rows with complete predictors only.
+- `cart` and `rf` raise `ValueError` for a missing predictor value in a row
+  they fit on or impute; they passed it to scikit-learn before, whose trees
+  accepted it. Every imputer that reads the predictors checks them in the
+  same way, with the same message: `pmm`, `midas`, `cart` and `rf` also
+  take `x=None` for no predictor and refuse `x` with another number of rows
+  than `y`, as the norm methods did.
 
 ### Removed
 

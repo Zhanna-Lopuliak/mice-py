@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from numpy.typing import ArrayLike
 
-from .design import obtain_design
+from .design import _predictor_values
 from .sampler import norm_draw
 
 
@@ -38,17 +38,21 @@ def pmm(
         non-numeric dtype (object, category, bool, string).
 
     id_obs : array-like of bool, shape (n_samples,)
-        Logical array indicating which elements of `y` are observed (True) or missing (False).
+        The rows the model is fitted on and the donors are drawn from (R's
+        ``ry``), where `y` is observed.
 
     x : array-like (2D) or pd.DataFrame, shape (n_samples, n_features)
-        Predictors without missing values. A numeric array is used as the
-        design matrix. A DataFrame with categorical, object, string or
-        boolean columns is dummy-coded first by
+        Predictors, complete in the rows of `id_obs` and `id_mis`; a row in
+        neither may hold missing values and is not used. A numeric array is
+        used as the design matrix. A DataFrame with categorical, object,
+        string or boolean columns is dummy-coded first by
         :func:`imputation.design.obtain_design`, as MICE does.
 
     id_mis : array-like of bool, shape (n_samples,), optional
-        Logical array indicating which values should be imputed.
-        If None, `id_mis` is set to the complement of `id_obs`.
+        Logical array indicating which values should be imputed (R's ``wy``).
+        If None, `id_mis` is set to the complement of `id_obs`. The two
+        masks may overlap (a row both fitted on and imputed, as under R's
+        ``where``; it can be its own donor), and a row may be in neither.
 
     donors : int, default=5
         Number of donors to draw from the observed cases when imputing missing values.
@@ -86,8 +90,8 @@ def pmm(
     ------
     ValueError
         If `y` has no observed value and some value is to be imputed, if `x`
-        is not numeric or has missing values, or if `matchtype` is not 0, 1
-        or 2.
+        is not numeric or has missing values in a row of `id_obs` or
+        `id_mis`, or if `matchtype` is not 0, 1 or 2.
 
     Notes
     -----
@@ -107,30 +111,10 @@ def pmm(
     >>> bool(np.isin(y_imp, y[id_obs]).all())  # each one an observed value
     True
     """
-    # Validate predictors (x): numeric or dummy-coded, without missing values
-    if isinstance(x, pd.DataFrame):
-        if not x.select_dtypes(exclude=[np.number]).columns.empty:
-            x = obtain_design(x, list(x.columns))
-        missing_cols = x.columns[x.isna().any()].tolist()
-        if missing_cols:
-            raise ValueError(
-                f"Predictors must not contain missing values for pmm. Columns with missing values: {missing_cols}"
-            )
-        x = x.to_numpy(dtype=float)
-    else:
-        x = np.asarray(x)
-        # Try to coerce to float to detect non-numeric entries early
-        try:
-            x = x.astype(float)
-        except Exception:
-            raise ValueError("Predictors must be numeric for pmm. Could not convert 'x' to numeric array.") from None
-        if np.isnan(x).any():
-            raise ValueError("Predictors must not contain missing values for pmm.")
-    if x.ndim == 1:
-        x = x.reshape(-1, 1)
-
     id_obs = np.asarray(id_obs, dtype=bool)
     id_mis = ~id_obs if id_mis is None else np.asarray(id_mis, dtype=bool)
+    # Predictors (x): numeric or dummy-coded, complete in the rows used
+    x = _predictor_values(x, len(id_obs), id_obs | id_mis, "pmm")
     if not id_obs.any():
         if not id_mis.any():
             return np.asarray(y)[id_mis]
@@ -194,10 +178,10 @@ def quantify(y: ArrayLike, id_obs: ArrayLike, x: ArrayLike) -> np.ndarray:
     y : array-like, shape (n_samples,)
         Categorical variable; only the entries where `id_obs` is True are used.
     id_obs : array-like of bool, shape (n_samples,)
-        True where `y` is observed.
+        True where `y` is observed (the rows pmm fits on).
     x : array-like, shape (n_samples, n_features)
-        Numeric predictors without missing values, including the intercept
-        column (as pmm passes them).
+        Numeric predictors including the intercept column (as pmm passes
+        them), complete in the rows of `id_obs`; only those rows are used.
 
     Returns
     -------

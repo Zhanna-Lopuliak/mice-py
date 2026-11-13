@@ -31,12 +31,13 @@ def mean(
         Numeric target. Only the entries where `id_obs` is True are used.
         Boolean, categorical and text targets raise ``ValueError``.
     id_obs : array-like of bool of shape (n_samples,)
-        True where `y` is observed.
+        The rows whose mean is imputed (R's ``ry``), where `y` is observed.
     x : optional
-        Not used; accepted for the common signature of the imputers.
+        Not used, so it is not checked either; accepted for the common
+        signature of the imputers.
     id_mis : array-like of bool of shape (n_samples,), optional
         The cells to impute (R's ``wy``). If None, those where `id_obs` is
-        False.
+        False. The two masks may overlap, and a row may be in neither.
     rng : np.random.Generator, optional
         Not used (no random numbers are drawn).
 

@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 from numpy.typing import ArrayLike
 
-from .design import obtain_design
+from .design import _predictor_values
 
 
 def bootfunc_plain(n: int, rng: np.random.Generator | None = None) -> np.ndarray:
@@ -102,15 +102,20 @@ def midas(
         (R's midastouch does not impute factors either).
 
     id_obs : array-like of bool of shape (n_samples,)
-        Logical array indicating observed values in `y`. True where `y` is observed, False where missing.
+        The rows the model is fitted on and the donors are drawn from (R's ``ry``), where
+        `y` is observed.
 
     x : array-like or pd.DataFrame of shape (n_samples, n_features)
-        Predictor variables. Must be fully observed. A DataFrame with categorical,
-        object, string or boolean columns is dummy-coded first by
-        :func:`imputation.design.obtain_design`, as MICE does.
+        Predictor variables, complete in the rows of `id_obs` and `id_mis`; a row in neither
+        may hold missing values and is not used. A DataFrame with categorical, object, string
+        or boolean columns is dummy-coded first by :func:`imputation.design.obtain_design`,
+        as MICE does.
 
     id_mis : np.ndarray, optional
-        Boolean mask of missing values to impute. If None, uses ~id_obs.
+        Boolean mask of the cells to impute (R's ``wy``). If None, uses ~id_obs. The two masks
+        may overlap (a row both fitted on and imputed, as under R's ``where``; with `outout`
+        such a row is its own donor with a probability near 1 if the bootstrap sample holds
+        it, as in R), and a row may be in neither.
 
     ridge : float, default=1e-5
         Ridge penalty used in regularized regression to stabilize the solution in the presence of multicollinearity.
@@ -144,7 +149,8 @@ def midas(
     ------
     ValueError
         If `y` has no observed value and some value is to be imputed, if `y`
-        is not numeric or boolean, or if `x` is not numeric or has missing values.
+        is not numeric or boolean, or if `x` is not numeric or has missing values in a row
+        of `id_obs` or `id_mis`.
 
     Notes
     -----
@@ -245,7 +251,7 @@ def _donor_probabilities(
     """
     id_obs = np.asarray(id_obs, dtype=bool)
     id_mis = np.asarray(id_mis, dtype=bool)
-    x = _predictor_matrix(x)
+    x = _predictor_values(x, len(id_obs), id_obs | id_mis, "midas")
     yobs = _numeric_target(y, id_obs)
     omega = np.asarray(omega, dtype=float)
 
@@ -340,33 +346,6 @@ def _draw_donors(probs: np.ndarray, rng: np.random.Generator) -> np.ndarray:
     cdf /= cdf[-1]
     u = rng.random(probs.shape[1])
     return np.sum(cdf <= u, axis=0)
-
-
-def _predictor_matrix(x: Any) -> np.ndarray:
-    """`x` as a float array of shape (n_samples, n_features); it must be complete.
-
-    A DataFrame with non-numeric columns is dummy-coded by
-    :func:`imputation.design.obtain_design`, as MICE does.
-    """
-    if isinstance(x, pd.DataFrame):
-        if not x.select_dtypes(exclude=[np.number]).columns.empty:
-            x = obtain_design(x, list(x.columns))
-        missing_cols = x.columns[x.isna().any()].tolist()
-        if missing_cols:
-            raise ValueError(
-                f"Predictors must not contain missing values for midas. Columns with missing values: {missing_cols}"
-            )
-        x = x.to_numpy(dtype=float)
-    else:
-        try:
-            x = np.asarray(x, dtype=float)
-        except (TypeError, ValueError):
-            raise ValueError("Predictors must be numeric for midas. Could not convert 'x' to numeric array.") from None
-        if np.isnan(x).any():
-            raise ValueError("Predictors must not contain missing values for midas.")
-    if x.ndim == 1:
-        x = x.reshape(-1, 1)
-    return x
 
 
 def _numeric_target(y: Any, id_obs: np.ndarray) -> np.ndarray:

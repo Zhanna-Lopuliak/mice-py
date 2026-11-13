@@ -76,19 +76,25 @@ def polr(
         ``pd.Categorical`` (the case the method is for), an unordered one,
         or text, which are treated as ordered by their sorted labels;
         booleans and numbers are imputed by the fallback (see Notes).
-        Inside MICE the missing entries hold the current imputations; they
-        enter only through the categories they hold (see
-        :func:`imputation.logreg.augment`), not the fit.
+        Every entry counts for the categories (see
+        :func:`imputation.logreg.augment`), also those outside `id_obs`
+        (inside MICE the missing entries hold the current imputations);
+        only the rows of `id_obs` enter the fit.
     id_obs : array-like of bool of shape (n_samples,)
-        True where `y` is observed.
+        The rows the model is fitted on (R's ``ry``), where `y` is
+        observed.
     x : array-like or pd.DataFrame of shape (n_samples, n_features)
-        Predictors without the intercept, without missing values; zero
-        columns (or None) for the model without predictors. A DataFrame
-        with categorical, object, string or boolean columns is dummy-coded
-        first by :func:`imputation.design.obtain_design`, as MICE does.
+        Predictors without the intercept; zero columns (or None) for the
+        model without predictors. They must be complete in the rows of
+        `id_obs` and `id_mis`; a row in neither may hold missing values and
+        enters only the means, standard deviations and ranges of
+        :func:`imputation.logreg.augment`. A DataFrame with categorical,
+        object, string or boolean columns is dummy-coded first by
+        :func:`imputation.design.obtain_design`, as MICE does.
     id_mis : array-like of bool of shape (n_samples,), optional
         The cells to impute (R's ``wy``). If None, those where `id_obs` is
-        False.
+        False. The two masks may overlap (a row both fitted on and imputed,
+        as under R's ``where``), and a row may be in neither.
     maxit : int, default=100
         Maximal number of iterations of the fallback fit, R's
         ``nnet.maxit``; it does not apply to the proportional-odds fit,
@@ -121,7 +127,8 @@ def polr(
         "Maximum number of categories (50) exceeded"), if the fallback
         model has more than `max_weights` weights (R: "too many (N)
         weights"), if `y` has no observed value and some value is to be
-        imputed, or if `x` is not numeric or has missing values.
+        imputed, or if `x` is not numeric or has missing values in a row of
+        `id_obs` or `id_mis`.
 
     Notes
     -----
@@ -216,7 +223,7 @@ def _polr(
     """`polr`, returning its intermediate results too."""
     id_obs, id_mis = _masks(id_obs, id_mis, "polr")
     categories = _observed_categories(y, id_obs)
-    design = _design_matrix(x, len(categories.codes), "polr")
+    design = _design_matrix(x, len(categories.codes), id_obs | id_mis, "polr")
     if not id_obs.any():  # and nothing to impute (_masks raises otherwise)
         return _Steps(labels=categories.labels[:0], fit=None, prob=None, fallback=None)
     if rng is None:

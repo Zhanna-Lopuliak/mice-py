@@ -68,9 +68,12 @@ def target(inp):
     return as_array(values)
 
 
-def _inputs(case):
-    """(y, ry, wy, x) of a case; wy is None where R used ``!ry``."""
-    inp = FIXTURE["inputs"][case["input"]]
+def _inputs(case, inputs=None):
+    """(y, ry, wy, x) of a case; wy is None where R used ``!ry``.
+
+    `inputs` maps input names to inputs; None means those of l1_polr.
+    """
+    inp = (FIXTURE["inputs"] if inputs is None else inputs)[case["input"]]
     y = target(inp)
     ry = as_bool(inp["ry"])
     wy = None if inp["wy"] is None else as_bool(inp["wy"])
@@ -83,13 +86,13 @@ def _scripted(case):
     return ScriptedGenerator(uniforms=as_array(case["uniforms"]), strict=True)
 
 
-def replay(case, log_fallback=False, log_event=None):
+def replay(case, log_fallback=False, log_event=None, inputs=None):
     """Run the port on the inputs of `case` with R's draws; return (steps, rng).
 
     The step function is looked up when called, so that a patched module
-    attribute takes effect.
+    attribute takes effect. `inputs`: see `_inputs`.
     """
-    y, ry, wy, x = _inputs(case)
+    y, ry, wy, x = _inputs(case, inputs)
     rng = _scripted(case)
     steps = imputation.polr._polr(y, ry, x, wy, case["maxit"], case["max_weights"], log_fallback, rng, log_event)
     return steps, rng
@@ -104,11 +107,11 @@ def r_text(label):
     return label
 
 
-def check_labels(case, steps):
-    """The port's labels are R's, of the type of the target's values."""
+def check_labels(case, steps, inputs=None):
+    """The port's labels are R's, of the type of the target's values; `inputs`: see `_inputs`."""
     got = steps.labels.tolist()
     assert [r_text(v) for v in got] == _listed(case["imputed"])
-    kind = FIXTURE["inputs"][case["input"]]["kind"]
+    kind = (FIXTURE["inputs"] if inputs is None else inputs)[case["input"]]["kind"]
     expected_type = {"numeric": float, "logical": bool}.get(kind, str)
     assert all(isinstance(v, expected_type) for v in got)
 
@@ -163,10 +166,10 @@ def check_draws(case, rng):
     assert rng.order == [tuple(pair) for pair in case["order"]]
 
 
-def check_case(case):
-    """Every L1 check of one case."""
-    steps, rng = replay(case)
-    check_labels(case, steps)
+def check_case(case, inputs=None):
+    """Every L1 check of one case; `inputs`: see `_inputs`."""
+    steps, rng = replay(case, inputs=inputs)
+    check_labels(case, steps, inputs)
     if case["port_fit"] != "none":
         check_fit(case, steps)
         check_prediction(case, steps)

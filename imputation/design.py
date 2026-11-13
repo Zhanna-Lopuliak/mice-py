@@ -248,6 +248,76 @@ def obtain_design(data: pd.DataFrame, predictors: Sequence[Hashable]) -> pd.Data
 
 
 # ---------------------------------------------------------------------------
+# The predictors of a univariate imputer
+# ---------------------------------------------------------------------------
+
+
+def _predictor_values(x: Any, n_rows: int, used: ArrayLike, method: str) -> np.ndarray:
+    """The predictors `x` of a univariate imputer as a float array of shape ``(n_rows, p)``.
+
+    The imputers take all rows, as R's ``sampler.univ`` passes them: the
+    target, the rows the model is fitted on (``id_obs``), the predictors and
+    the rows to impute (``id_mis``). The two masks may overlap, and a row
+    may be in neither; such a row may have missing predictors. `x` must be
+    complete in the rows the imputer uses, ``id_obs | id_mis`` (`used`).
+
+    Parameters
+    ----------
+    x : None, array-like or pd.DataFrame
+        The predictors without the intercept: None or zero columns for none,
+        a 1-D array for one. A DataFrame with categorical, object, string
+        or boolean columns is dummy-coded first by :func:`obtain_design`,
+        over all its rows, as MICE codes the data (R's ``obtain.design``).
+    n_rows : int
+        The number of entries of the target.
+    used : array-like of bool of shape (n_rows,)
+        The rows the imputer fits on or imputes.
+    method : str
+        The name of the method, for the error messages.
+
+    Returns
+    -------
+    np.ndarray of float of shape (n_rows, n_features)
+        Missing values (outside `used` only) are NaN.
+
+    Raises
+    ------
+    ValueError
+        If `x` is not numeric, has another number of rows than `n_rows`, or
+        has a missing value in a row of `used`. The message names `method`
+        and, for a DataFrame, the columns with such missing values.
+    """
+    if x is None:
+        return np.empty((n_rows, 0))
+    columns = None
+    if isinstance(x, pd.DataFrame):
+        if not x.select_dtypes(exclude=[np.number]).columns.empty:
+            x = obtain_design(x, list(x.columns))
+        columns = list(x.columns)
+    try:
+        if isinstance(x, pd.DataFrame):
+            values = x.to_numpy(dtype=float, na_value=np.nan)
+        else:
+            values = np.asarray(x, dtype=float)
+    except (TypeError, ValueError):
+        raise ValueError(f"Predictors must be numeric for {method}. Could not convert 'x' to numeric array.") from None
+    if values.ndim == 1:
+        values = values.reshape(-1, 1)
+    if values.shape[0] != n_rows:
+        raise ValueError(f"{method}: x has {values.shape[0]} rows, but y has {n_rows} entries.")
+    missing = np.isnan(values[np.asarray(used, dtype=bool)]).any(axis=0)
+    if missing.any():
+        message = (
+            f"Predictors must not contain missing values for {method} in the rows it fits or imputes "
+            "(id_obs or id_mis)."
+        )
+        if columns is not None:
+            message += f" Columns with missing values: {[columns[j] for j in np.flatnonzero(missing)]}"
+        raise ValueError(message)
+    return values
+
+
+# ---------------------------------------------------------------------------
 # remove_lindep
 # ---------------------------------------------------------------------------
 

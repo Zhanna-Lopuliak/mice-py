@@ -24,11 +24,14 @@ def sample(
     y : pd.Series or np.ndarray
         Target variable with missing values
     id_obs : np.ndarray
-        Boolean mask of observed values in y (True for observed, False for missing)
+        Boolean mask of the rows whose values are drawn (R's ``ry``), where
+        `y` is observed
     x : pd.DataFrame or np.ndarray
-        Predictor variables (not used in this method, but kept for consistency)
+        Predictor variables (not used in this method, so not checked either,
+        but kept for consistency)
     id_mis : np.ndarray, optional
-        Boolean mask of missing values to impute. If None, uses ~id_obs
+        Boolean mask of the cells to impute (R's ``wy``). If None, uses
+        ~id_obs. The two masks may overlap, and a row may be in neither
     rng : np.random.Generator, optional
         Random number generator for reproducibility. If None, a fresh generator is used.
 

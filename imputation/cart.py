@@ -8,24 +8,9 @@ import numpy as np
 import pandas as pd
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
-from .design import obtain_design
+from .design import _predictor_values
 
 logger = logging.getLogger(__name__)
-
-
-def _design_matrix(x) -> np.ndarray:
-    """Predictors as a 2-D float array.
-
-    A DataFrame with categorical, object, string or boolean columns is
-    dummy-coded by :func:`imputation.design.obtain_design`, as MICE does;
-    numeric input is only converted to float.
-    """
-    if isinstance(x, pd.DataFrame) and not x.select_dtypes(exclude=[np.number]).columns.empty:
-        x = obtain_design(x, list(x.columns))
-    x = np.asarray(x, dtype=float)
-    if x.ndim == 1:
-        x = x.reshape(-1, 1)
-    return x
 
 
 def _is_numeric_target(y) -> bool:
@@ -152,14 +137,19 @@ def cart(
     y : pd.Series or np.ndarray
         Target variable with missing values
     id_obs : np.ndarray
-        Boolean mask of observed values in y (True for observed, False for missing)
+        Boolean mask of the rows the tree is fitted on and the donors are
+        drawn from (R's ``ry``), where `y` is observed.
     x : pd.DataFrame or np.ndarray
-        Predictor variables (must be fully observed). A DataFrame with
-        categorical, object, string or boolean columns is dummy-coded first by
-        :func:`imputation.design.obtain_design`, as MICE does. Without any
-        predictor, the imputations are draws from the observed values.
+        Predictor variables, complete in the rows of `id_obs` and `id_mis`;
+        a row in neither may hold missing values and is not used. A
+        DataFrame with categorical, object, string or boolean columns is
+        dummy-coded first by :func:`imputation.design.obtain_design`, as
+        MICE does. Without any predictor, the imputations are draws from the
+        observed values.
     id_mis : np.ndarray, optional
-        Boolean mask of missing values to impute. If None, uses ~id_obs
+        Boolean mask of the cells to impute (R's ``wy``). If None, uses
+        ~id_obs. The two masks may overlap (a row both fitted on and
+        imputed, as under R's ``where``), and a row may be in neither.
     min_samples_leaf : int, default=5
         Minimum number of observations in a leaf (rpart's ``minbucket``).
     cp : float, default=1e-4
@@ -200,7 +190,9 @@ def cart(
     Raises
     ------
     ValueError
-        If `y` has no observed value and some value is to be imputed.
+        If `y` has no observed value and some value is to be imputed, or if
+        `x` is not numeric or has missing values in a row of `id_obs` or
+        `id_mis` (scikit-learn's trees would accept them silently).
 
     Notes
     -----
@@ -231,12 +223,12 @@ def cart(
             "max_depth and ccp_alpha as arguments of cart; the random state is drawn from rng."
         )
 
-    x = _design_matrix(x)
     id_obs = np.asarray(id_obs, dtype=bool)
-
     if id_mis is None:
         id_mis = ~id_obs
     id_mis = np.asarray(id_mis, dtype=bool)
+    # scikit-learn's trees accept NaN, so the check matters here
+    x = _predictor_values(x, len(id_obs), id_obs | id_mis, "cart")
 
     if rng is None:
         rng = np.random.default_rng()

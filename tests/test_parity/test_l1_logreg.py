@@ -55,9 +55,12 @@ def target(inp):
     return as_array(values)
 
 
-def _inputs(case):
-    """(y, ry, wy, x) of a case; wy is None where R used ``!ry``."""
-    inp = FIXTURE["inputs"][case["input"]]
+def _inputs(case, inputs=None):
+    """(y, ry, wy, x) of a case; wy is None where R used ``!ry``.
+
+    `inputs` maps input names to inputs; None means those of l1_logreg.
+    """
+    inp = (FIXTURE["inputs"] if inputs is None else inputs)[case["input"]]
     y = target(inp)
     ry = as_bool(inp["ry"])
     wy = None if inp["wy"] is None else as_bool(inp["wy"])
@@ -73,28 +76,28 @@ def _scripted(case):
     )
 
 
-def replay(case):
+def replay(case, inputs=None):
     """Run the port on the inputs of `case` with R's draws; return (steps, rng).
 
     The step function is looked up when called, so that a patched module
-    attribute takes effect.
+    attribute takes effect. `inputs`: see `_inputs`.
     """
-    y, ry, wy, x = _inputs(case)
+    y, ry, wy, x = _inputs(case, inputs)
     rng = _scripted(case)
     steps = getattr(imputation.logreg, STEPS[case["method"]])(y, ry, x, wy, rng)
     return steps, rng
 
 
-def _kind(case):
-    return FIXTURE["inputs"][case["input"]]["kind"]
+def _kind(case, inputs=None):
+    return (FIXTURE["inputs"] if inputs is None else inputs)[case["input"]]["kind"]
 
 
-def check_labels(case, steps):
+def check_labels(case, steps, inputs=None):
     """The port's labels are R's (the port's form of them: booleans for a logical target)."""
     expected = _listed(case["imputed"])
     got = steps.labels.tolist()
     assert got == expected
-    kind = _kind(case)
+    kind = _kind(case, inputs)
     if kind in ("factor", "ordered"):
         assert all(isinstance(v, str) for v in got)
     elif kind == "logical":
@@ -140,10 +143,10 @@ def check_draws(case, rng):
     assert bounds == ([] if case["integers"] is None else [expected])
 
 
-def check_case(case):
-    """Every L1 check of one case."""
-    steps, rng = replay(case)
-    check_labels(case, steps)
+def check_case(case, inputs=None):
+    """Every L1 check of one case; `inputs`: see `_inputs`."""
+    steps, rng = replay(case, inputs)
+    check_labels(case, steps, inputs)
     if case["port"] in ("match", "rebuilt"):
         check_fit(case, steps)
         check_prediction(case, steps)
