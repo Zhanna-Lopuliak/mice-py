@@ -197,7 +197,11 @@ def test_norm_boot_with_short_index_range_is_caught_by_the_logged_bounds(monkeyp
     imputed, rng = replay(case)
     assert calls, "mutant not applied: norm_boot does not call imputation.norm._bootstrap_sample"
     check_imputations(case, imputed)  # the same scripted indices: invisible here
-    with pytest.raises(AssertionError, match=r"'high': 13"):
+    # The bounds themselves, not the text of the failure: pytest renders the
+    # comparison differently with colour and when the CI variable is set
+    bounds = [call.args for call in rng.calls if call.method == "integers"]
+    assert bounds == [{"low": 0, "high": case["n_obs"] - 1, "endpoint": False}]
+    with pytest.raises(AssertionError):
         check_draws(case, rng)
 
 
