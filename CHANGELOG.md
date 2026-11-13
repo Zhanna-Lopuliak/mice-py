@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [0.3.0] - Unreleased
+## [0.3.0] - 2026-11-13
 
 This release ports nine model-based methods of R `mice` 3.19.0 (`norm`,
 `norm.nob`, `norm.boot`, `norm.predict`, `mean`, `logreg`, `logreg.boot`,
@@ -148,7 +148,7 @@ against R mice" (`docs/source/r_mice/validation.rst`).
   ignored.
 
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-11-11
 
 This release aligns mice-py with R `mice` 3.19.0 and adds a validation
 against it. **Results change for nearly every user**: the defaults are now

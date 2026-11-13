@@ -52,10 +52,12 @@ and the [changelog](CHANGELOG.md).
 ## Installation
 
 ```bash
-pip install git+https://github.com/Zhanna-Lopuliak/mice-py.git
+pip install git+https://github.com/Zhanna-Lopuliak/mice-py.git@v0.3.0
 ```
 
-Python 3.9 to 3.13. This installs two packages, `imputation` and `plotting`.
+Python 3.9 to 3.13. This installs release 0.3.0 with its two packages,
+`imputation` and `plotting`. Without `@v0.3.0`, pip installs the development
+version from `main`.
 
 ## Quick start
 
