@@ -45,6 +45,11 @@ ROWS = [
     ("logreg.boot", "F5", {}),
     ("polyreg", "F3", {}),
     ("polr", "F7", {}),
+    ("pmm", "F8", {}),
+    ("midastouch", "F8", {}),
+    ("cart", "F8", {}),
+    ("rf", "F8", {}),
+    ("sample", "F8", {}),
 ]
 
 

@@ -5,19 +5,9 @@
 # rpart is deterministic, so for a numeric target only the draw within the
 # leaf is random. `reached_2000` records, per missing cell, which donors
 # were drawn at least once in the first 2,000 calls; the script checks that
-# the full 20,000 calls reach exactly the same donors.
+# the full 20,000 calls reach exactly the same donors (reached_first_2000()
+# in _l2_common.R).
 source(file.path("tests", "reference", "r", "_l2_common.R"))
-
-reached_first_2000 <- function(idx, inp) {
-  k <- length(donor_values(inp))
-  first <- donor_counts(idx[seq_len(2000), , drop = FALSE], k) > 0
-  all <- donor_counts(idx, k) > 0
-  if (!is.factor(inp$y)) {
-    stopifnot("rpart tree is deterministic" = identical(first, all))
-  }
-  storage.mode(first) <- "integer"
-  list(reached_2000 = first)
-}
 
 l2_method_fixture(
   "cart",

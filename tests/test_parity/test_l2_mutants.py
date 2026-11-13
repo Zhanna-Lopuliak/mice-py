@@ -50,6 +50,24 @@ Each mutant is written so that it is valid once the library is fixed:
   than the 2,000 of the parity test; the effect is large): T1 p below 1e-12
   in all 20 cells (the smallest 0), T3 largest |z| about 114 (mean) and 26
   (log-variance). The test asserts p < 1e-12 and |z| > 8.
+* Fit rows taken from ``y`` instead of from ``id_obs``: pmm and cart on F8
+  wrapped so that every row with an observed y is a fit row, which adds
+  the 4 rows in neither mask that hold a decoy y. Measured with the calls
+  of the parity test: pmm, whose regression the decoys pull, T1 p 0 in
+  every cell, largest |z| about 119 (T2) and 244 (T3); cart puts two cells
+  into a leaf with the decoys and draws a decoy 2,381 times in 1,500 calls,
+  T1 p below 1e-7 in 18 of the 20 cells (counting the values of fit rows
+  only), and 18 of the 20 donor sets differ from rpart's. pmm must be
+  flagged by T1, T2 and T3, cart by T1 and the donor-set test (its T2 and
+  T3 are not computed when a decoy is drawn).
+* A fit row to impute excluded from its own donors: pmm on F8 with
+  ``imputation.PMM.matchindex`` drawing the donor of each such cell again
+  from the other fit rows. R draws the own value in 10 to 20 percent of the
+  calls (the unpatched matcher picked it in 4,067 of the 24,000 draws for
+  the 8 cells). Measured with 3,000 calls: T1 p below 1e-69 in the 8 cells
+  (the smallest 0) and 0.03 or more in the others, largest |z| about 35
+  (T2) and 14 (T3). T1, T2 and T3 must each flag it, T1 in those 8 cells
+  and no other.
 """
 
 import functools
@@ -57,7 +75,8 @@ import functools
 import numpy as np
 import pytest
 
-from ._l2_harness import compare, donor_set_mismatches, run_python
+from ._l2_harness import compare, donor_set_mismatches, imputer, r_reference, run_python
+from ._l2_stats import P_MIN
 
 pytestmark = pytest.mark.parity
 
@@ -262,3 +281,108 @@ def test_polr_replaced_by_polyreg_is_flagged_by_t3():
     assert n_calls > 0, "mutant not applied: polyreg was not called"
     assert np.abs(comp.t3_z_mean).max() > 8, "T3 (mean) does not flag the mutant clearly: " + comp.t3_message()
     assert np.abs(comp.t3_z_var).max() > 8, "T3 (log-variance) does not flag the mutant clearly: " + comp.t3_message()
+
+
+def fit_rows_from_y(func, added):
+    """``func`` with its fit rows taken from ``y`` (every row with an
+    observed value) instead of from ``id_obs``. Appends the number of rows
+    this adds to ``added``, once per call."""
+
+    def defective(y, id_obs, x, id_mis=None, **kwargs):
+        observed = ~np.isnan(np.asarray(y, dtype=float))
+        added.append(int((observed & ~id_obs).sum()))
+        return func(y, id_obs | observed, x, id_mis=id_mis, **kwargs)
+
+    return defective
+
+
+@functools.cache
+def fit_rows_from_y_run(method):
+    """pmm or cart on F8 with the rows that hold an observed y used as fit rows."""
+    added = []
+    inp, r_sum, py_sum = run_python(method, "F8", func=fit_rows_from_y(imputer(method), added))
+    return compare(r_sum, py_sum, inp), r_sum, py_sum, added
+
+
+@pytest.mark.parametrize("statistic", ["T1", "T2", "T3"])
+def test_pmm_with_fit_rows_from_y_is_flagged(statistic):
+    comp, _, _, added = fit_rows_from_y_run("pmm")
+    assert added and set(added) == {4}, f"mutant not applied as planned: rows added per call {sorted(set(added))}"
+    passed = {"T1": comp.t1_ok, "T2": comp.t2_ok, "T3": comp.t3_ok}[statistic]()
+    message = {"T1": comp.t1_message, "T2": comp.t2_message, "T3": comp.t3_message}
+    assert not passed, f"{statistic} does not flag the mutant: " + message[statistic]()
+
+
+def test_cart_with_fit_rows_from_y_is_flagged_by_t1():
+    comp, _, _, added = fit_rows_from_y_run("cart")
+    assert added and set(added) == {4}, f"mutant not applied as planned: rows added per call {sorted(set(added))}"
+    assert not comp.t1_ok(), "T1 does not flag the mutant: " + comp.t1_message()
+
+
+def test_cart_with_fit_rows_from_y_is_flagged_by_donor_sets():
+    _, r_sum, py_sum, added = fit_rows_from_y_run("cart")
+    assert added and set(added) == {4}, f"mutant not applied as planned: rows added per call {sorted(set(added))}"
+    assert donor_set_mismatches(r_sum, py_sum), "the donor-set test does not flag the mutant"
+
+
+@functools.cache
+def pmm_without_own_donor_comparison():
+    """pmm on F8 with a matcher that never gives a fit row to impute its own value.
+
+    The library's matcher runs as usual; then the donor of each cell whose
+    row is a fit row is drawn again, by the same matcher, from the other fit
+    rows. Returns the comparison, the number of matcher calls, the number of
+    draws in which the unpatched matcher had picked the cell's own row, and
+    the cells concerned.
+    """
+    import imputation.PMM as pmm_module
+
+    inp, _ = r_reference("pmm", "F8")
+    fit_rows = np.flatnonzero(inp.ry)
+    # per cell, the position of its row among the fit rows (the donors), -1 if it is not a fit row
+    own = np.array([np.searchsorted(fit_rows, row) if inp.ry[row] else -1 for row in np.flatnonzero(inp.wy)])
+    cells = np.flatnonzero(own >= 0)
+    original = pmm_module.matchindex
+    calls, own_drawn = [], []
+
+    def without_own_donor(d, t, k=5, rng=None):
+        calls.append(1)
+        d, t = np.asarray(d, dtype=float), np.asarray(t, dtype=float)
+        assert (len(d), len(t)) == (len(fit_rows), len(own)), "pmm no longer matches the cells of wy with the fit rows"
+        idx = original(d, t, k=k, rng=rng)
+        for j in cells:
+            own_drawn.append(int(idx[j] == own[j]))
+            others = np.delete(np.arange(len(d)), own[j])
+            idx[j] = others[original(d[others], t[j : j + 1], k=k, rng=rng)[0]]
+        return idx
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pmm_module, "matchindex", without_own_donor)
+        inp, r_sum, py_sum = run_python("pmm", "F8")
+    return compare(r_sum, py_sum, inp), len(calls), sum(own_drawn), cells
+
+
+def _check_own_donor_mutant_applied(n_calls, n_own_drawn, cells):
+    assert n_calls > 0, "mutant not applied: pmm no longer calls imputation.PMM.matchindex"
+    assert len(cells) == 8, f"F8 has {len(cells)} fit rows to impute, expected 8"
+    assert n_own_drawn > 0, "mutant not applied: the matcher never picked a cell's own row"
+
+
+@pytest.mark.parametrize("statistic", ["T1", "T2", "T3"])
+def test_pmm_without_own_donor_is_flagged(statistic):
+    comp, *applied = pmm_without_own_donor_comparison()
+    _check_own_donor_mutant_applied(*applied)
+    passed = {"T1": comp.t1_ok, "T2": comp.t2_ok, "T3": comp.t3_ok}[statistic]()
+    message = {"T1": comp.t1_message, "T2": comp.t2_message, "T3": comp.t3_message}
+    assert not passed, f"{statistic} does not flag the mutant: " + message[statistic]()
+
+
+def test_pmm_without_own_donor_is_flagged_by_t1_in_the_fit_rows_to_impute_only():
+    """The mutant changes the cells of the 8 fit rows to impute and no other."""
+    comp, *applied = pmm_without_own_donor_comparison()
+    _check_own_donor_mutant_applied(*applied)
+    cells = applied[2]
+    flagged = comp.t1_p < P_MIN
+    assert flagged[cells].all(), f"T1 p-values of the fit rows to impute: {comp.t1_p[cells]}"
+    others = np.delete(np.arange(len(flagged)), cells)
+    assert not flagged[others].any(), f"T1 p-values of the other cells: {comp.t1_p[others]}"
