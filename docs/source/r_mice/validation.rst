@@ -810,10 +810,9 @@ Limits of the evidence
   comparison of the chosen methods with R's. The model-based methods
   themselves are checked by L1 and L2.
 - **Fixtures from one platform.** The R fixtures were made on macOS; CI
-  also runs the tests on Linux, which for 0.3.0 has not happened yet. The
-  optimiser of ``polyreg`` and
-  ``polr`` takes up to 100 steps along which rounding can differ between R's
-  C code and NumPy and between platforms; hence probabilities at 1e-6, and
+  also runs the tests on Linux, where they pass for 0.3.0. The optimiser of
+  ``polyreg`` and ``polr`` takes up to 100 steps along which rounding can
+  differ between R's C code and NumPy and between platforms; hence probabilities at 1e-6, and
   coefficients compared only for converged, well-conditioned fits. The one
   ``glm.fit`` in the fixtures that does not converge (a separated bootstrap
   sample of ``logreg.boot``) is compared at 1e-6 instead of 1e-8, without its

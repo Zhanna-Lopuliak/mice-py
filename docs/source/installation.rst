@@ -22,9 +22,11 @@ With pip
 
 .. code-block:: bash
 
-   pip install git+https://github.com/Zhanna-Lopuliak/mice-py.git
+   pip install git+https://github.com/Zhanna-Lopuliak/mice-py.git@v0.3.0
 
-This installs two packages, ``imputation`` and ``plotting``:
+This installs release 0.3.0; without ``@v0.3.0``, pip installs the
+development version from ``main``. The release has two packages,
+``imputation`` and ``plotting``:
 
 .. code-block:: python
 
@@ -49,7 +51,7 @@ Optional extras:
      - jupyter, nbmake (to run the example notebooks)
 
 For example ``pip install "mice-py[notebooks] @
-git+https://github.com/Zhanna-Lopuliak/mice-py.git"``.
+git+https://github.com/Zhanna-Lopuliak/mice-py.git@v0.3.0"``.
 
 From a clone
 ------------
