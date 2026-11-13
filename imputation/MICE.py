@@ -241,6 +241,23 @@ def _complete(data: pd.DataFrame, imp: dict[Hashable, pd.Series], where: pd.Data
     return completed
 
 
+def _sample_start(observed_values: np.ndarray, size: int, rng: np.random.Generator) -> np.ndarray:
+    """`size` start values drawn with replacement from `observed_values`.
+
+    As R's ``mice.impute.sample`` in ``initialize.imp``.
+    """
+    return rng.choice(observed_values, size=size)
+
+
+def _with_rows(statistics: np.ndarray, n_rows: int) -> np.ndarray:
+    """`statistics` with `n_rows` rows of NaN appended for the iterations to come.
+
+    `statistics` has one row per iteration and one column per chain (see
+    `MICE.chain_mean`).
+    """
+    return np.vstack([statistics, np.full((n_rows, statistics.shape[1]), np.nan)])
+
+
 def _method_param_names() -> dict[str, list[str]]:
     """The parameters a user may set for each supported method (see `get_imputer_params`)."""
     return {method: get_imputer_params(method) for method in ImputationMethod.get_all_methods()}
@@ -288,9 +305,11 @@ class MICE:
     """
     Multiple imputation by chained equations, as R's ``mice``.
 
-    Create the object with the incomplete data, then call `impute`. To
-    analyse the completed datasets, call `fit` with a model formula and
-    combine the fits with `pool` (Rubin's rules, as R's ``pool``).
+    Create the object with the incomplete data, then call `impute`. If the
+    chains have not converged, `continue_chains` runs more iterations of
+    them (R's ``mice.mids``). To analyse the completed datasets, call `fit`
+    with a model formula and combine the fits with `pool` (Rubin's rules,
+    as R's ``pool``).
 
     By default, as in R, each incomplete column is imputed with the method
     of its type (`imputation.make_method`): predictive mean matching
@@ -317,7 +336,12 @@ class MICE:
     id_mis : dict of str to pd.Series
         Per column, a boolean Series that is True where the value is missing.
     imputed_datasets : list of pd.DataFrame
-        The completed datasets of the last call of `impute`.
+        The completed datasets of the last call of `impute` or
+        `continue_chains`.
+    iteration : int
+        The number of iterations each chain has run, R's ``imp$iteration``:
+        the `maxit` of the last `impute` plus that of every `continue_chains`
+        since.
     method : dict of str to str
         The imputation method of each column used by the last `impute`
         (``""`` for a column that is not imputed), as R's ``imp$method``:
@@ -330,18 +354,22 @@ class MICE:
         The order in which the last `impute` visited the columns.
     chain_mean, chain_var : dict of str to np.ndarray
         For each imputed numeric column, the mean and variance of its imputed
-        values, shape ``(maxit, n_imputations)``.
+        values at the end of each iteration, shape ``(iteration,
+        n_imputations)``: one row per iteration, one column per chain.
+        `continue_chains` appends rows; after ``impute(maxit=0)`` they have
+        none.
     logged_events : pd.DataFrame
-        What the last call of `impute` changed in the imputation model, with
-        R's columns ``it`` (iteration, 0 for the setup step), ``im``
-        (imputation), ``dep`` (the target), ``meth`` and ``out``. Empty when
-        nothing was logged. See `impute`.
+        What the last call of `impute`, and every `continue_chains` since,
+        changed in the imputation model, with R's columns ``it`` (iteration,
+        0 for the setup step), ``im`` (imputation), ``dep`` (the target),
+        ``meth`` and ``out``. Empty when nothing was logged. See `impute`.
     model_results : list
         The fitted models of the last call of `fit`, one per dataset.
-        `impute` empties it, so that `pool` cannot combine fits of earlier
-        datasets.
+        `impute` and `continue_chains` empty it, so that `pool` cannot
+        combine fits of earlier datasets.
     pooled_result : MICEresult
-        The pooled estimates of the last call of `pool`; `impute` removes it.
+        The pooled estimates of the last call of `pool`; `impute` and
+        `continue_chains` remove it.
 
     Examples
     --------
@@ -434,7 +462,12 @@ class MICE:
         n_imputations : int, default=5
             Number of imputations (R's ``m``), a positive integer.
         maxit : int, default=5
-            Number of iterations of each chain, a positive integer.
+            Number of iterations of each chain, a non-negative integer. With
+            0, as in R, no iteration runs: the completed datasets hold the
+            start of each chain (see `initial`), and `chain_mean` and
+            `chain_var` have no rows. Everything decided before the chains
+            start (methods, setup step, visit sequence, checks) is the same
+            for every `maxit`. `continue_chains` runs further iterations.
         predictor_matrix : pd.DataFrame, optional
             0/1 matrix with column labels as index (targets) and columns
             (predictors); a 1 means that the column is used as a predictor of
@@ -545,7 +578,11 @@ class MICE:
         Returns
         -------
         list of pd.DataFrame
-            The `n_imputations` completed datasets.
+            The `n_imputations` completed datasets. They are also stored in
+            `imputed_datasets`; `iteration` is set to `maxit`, `chain_mean`
+            and `chain_var` get one row per iteration, `logged_events` holds
+            the events of this call (see Notes), and the state of each chain
+            is kept for `continue_chains`.
 
         Raises
         ------
@@ -609,8 +646,9 @@ class MICE:
           `imputation.design.obtain_design`, and columns that are constant
           or linearly dependent on the observed rows are dropped
           (`imputation.design.remove_lindep`); ``out`` names the dropped
-          columns. In the first iteration, a model with fewer observed
-          cases than parameters logs "df set to 1".
+          columns. In the first iteration (not again in `continue_chains`),
+          a model with fewer observed cases than parameters logs "df set to
+          1".
         - An imputer may log events itself: with ``polr_log_fallback=True``
           each fallback of ``"polr"`` to the multinomial model logs
           "polr falls back to multinom" (``meth`` "polr"), as R's
@@ -648,6 +686,10 @@ class MICE:
         # Square over all columns, in data order; absent entries are 0
         columns = list(self.data.columns)
         predictor_matrix = predictor_matrix.reindex(index=columns, columns=columns, fill_value=0).astype(int)
+
+        # The settings of the last run change from here on: its chains cannot
+        # be continued any more, also if this call stops with an error
+        self._chain_states = []
 
         # The default method of each column's type (R's make.method), for
         # method=None and for the columns a method dict leaves out
@@ -700,17 +742,12 @@ class MICE:
         self._set_visit_sequence(visit_sequence, np.random.default_rng(visit_stream))
         logger.debug(f"Visit sequence set to: {self.visit_sequence}")
 
-        # Prepare chain statistics containers
-        # Only track statistics for numeric columns that will be imputed (i.e., have missing values)
+        # Chain statistics of the numeric columns that are imputed: one row
+        # per iteration, appended as the chains run
         numeric_cols = self.data.select_dtypes(include=[np.number]).columns
         numeric_cols_to_impute = [col for col in self.visit_sequence if col in numeric_cols]
-
-        self.chain_mean = {
-            col: np.full((self.maxit, self.n_imputations), np.nan, dtype=float) for col in numeric_cols_to_impute
-        }
-        self.chain_var = {
-            col: np.full((self.maxit, self.n_imputations), np.nan, dtype=float) for col in numeric_cols_to_impute
-        }
+        self.chain_mean = {col: np.empty((0, self.n_imputations), dtype=float) for col in numeric_cols_to_impute}
+        self.chain_var = {col: np.empty((0, self.n_imputations), dtype=float) for col in numeric_cols_to_impute}
 
         # Fixed for the whole run: the predictors of each target, in data
         # order, and the parameters of each method
@@ -734,34 +771,18 @@ class MICE:
             if self.method[col] in _FLOAT_METHODS and _is_nullable_integer(self._chain_data[col].dtype):
                 self._chain_data[col] = self._chain_data[col].astype("Float64")
 
-        self.imputed_datasets = []
-        # Fits of the earlier datasets must not be pooled any more
-        self.model_results = []
-        if hasattr(self, "pooled_result"):
-            del self.pooled_result
-        self._chain_states: list[_ChainState] = []
-        individual_times = []
+        self.imputed_datasets: list[pd.DataFrame] = []
 
+        # The start of each chain, from its own generator (R's initialize.imp)
+        states: list[_ChainState] = []
         for chain_idx in range(self.n_imputations):
-            chain_start_time = time.time()
-            logger.info(f"Starting imputation chain {chain_idx + 1}/{self.n_imputations}")
             chain_rng = np.random.default_rng(chain_streams[chain_idx])
-            state = _ChainState(imp=self._initial_imputation(chain_rng), rng=chain_rng)
-            self._chain_states.append(state)
-            self.imputed_datasets.append(self._impute_once(state, chain_idx))
-            chain_end_time = time.time()
-            chain_duration = chain_end_time - chain_start_time
-            individual_times.append(chain_duration)
-            logger.info(f"Completed imputation chain {chain_idx + 1} in {chain_duration:.2f} seconds")
+            states.append(_ChainState(imp=self._initial_imputation(chain_rng), rng=chain_rng))
+        self._chain_states = states
+        self.iteration = 0
 
-        end_time = time.time()
-        total_duration = end_time - start_time
-        avg_chain_time = sum(individual_times) / len(individual_times)
-
-        logger.info(f"All {self.n_imputations} imputations completed in {total_duration:.2f} seconds")
-        logger.info(f"Average time per imputation chain: {avg_chain_time:.2f} seconds")
-        logger.debug(f"Individual chain times: {[f'{t:.2f}s' for t in individual_times]}")
-
+        self._run_chains(range(maxit))
+        logger.info(f"impute completed in {time.time() - start_time:.2f} seconds")
         logger.debug("Final imputation statistics:")
         logger.debug(f"  - Number of imputations: {self.n_imputations}")
         logger.debug(f"  - Maximum iterations: {self.maxit}")
@@ -769,20 +790,153 @@ class MICE:
         logger.debug(f"  - Method: {self.method}")
         logger.debug(f"  - Visit sequence: {self.visit_sequence}")
 
-        self._report_logged_events()
+        self._report_logged_events(warn=True)
 
         return self.imputed_datasets
+
+    def continue_chains(self, maxit: int = 1) -> list[pd.DataFrame]:
+        """
+        Run more iterations of the chains of the last `impute`, as R's ``mice.mids``.
+
+        Each chain goes on from where it stopped: from its current
+        imputations, with its own generator in the state it reached. Nothing
+        is decided again: the start, the visit sequence (also a ``"random"``
+        one), the methods, the predictor matrix and the setup step are those
+        of the last `impute`, and the check of the first iteration ("df set
+        to 1", see `impute`) does not run again. The chains run one after the
+        other, as in `impute`.
+
+        Parameters
+        ----------
+        maxit : int, default=1
+            Number of further iterations of each chain, a non-negative
+            integer. 0 runs nothing and returns the datasets as they are.
+
+        Returns
+        -------
+        list of pd.DataFrame
+            The `n_imputations` completed datasets after the new iterations,
+            also stored in `imputed_datasets`.
+
+        Raises
+        ------
+        ValueError
+            If `impute` was not called first, or if the last call of `impute`
+            or `continue_chains` stopped with an error (its chains cannot be
+            continued); for an invalid `maxit`; inside a chain, as in
+            `impute`.
+
+        Warns
+        -----
+        UserWarning
+            When the new iterations logged an event, with the number of all
+            logged events, as `impute` warns (R's ``mice.mids`` prints
+            nothing); for more than 50 iterations.
+
+        Notes
+        -----
+        `iteration` goes up by `maxit`. The rows of the new iterations are
+        appended to `chain_mean` and `chain_var`, and their events to
+        `logged_events`, numbered by the iteration they happened in. As
+        `impute`, the method empties `model_results` and removes
+        `pooled_result`: call `fit` again.
+
+        ``impute(maxit=a + b, seed=s)`` and ``impute(maxit=a, seed=s)``
+        followed by ``continue_chains(b)`` give identical results: the
+        completed datasets, `chain_mean`, `chain_var`, `logged_events` and
+        `iteration`. This holds for ``a = 0`` and for a continuation split
+        into several calls.
+
+        Examples
+        --------
+        >>> import numpy as np, pandas as pd
+        >>> from imputation import MICE
+        >>> rng = np.random.default_rng(1)
+        >>> df = pd.DataFrame({"x": rng.normal(size=50)})
+        >>> df["y"] = 2 * df["x"] + rng.normal(size=50)
+        >>> df.loc[::5, "y"] = np.nan
+        >>> mice = MICE(df)
+        >>> _ = mice.impute(n_imputations=3, maxit=2, seed=1)
+        >>> datasets = mice.continue_chains(3)
+        >>> mice.iteration, mice.chain_mean["y"].shape
+        (5, (5, 3))
+        >>> longer = MICE(df).impute(n_imputations=3, maxit=5, seed=1)
+        >>> all(a.equals(b) for a, b in zip(datasets, longer))
+        True
+        """
+        if not getattr(self, "_chain_states", None):
+            raise ValueError(
+                "There are no chains to continue: call impute() first. "
+                "A run that stopped with an error cannot be continued."
+            )
+        check_maxit(maxit)
+        maxit = int(maxit)
+        if maxit == 0:
+            return self.imputed_datasets
+
+        start_time = time.time()
+        n_logged = len(self._log)
+        self._run_chains(range(self.iteration, self.iteration + maxit))
+        logger.info(f"continue_chains completed in {time.time() - start_time:.2f} seconds")
+        # As impute, but only when the new iterations logged an event
+        self._report_logged_events(warn=len(self._log) > n_logged)
+        return self.imputed_datasets
+
+    def _run_chains(self, iterations: range) -> None:
+        """
+        Run the iterations `iterations` of every chain from its state; shared by `impute` and `continue_chains`.
+
+        The chains run one after the other (`_impute_once`), each with its
+        own generator. The chain statistics get one row per iteration, the
+        events go to the log after those of earlier calls, and the fitted
+        models of earlier datasets are removed. Sets `imputed_datasets` and
+        `iteration`. If a chain raises, the chains are dropped, because some
+        of them went on and others did not: the run cannot be continued.
+
+        Parameters
+        ----------
+        iterations : range
+            The indices of the iterations to run (0 for R's iteration 1):
+            from the number of iterations run so far, in steps of 1.
+        """
+        for col in self.chain_mean:
+            self.chain_mean[col] = _with_rows(self.chain_mean[col], len(iterations))
+            self.chain_var[col] = _with_rows(self.chain_var[col], len(iterations))
+        # Fits of the earlier datasets must not be pooled any more
+        self.model_results = []
+        if hasattr(self, "pooled_result"):
+            del self.pooled_result
+
+        datasets = []
+        individual_times = []
+        try:
+            for chain_idx, state in enumerate(self._chain_states):
+                chain_start_time = time.time()
+                logger.info(f"Starting imputation chain {chain_idx + 1}/{self.n_imputations}")
+                datasets.append(self._impute_once(state, chain_idx, iterations))
+                individual_times.append(time.time() - chain_start_time)
+                logger.info(f"Completed imputation chain {chain_idx + 1} in {individual_times[-1]:.2f} seconds")
+        except BaseException:
+            # Some chains went on and others did not
+            self._chain_states = []
+            raise
+        self.imputed_datasets = datasets
+        self.iteration = iterations.stop
+
+        logger.info(f"{len(iterations)} iterations of {len(datasets)} chains completed, {self.iteration} in all")
+        logger.debug(f"Individual chain times: {[f'{t:.2f}s' for t in individual_times]}")
 
     def _log_event(self, out, meth, it=0, im=0, dep=""):
         """Record one change of the imputation model, as R's ``updateLog``."""
         self._log.append((it, im, dep, meth, out))
 
-    def _report_logged_events(self):
-        """Fill `logged_events` and warn once if anything was logged.
+    def _report_logged_events(self, warn: bool) -> None:
+        """Fill `logged_events` from the log and, with `warn`, warn once if anything was logged.
 
         R runs the iterations in the outer loop and the imputations in the
         inner one; the chains here run one after the other. Sorting by
-        iteration and imputation (stable) gives R's order.
+        iteration and imputation (stable) gives R's order, also when
+        `continue_chains` has added the events of later iterations to the log.
         """
         if not self._log:
             self.logged_events = _empty_log()
@@ -790,6 +944,8 @@ class MICE:
         events = pd.DataFrame(self._log, columns=list(_LOG_COLUMNS))
         events = events.sort_values(["it", "im"], kind="stable").reset_index(drop=True)
         self.logged_events = events.astype({"it": "int64", "im": "int64"})
+        if not warn:
+            return
         message = f"Number of logged events: {len(events)}."
         if self._not_imputed:
             message += (
@@ -1172,19 +1328,24 @@ class MICE:
 
         return comprehensive_result
 
-    def _impute_once(self, state: _ChainState, chain_idx: int) -> pd.DataFrame:
+    def _impute_once(self, state: _ChainState, chain_idx: int, iterations: range) -> pd.DataFrame:
         """
-        Run the iterations of one chain from its state, as R's ``sampler``.
+        Run iterations of one chain from its state, as R's ``sampler``.
 
-        The working data are built from the data and ``state.imp``; each
-        iteration updates both, and ``state.rng`` advances.
+        The working data are built from the data and ``state.imp``, also when
+        a run is continued; each iteration updates both, and ``state.rng``
+        advances.
 
         Parameters
         ----------
         state : _ChainState
-            The chain after its start (`_initial_imputation`); updated in place.
+            The chain after its start (`_initial_imputation`) or after its
+            last iteration; updated in place.
         chain_idx : int
             Index of the chain.
+        iterations : range
+            The indices of the iterations to run (0 for R's iteration 1).
+            Possibly empty: then the chain is completed as it is.
 
         Returns
         -------
@@ -1193,12 +1354,12 @@ class MICE:
             every where-cell replaced by its imputation (`_complete`).
         """
         logger.debug(f"Starting imputation cycle for chain {chain_idx}")
-        working = self._working_frame(state.imp)
-
-        for iter_idx in range(self.maxit):
-            logger.debug(f"Starting iteration {iter_idx + 1}/{self.maxit} for chain {chain_idx}")
-            self._iterate(working, state, iter_idx, chain_idx)
-            logger.debug(f"Completed iteration {iter_idx + 1}")
+        if len(iterations) > 0:
+            working = self._working_frame(state.imp)
+            for iter_idx in iterations:
+                logger.debug(f"Starting iteration {iter_idx + 1}/{iterations.stop} for chain {chain_idx}")
+                self._iterate(working, state, iter_idx, chain_idx)
+                logger.debug(f"Completed iteration {iter_idx + 1}")
 
         logger.debug(f"Completed imputation cycle for chain {chain_idx}")
         return _complete(self._chain_data, state.imp, self._where)
@@ -1237,7 +1398,8 @@ class MICE:
             The state of the chain; ``imp`` is updated in place and ``rng``
             advances.
         iter_idx : int
-            Index of the iteration (0 for R's iteration 1).
+            Index of the iteration (0 for R's iteration 1), counted over
+            `impute` and every `continue_chains` since.
         chain_idx : int
             Index of the chain.
         """
@@ -1265,6 +1427,7 @@ class MICE:
                 _refresh_working_column(working, col, imp, where, observed)
                 continue
 
+            # In the first iteration of the run only, also when it is continued
             if iter_idx == 0:
                 self._check_df(x_values.shape[1], int(ry.sum()), col, method_name, chain_idx)
 
@@ -1312,7 +1475,8 @@ class MICE:
         Computed from `imp` at the end of the iteration, over all where-cells
         of the column; missing imputations are skipped (R's ``na.rm =
         TRUE``). The mean is NaN without any imputation, the variance with
-        fewer than two, as R's ``NA``.
+        fewer than two, as R's ``NA``. They go to row `iter_idx`, which
+        `_run_chains` has appended.
         """
         for col in self.chain_mean:
             values = imp[col].to_numpy(dtype=float, na_value=np.nan)
@@ -1372,7 +1536,7 @@ class MICE:
                     start.iloc[np.flatnonzero(observed[where])] = np.nan
             elif self.initial == InitialMethod.SAMPLE.value:
                 observed_values = data.loc[donors, col].values
-                start.iloc[:] = rng.choice(observed_values, size=where.sum())
+                start.iloc[:] = _sample_start(observed_values, int(where.sum()), rng)
             elif self.initial == InitialMethod.MEANOBS.value:
                 observed_values = data.loc[donors, col]
                 if _column_kind(observed_values) == "numeric":

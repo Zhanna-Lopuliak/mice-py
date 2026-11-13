@@ -92,19 +92,19 @@ def check_maxit(maxit: int) -> None:
     Parameters
     ----------
     maxit : int
-        Maximum number of iterations for each imputation cycle (a Python or
-        NumPy integer)
+        Number of iterations of each chain (a Python or NumPy integer). 0 is
+        allowed, as in R: no iteration runs.
 
     Raises
     ------
     ValueError
-        If maxit is not a positive integer
+        If maxit is not a non-negative integer
     """
     if not _is_integer(maxit):
         raise ValueError("maxit must be an integer")
 
-    if maxit <= 0:
-        raise ValueError("maxit must be a positive integer")
+    if maxit < 0:
+        raise ValueError("maxit must be a non-negative integer")
 
     if maxit > 50:
         warnings.warn("maxit is greater than 50, imputations will take a lot of time", UserWarning, stacklevel=3)

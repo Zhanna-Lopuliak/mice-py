@@ -230,10 +230,9 @@ def test_second_iteration_sees_nan_instead_of_the_start_value(spy):
     mice = _mice_with_masks(spy)
     rng = np.random.default_rng(0)
     state = _ChainState(imp=mice._initial_imputation(rng), rng=rng)
-    mice.maxit = 2
     mice.chain_mean = {"y": np.full((2, 1), NAN)}
     mice.chain_var = {"y": np.full((2, 1), NAN)}
-    completed = mice._impute_once(state, 0)
+    completed = mice._impute_once(state, 0, range(2))
     assert len(spy) == 2
     np.testing.assert_array_equal(spy[1]["y"], [1.0, 40.0, 102.0, NAN, 5.0, NAN, 7.0, 8.0])
     assert completed["y"].tolist()[:3] == [100.0, 40.0, 102.0]

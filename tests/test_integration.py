@@ -120,7 +120,7 @@ class TestErrorRecovery:
             mice.impute(n_imputations=0)
 
         with pytest.raises(ValueError):
-            mice.impute(maxit=0)
+            mice.impute(maxit=-1)
 
     def test_plotting_with_mismatched_data(self, imputed_datasets):
         """A pattern column that the datasets lack fails loudly instead of plotting nonsense."""

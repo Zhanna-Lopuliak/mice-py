@@ -154,13 +154,14 @@ class TestCheckParameters:
             assert check_maxit(10) is None
             assert check_maxit(1) is None
             assert check_maxit(50) is None
+            assert check_maxit(0) is None  # as in R: the start only
 
     def test_check_maxit_invalid(self):
         """Test invalid maxit values."""
-        with pytest.raises(ValueError, match="maxit must be a positive integer"):
-            check_maxit(0)
-        with pytest.raises(ValueError, match="maxit must be a positive integer"):
+        with pytest.raises(ValueError, match="maxit must be a non-negative integer"):
             check_maxit(-1)
+        with pytest.raises(ValueError, match="maxit must be an integer"):
+            check_maxit(1.5)
 
     def test_check_maxit_warning(self):
         """Test warning for large maxit values."""

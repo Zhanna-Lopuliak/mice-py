@@ -47,6 +47,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pool()` cannot combine the fits of earlier datasets: call `fit()` again
   after `impute()`. Before, `pool()` combined the fits of the last `fit()`.
 
+### Added
+
+- `MICE.continue_chains(maxit=1)`, as R's `mice.mids`: runs `maxit` more
+  iterations of the chains of the last `impute()`, each from its current
+  imputations and with its own generator where it stopped. The start, the
+  visit sequence (also a random one), the methods, the predictor matrix and
+  the setup step are kept, and "df set to 1" is checked in the first
+  iteration of the run only. `chain_mean` and `chain_var` get one row per
+  new iteration, and `logged_events` the new events, numbered by the
+  iteration they happened in. `impute(maxit=a + b, seed=s)` gives the same
+  results as `impute(maxit=a, seed=s)` followed by `continue_chains(b)`.
+  Like `impute()`, it empties `model_results` and removes `pooled_result`.
+  It warns "Number of logged events" only when the new iterations logged an
+  event.
+- `impute(maxit=0)`, as in R: no iteration runs, the completed datasets
+  hold the start of each chain, and `chain_mean` and `chain_var` have no
+  rows; `continue_chains()` goes on from there. It raised `ValueError`
+  before; `imputation.validators.check_maxit` accepts 0.
+- `MICE.iteration`, R's `imp$iteration`: the number of iterations the
+  chains have run, the `maxit` of `impute()` plus that of every
+  `continue_chains()` since.
+
 ### Removed
 
 - `impute(min_cor=, min_puc=, include=, exclude=, correlation_method=)`,

@@ -46,9 +46,9 @@ def chains_started(monkeypatch):
     started = []
     original = mice_class._impute_once
 
-    def recording(self, state, chain_idx):
+    def recording(self, state, chain_idx, iterations):
         started.append(chain_idx)
-        return original(self, state, chain_idx)
+        return original(self, state, chain_idx, iterations)
 
     monkeypatch.setattr(mice_class, "_impute_once", recording)
     return started
