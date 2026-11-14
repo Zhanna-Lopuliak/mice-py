@@ -97,6 +97,7 @@ Written by `write_fixture(name, payload)` in `r/_common.R` and read by
 | `l1_vmmin` | `optim(par, fn, gr, method = "BFGS")` (R's C function `vmmin`, which `nnet` and `MASS::polr` call too) on a quadratic, Rosenbrock's function, a logistic likelihood, a function that is NaN outside its domain and one started at its minimum, with other `maxit`, `abstol` and `reltol`: parameters, value, function and gradient counts, convergence | `imputation.fitting.vmmin` |
 | `l1_polyreg` | `mice.impute.polyreg()` with its uniform numbers captured by re-seeding, rebuilt from `augment()`, `nnet::multinom()` and `predict()`: objective, convergence, coefficients, probabilities of every imputed cell, labels; R's errors where the port goes on or stops; direct `nnet::multinom()` fits (two classes on separated data, case weights) | `imputation.polyreg._polyreg` (the steps of `polyreg`), driven by a strict `ScriptedGenerator`; `imputation.fitting.multinom_fit` |
 | `l1_polr` | `mice.impute.polr()` with its uniform numbers captured by re-seeding, rebuilt from `augment()`, `MASS::polr()` or `nnet::multinom()` and the cumulative rule: the class of the fit R made and polr's error (the reason for the fallback), coefficients, cut points, deviance (objective), convergence, probabilities of every imputed cell, labels; R's errors or other results where the port goes on or stops; direct `MASS::polr()` fits (case weights, 3 and 5 levels, no predictor, an aliased column) and the conditions under which it stops | `imputation.polr._polr` (the steps of `polr`), driven by a strict `ScriptedGenerator`; `imputation.fitting.polr_fit` |
+| `l1_chain` | Whole chains: `mice(data, m, maxit = 0)` for the start values and the generator state after them, `mice(data, m, maxit)` and `mice.mids()` for the run: `imp`, the completed data, `chainMean`, `chainVar`, method, visit sequence, predictor matrix, `loggedEvents`, `iteration` after each step. Deterministic cases (`norm.predict`, `mean`; nothing drawn after the start), scripted cases (`norm`, `logreg`, one chain; every draw of the chain captured by replaying it from `lastSeedValue`, the state after each imputer call proving kind, number and order) and spy cases (a method `mice.impute.spy` records what `sampler.univ()` hands the imputer at every call) | `MICE.impute(maxit=0)` with R's start values and a strict `ScriptedGenerator` written into each chain state, then `MICE.continue_chains` (`tests/test_parity/_l1_chain.py`); for the spy, a method registered under the same name |
 
 Behaviours of R mice 3.19.0 that the fixtures pin down and that are easy to
 get wrong:
@@ -161,6 +162,18 @@ get wrong:
   where a search ends with a restart along the previous gradient; R's C code
   (fused multiply-adds) and NumPy then differ by a few evaluations. The
   cases of `l1_vmmin` avoid that ending (see the script).
+- `sampler.univ()` hands the imputer every row, also those whose predictors
+  are incomplete (a predictor with method `""`); they are in neither mask,
+  and `augment()` takes its statistics over them. In the first iteration
+  `y` still holds the start values of the cells to impute in those rows;
+  after the visit those cells are `NA` in `imp` and in the data
+  (`l1_chain`, cases `spy_empty_method_predictor` and
+  `logreg_empty_method_predictor`).
+- `check.df()` runs only in iteration 1, counted over `mice()` and every
+  `mice.mids()` since: a `mice.mids()` after the first iteration does not
+  log "df set to 1" again, while `remove.lindep()` logs its events in every
+  iteration, numbered on from the earlier calls (`l1_chain`, case
+  `continue_events`).
 
 ## Layer 2 fixtures
 
