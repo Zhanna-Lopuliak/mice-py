@@ -18,6 +18,12 @@ with ``MICE.continue_chains`` step by step, as R ran ``mice()`` and
   names of the predictors kept from the frame of the ``MICE._iterate`` that
   called it.
 
+Where R's completed data lose observed values (a where-cell without an
+imputation is NA, also over an observed value), MICE warns with the number
+of them per column. `run_case` records that warning after the start and
+after every step, and `check_lost_observed_values` compares its numbers with
+R's (``lost_observed`` of the case; a case without it loses none).
+
 The comparisons are separate functions, so that test_l1_chain_mutants can
 run them against a defective library; each raises ``AssertionError`` with a
 message that names the case and what differs. Tolerances as in the other L1
@@ -25,6 +31,7 @@ tests: values ``rtol 1e-8``, ``atol 1e-10``; labels, masks, the positions of
 missing values, events and draws identical.
 """
 
+import re
 import sys
 import warnings
 from dataclasses import dataclass, field
@@ -48,9 +55,13 @@ FIXTURE = load_fixture("l1_chain")
 CASES = {case["name"]: case for case in FIXTURE["cases"]}
 
 # The arguments of mice() a case may pass, under the names of the matching arguments of impute
-_ARGUMENTS = ("method", "predictor_matrix", "visit_sequence")
+_ARGUMENTS = ("method", "predictor_matrix", "visit_sequence", "where")
 _LOG_COLUMNS = ("it", "im", "dep", "meth", "out")
 _POOLS = ("chisq", "normal", "uniform")
+
+# MICE's warning about observed where-cells that are missing in the completed data, and its count per column
+_LOST_WARNING = "Observed values replaced by missing values in the completed data"
+_LOST_COUNT = re.compile(r"'([^']*)': (\d+) \((no method|predictors incomplete in these rows)\)")
 
 
 class SpyCall(NamedTuple):
@@ -77,6 +88,7 @@ class Step:
     logged_events: pd.DataFrame
     iteration: int
     draws_used: dict  # pool -> number of values drawn so far, over all chains
+    lost_observed: dict  # the warning about lost observed values of the step: column -> (number, reason)
 
 
 @dataclass
@@ -87,6 +99,7 @@ class ChainRun:
     generators: list  # the ScriptedGenerator of each chain
     steps: list = field(default_factory=list)
     calls: list = field(default_factory=list)  # SpyCall, in the order of the calls
+    start_lost_observed: dict = field(default_factory=dict)  # as Step.lost_observed, for impute(maxit=0)
 
 
 def impute_kwargs(case):
@@ -102,13 +115,22 @@ def impute_kwargs(case):
     visit_sequence = args["visit_sequence"]
     if visit_sequence is not None:
         kwargs["visit_sequence"] = visit_sequence if isinstance(visit_sequence, str) else str_list(visit_sequence)
+    where = args.get("where")
+    if where is not None:
+        # R's matrix, its columns named, as a frame with the index of the data (decode_frame: 0, 1, ...)
+        kwargs["where"] = (
+            where
+            if isinstance(where, str)
+            else pd.DataFrame(np.array(where["values"], dtype=bool), columns=str_list(where["cols"]))
+        )
     return kwargs
 
 
 def run_case(case):
     """Run the case from R's start with R's draws; return a `ChainRun` with one `Step` per value of ``maxit``.
 
-    Any warning other than the checked "Number of logged events" fails the run.
+    The warning about lost observed values is recorded (`_recording_lost_values`); any warning other than
+    that one and the checked "Number of logged events" fails the run.
     """
     mice = MICE(decode_frame(case["data"]))
     run = ChainRun(mice=mice, generators=[])
@@ -116,12 +138,35 @@ def run_case(case):
         warnings.simplefilter("error")
         if case["kind"] == "spy":
             register_imputer(patch, "spy", _spy(run.calls))
-        impute_checking_log_warning(mice, maxit=0, **impute_kwargs(case))
+        run.start_lost_observed = _recording_lost_values(
+            impute_checking_log_warning, mice, maxit=0, **impute_kwargs(case)
+        )
         run.generators = _start_from_r(mice, case)
         for maxit in case["maxit"]:
-            continue_checking_log_warning(mice, maxit=maxit)
-            run.steps.append(_snapshot(mice, run.generators))
+            lost = _recording_lost_values(continue_checking_log_warning, mice, maxit=maxit)
+            run.steps.append(_snapshot(mice, run.generators, lost))
     return run
+
+
+def _recording_lost_values(call, *args, **kwargs):
+    """``call(*args, **kwargs)``; returns what MICE's warning about lost observed values says.
+
+    The result maps each column the warning names to the pair (number of observed values lost, reason); it is
+    empty without the warning. Every other warning is passed on.
+    """
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        call(*args, **kwargs)
+    lost = {}
+    for warning in caught:
+        message = str(warning.message)
+        if not message.startswith(_LOST_WARNING):
+            warnings.warn_explicit(warning.message, warning.category, warning.filename, warning.lineno)
+            continue
+        assert not lost, "the warning about lost observed values appeared twice"
+        lost = {col: (int(n), reason) for col, n, reason in _LOST_COUNT.findall(message)}
+        assert lost, f"no column read from the warning {message!r}"
+    return lost
 
 
 def _matrix(payload):
@@ -155,11 +200,16 @@ def _start_from_r(mice, case):
     start = case["start"]
     generators = []
     for chain, state in enumerate(mice._chain_states):
-        assert sorted(str(col) for col in state.imp) == sorted(start), "the start has other columns than R's"
+        columns = [str(col) for col in state.imp]
+        assert sorted(columns) == sorted(start), (
+            f"{case['name']}: the start has the columns {columns}, R's {list(start)}"
+        )
         for col, payload in start.items():
             series = state.imp[col]
             np.testing.assert_array_equal(
-                series.index.to_numpy(), as_array(payload["rows"], dtype=int), err_msg=f"rows of the start of {col}"
+                series.index.to_numpy(),
+                as_array(payload["rows"], dtype=int),
+                err_msg=f"{case['name']}: rows of the start of {col!r}",
             )
             series.iloc[:] = _r_values(series, payload["values"][chain])
         state.rng = _generator(case)
@@ -176,8 +226,8 @@ def _drawn(generators):
     return counts
 
 
-def _snapshot(mice, generators):
-    """The `Step` of `mice` as it is now."""
+def _snapshot(mice, generators, lost_observed):
+    """The `Step` of `mice` as it is now; `lost_observed` from `_recording_lost_values`."""
     return Step(
         imp=[{col: values.copy() for col, values in state.imp.items()} for state in mice._chain_states],
         datasets=[dataset.copy() for dataset in mice.imputed_datasets],
@@ -186,6 +236,7 @@ def _snapshot(mice, generators):
         logged_events=mice.logged_events.copy(),
         iteration=mice.iteration,
         draws_used=_drawn(generators),
+        lost_observed=lost_observed,
     )
 
 
@@ -373,6 +424,23 @@ def check_calls(case, run):
         np.testing.assert_allclose(call.x, r_x, rtol=RTOL, atol=ATOL, err_msg=f"{label}: x")
 
 
+def check_lost_observed_values(case, run):
+    """MICE's warning about lost observed values after the start and after every step: R's number of observed
+    where-cells that are NA in the completed data of some chain, per column, and the reason ("no method" for a
+    column whose method is ``""``)."""
+    expected = case.get("lost_observed") or {"start": {}, "steps": [{}] * len(case["steps"])}
+    labelled = [(f"{case['name']}, start", expected["start"], run.start_lost_observed)]
+    for (label, _, got), r_lost in zip(_steps(case, run), expected["steps"]):
+        labelled.append((label, r_lost, got.lost_observed))
+    for label, r_lost, lost in labelled:
+        r_counts = {str(col): int(n) for col, n in (r_lost or {}).items()}
+        counts = {col: n for col, (n, _) in lost.items()}
+        assert counts == r_counts, f"{label}: observed values lost per column {counts}, R's {r_counts}"
+        for col, (_, reason) in lost.items():
+            r_reason = "no method" if case["method"][col] == "" else "predictors incomplete in these rows"
+            assert reason == r_reason, f"{label}: observed values of {col!r} lost for {reason!r}, by R for {r_reason!r}"
+
+
 CHECKS = {
     "imputations": check_imputations,
     "completed": check_completed,
@@ -382,6 +450,7 @@ CHECKS = {
     "setup": check_setup,
     "draws": check_draws,
     "calls": check_calls,
+    "lost_observed_values": check_lost_observed_values,
 }
 
 

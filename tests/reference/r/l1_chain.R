@@ -39,6 +39,13 @@
 # mice.mids() with each further one, and requires that the result equals
 # mice() with their sum. The cases take the arguments of mice() through
 # `...` (encode_args() lists the ones it knows).
+#
+# The cases after the first ten pass `where`. complete() writes NA into a
+# where-cell without an imputation, also over an observed value; such a case
+# names the variables where that happens (`lost`), and the fixture holds,
+# after the start and after each step, the number of observed where-cells
+# of each that are NA in the completed data of some chain (mice-py warns
+# with these numbers). The other cases lose no observed value.
 
 source(file.path("tests", "reference", "r", "_common.R"))
 
@@ -115,6 +122,18 @@ z[z_missing] <- NA
 g[g_missing] <- NA
 syn <- data.frame(x1 = x1, x2 = x2, z = z, g = factor(g, levels = c("no", "yes")))
 stopifnot(all(c("no", "yes") %in% syn$g))
+
+# nhanes with k, a constant column: the setup step removes its method
+nhanes_k <- cbind(nhanes, k = 1)
+
+# The missing cells of `data`, with the cells of `add` (variable = rows) put
+# in and those of `drop` left out
+where_cells <- function(data, add = list(), drop = list()) {
+  where <- is.na(data)
+  for (j in names(add)) where[add[[j]], j] <- TRUE
+  for (j in names(drop)) where[drop[[j]], j] <- FALSE
+  where
+}
 
 # ---------------------------------------------------------------------------
 # The spy and the capture of logreg's probabilities
@@ -206,11 +225,20 @@ working_data <- function(obj, i = 1L) {
   data
 }
 
+# The completed data of the chain: `data` with every where-cell replaced by
+# its value in `imp`, as complete() does
+completed_data <- function(data, imp, where) {
+  for (j in colnames(where)[colSums(where) > 0]) {
+    data[where[, j], j] <- if (is.null(imp[[j]])) NA else imp[[j]]
+  }
+  data
+}
+
 # Go through the chain of `start` (m = 1) for sum(maxit) iterations as
 # sampler() and sampler.univ() do, from the generator state after the start,
 # and draw what each imputer is expected to draw (see the top of the file).
 # Returns the draws, their order as [pool, count] pairs, and at the end of
-# each step the working data, the generator state and the number of values
+# each step the completed data, the generator state and the number of values
 # drawn from each pool so far.
 replay_chain <- function(start, maxit) {
   stopifnot(start$m == 1L)
@@ -218,6 +246,8 @@ replay_chain <- function(start, maxit) {
   r <- !is.na(start$data)
   where <- start$where
   ignore <- start$ignore
+  # imp of the chain: the values of the where-cells of each variable
+  imp <- lapply(start$imp, function(imp_j) if (is.null(imp_j)) NULL else imp_j[, 1])
   # remove.lindep() writes to the log of the mice() call that runs it; here
   # it finds these
   state <- list(it = 0, im = 0, dep = "", meth = "", log = FALSE)
@@ -249,6 +279,7 @@ replay_chain <- function(start, maxit) {
       fill <- !r[, h] & where[, h]
       if (!any(wy)) {
         data[fill, h] <- NA
+        imp[[h]][] <- NA
         next
       }
       keep <- mice:::remove.lindep(x, y, ry)
@@ -278,11 +309,12 @@ replay_chain <- function(start, maxit) {
       new <- data[where[, h], h]
       new[!wy[where[, h]]] <- NA
       new[wy[where[, h]]] <- imputes
+      imp[[h]] <- new
       data[fill, h] <- new[fill[where[, h]]]
     }
     if (k %in% cumsum(maxit)) {
       steps[[length(steps) + 1L]] <- list(
-        data = data,
+        completed = completed_data(data, imp, where),
         seed = .Random.seed,
         used = lapply(pools, length)
       )
@@ -307,20 +339,27 @@ logged_events <- function(obj) {
   list(it = I(le$it), im = I(le$im), dep = I(le$dep), meth = I(le$meth), out = I(le$out))
 }
 
-# The arguments of mice() a case passes, for the Python side
+# The arguments of mice() a case passes, for the Python side. `where` is
+# written only when given: a keyword, or the matrix with its column names
+# (values a list of rows)
 encode_args <- function(args) {
   stopifnot(
     "encode_args() knows the arguments of mice() a case passes" =
-      all(names(args) %in% c("method", "predictorMatrix", "visitSequence"))
+      all(names(args) %in% c("method", "predictorMatrix", "visitSequence", "where"))
   )
   method <- args$method
   vis <- args$visitSequence
   keyword <- length(vis) == 1L && vis %in% c("roman", "arabic", "monotone", "revmonotone")
-  list(
+  out <- list(
     method = if (is.null(names(method))) method else as.list(method),
     predictor_matrix = if (is.null(args$predictorMatrix)) NULL else named_matrix(args$predictorMatrix),
     visit_sequence = if (is.null(vis) || keyword) vis else I(vis)
   )
+  where <- args$where
+  if (!is.null(where)) {
+    out$where <- if (is.character(where)) where else list(cols = I(colnames(where)), values = unname(where))
+  }
+  out
 }
 
 values_of <- function(v) if (is.factor(v)) as.character(v) else as.vector(v)
@@ -347,6 +386,17 @@ encode_chain <- function(obj, stat) {
   setNames(out, cols)
 }
 
+# Per variable, the number of observed where-cells that are NA in the
+# completed data of some chain; only the variables with such cells
+lost_observed <- function(obj) {
+  r <- !is.na(obj$data)
+  lost <- vapply(names(obj$data), function(j) {
+    na <- Reduce(`|`, lapply(seq_len(obj$m), function(i) is.na(complete(obj, i)[, j])))
+    sum(obj$where[, j] & r[, j] & na)
+  }, numeric(1))
+  as.list(lost[lost > 0])
+}
+
 encode_step <- function(obj, maxit, used) {
   list(
     maxit = maxit,
@@ -364,7 +414,7 @@ encode_step <- function(obj, maxit, used) {
 # One case
 # ---------------------------------------------------------------------------
 
-chain_case <- function(name, kind, data, m, maxit, seed, ...) {
+chain_case <- function(name, kind, data, m, maxit, seed, ..., lost = NULL) {
   args <- list(...)
   stopifnot(kind %in% c("deterministic", "scripted", "spy"), kind == "deterministic" || m == 1L)
   start <- run_mice(data, m, 0, seed, args)
@@ -375,6 +425,11 @@ chain_case <- function(name, kind, data, m, maxit, seed, ...) {
   if (length(maxit) > 1L) {
     stopifnot(same_run(last, run_mice(data, m, sum(maxit), seed, args)))
   }
+  # the variables named in `lost` are those whose completed data lose
+  # observed values, after the start or after a step
+  lost_start <- lost_observed(start)
+  lost_steps <- lapply(runs, lost_observed)
+  stopifnot(setequal(unique(c(names(lost_start), unlist(lapply(lost_steps, names)))), as.character(lost)))
 
   draws <- NULL
   used <- rep(list(NULL), length(runs))
@@ -383,7 +438,7 @@ chain_case <- function(name, kind, data, m, maxit, seed, ...) {
     for (s in seq_along(runs)) {
       stopifnot(
         identical(replay$steps[[s]]$seed, runs[[s]]$lastSeedValue),
-        isTRUE(all.equal(replay$steps[[s]]$data, complete(runs[[s]], 1), tolerance = 0))
+        isTRUE(all.equal(replay$steps[[s]]$completed, complete(runs[[s]], 1), tolerance = 0))
       )
     }
     draws <- list(
@@ -400,7 +455,7 @@ chain_case <- function(name, kind, data, m, maxit, seed, ...) {
   }
   stopifnot((kind == "spy") == (length(calls) > 0L))
 
-  list(
+  case <- list(
     name = name,
     kind = kind,
     data = encode_frame(data),
@@ -417,6 +472,10 @@ chain_case <- function(name, kind, data, m, maxit, seed, ...) {
     calls = if (kind == "spy") calls else NULL,
     steps = lapply(seq_along(runs), function(s) encode_step(runs[[s]], maxit[s], used[[s]]))
   )
+  if (!is.null(lost)) {
+    case$lost_observed <- list(start = lost_start, steps = lost_steps)
+  }
+  case
 }
 
 # ---------------------------------------------------------------------------
@@ -476,6 +535,75 @@ cases <- tryCatch(
     chain_case("continue_norm", "scripted", nhanes, 1L, c(2L, 3L), 7418L, method = "norm"),
     chain_case("continue_events", "deterministic", nhanes_wv, 2L, c(2L, 3L), 7419L,
       method = "norm.predict", predictorMatrix = predictors_of_v(nhanes_wv)
+    ),
+    # where: every cell. age is complete and gets a method; the chain
+    # statistics are taken over all 25 where-cells of each variable, so those
+    # of a variable imputed by mean are its observed mean and variance 0
+    chain_case("all_mean_norm_predict", "deterministic", nhanes, 2L, 2L, 7420L,
+      where = "all", method = c(age = "mean", bmi = "norm.predict", hyp = "mean", chl = "norm.predict")
+    ),
+    # every call fits on the observed rows and fills all 25 rows; the next
+    # variable is predicted from the observed values, not the imputations
+    chain_case("spy_all", "spy", nhanes, 1L, 2L, 7421L, where = "all", method = "spy"),
+    # 25 normals for the cells of each call
+    chain_case("norm_all", "scripted", nhanes, 1L, 2L, 7422L, where = "all", method = "norm"),
+    # the missing cells stay NA, so the observed where-cells of a row with a
+    # missing predictor become NA in the completed data. Nothing is written
+    # to the working data, so one iteration shows it all
+    chain_case("spy_observed", "spy", nhanes, 1L, 1L, 7423L,
+      where = "observed", method = "spy", lost = c("age", "bmi", "hyp", "chl")
+    ),
+    chain_case("none", "deterministic", nhanes, 2L, 1L, 7424L, where = "none"),
+    # bmi left out in rows 1 and 3 and hyp in row 6: they stay NA. Rows 1 and
+    # 3 are in neither mask of bmi with complete predictors, row 6 because
+    # hyp is missing; the where-cells of hyp and chl in row 1 and of bmi in
+    # row 6 get NA, and row 6 drops out of the fit rows of chl
+    chain_case("spy_left_out", "spy", nhanes, 1L, 2L, 7425L,
+      where = where_cells(nhanes, drop = list(bmi = c(1, 3), hyp = 6)), method = "spy"
+    ),
+    # the complete age with three where-cells
+    chain_case("complete_column", "deterministic", nhanes, 2L, 2L, 7426L,
+      where = where_cells(nhanes, add = list(age = c(3, 10, 20))), method = "norm.predict"
+    ),
+    # observed where-cells in age and bmi: bmi is predicted from the
+    # observed age, hyp from the observed bmi (x of the next calls), while
+    # the completed data hold their imputations
+    chain_case("spy_observed_where_cells", "spy", nhanes, 1L, 2L, 7427L,
+      where = where_cells(nhanes, add = list(age = c(3, 10, 20), bmi = c(2, 5))), method = "spy"
+    ),
+    # chl left out in row 15 and hyp in row 1: the where-cells of bmi in row
+    # 15 (observed) and row 1 (missing) and of chl in row 1 have an
+    # incomplete predictor at their visit and end as NA
+    chain_case("incomplete_predictors", "deterministic", nhanes, 2L, 2L, 7428L,
+      where = where_cells(nhanes, add = list(bmi = 15), drop = list(chl = 15, hyp = 1)),
+      method = "norm.predict", lost = "bmi"
+    ),
+    # hyp left out entirely (method ""), bmi left out in row 3: every
+    # where-cell of bmi lies in a row where hyp is missing
+    chain_case("no_complete_predictors", "deterministic", nhanes, 2L, 2L, 7429L,
+      where = where_cells(nhanes, drop = list(hyp = seq_len(n_rows), bmi = 3)), method = "norm.predict"
+    ),
+    # where = "all" with method "" for age: all 25 cells of age are NA in the
+    # completed data, and age still predicts with its observed values
+    chain_case("user_empty_method", "deterministic", nhanes, 2L, 2L, 7430L,
+      where = "all", method = c(age = "", bmi = "norm.predict", hyp = "norm.predict", chl = "norm.predict"),
+      lost = "age"
+    ),
+    # k has three where-cells and is removed as constant: they are NA
+    chain_case("constant_removed", "deterministic", nhanes_k, 2L, 2L, 7431L,
+      where = where_cells(nhanes_k, add = list(k = c(2, 5, 7))), method = "norm.predict", lost = "k"
+    ),
+    # observed where-cells, missing cells left out (the observed where-cell
+    # of age in row 3 ends as NA), continued with mice.mids()
+    chain_case("continue_where", "scripted", nhanes, 1L, c(2L, 3L), 7432L,
+      where = where_cells(nhanes, add = list(age = c(3, 10, 20), bmi = c(2, 5)), drop = list(bmi = c(1, 3))),
+      method = "norm", lost = "age"
+    ),
+    # where = "all": g is fitted on its observed rows with complete z and
+    # fills its 32 cells with complete z, overlapping; x1, x2, z have no
+    # method, so all their cells are NA in the completed data
+    chain_case("logreg_all", "scripted", syn, 1L, c(1L, 1L), 7433L,
+      where = "all", method = empty_method(syn, g = "logreg"), lost = c("x1", "x2", "z", "g")
     )
   ),
   finally = {
@@ -493,12 +621,15 @@ write_fixture("l1_chain", list(
     "normals, uniforms, in the order given as [pool, count] pairs) or 'spy'",
     "(m = 1; calls: what mice.impute.spy received at every call, x after",
     "remove.lindep). args: the arguments of mice() (method a string or one",
-    "per column; predictor_matrix, visit_sequence null when not given).",
+    "per column; predictor_matrix, visit_sequence null when not given; where",
+    "only when given, a keyword or cols and values, a list of rows).",
     "maxit: one value per step, the first for mice(), each further one for",
     "mice.mids(). steps: after each step imp, the completed data per chain,",
     "chain_mean and chain_var (numeric variables R imputes, iteration x",
     "chain), logged_events, iteration and the values drawn from each pool so",
-    "far (scripted)."
+    "far (scripted). lost_observed (only in cases that lose observed values):",
+    "per variable the number of observed where-cells that are NA in the",
+    "completed data of some chain, after the start and after each step."
   ),
   cases = cases
 ))

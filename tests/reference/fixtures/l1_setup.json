@@ -1,5 +1,5 @@
 {
-  "description": "mice(data, maxit = 0) with default arguments and with each visitSequence code. effective_visit_sequence keeps only variables with a non-empty method, in R's order: the order in which R actually imputes.",
+  "description": "mice(data, maxit = 0) with default arguments and with each visitSequence code. effective_visit_sequence keeps only variables with a non-empty method, in R's order: the order in which R actually imputes. where_cases: make.method(data, where = ) and mice(data, maxit = 0, where = ), where a keyword or cols and values (a list of rows), method_arg the method given to mice(). monotone_cases: mice(data, m = 1, maxit, visitSequence = visit_sequence_arg, method = 'norm.predict', where): the predictorMatrix that mice.edit.predictorMatrix() leaves, and for maxit = 1 with 'monotone' the completed data, which use no start value.",
   "cases": [
     {
       "name": "nhanes",
@@ -324,6 +324,704 @@
         "out": ["const", "dup"]
       },
       "incomplete_after_imputation": ["dup"]
+    }
+  ],
+  "where_cases": [
+    {
+      "name": "nhanes2_missing",
+      "data": {
+        "columns": ["age", "bmi", "hyp", "chl"],
+        "nrow": 25,
+        "data": {
+          "age": ["20-39", "40-59", "20-39", "60-99", "20-39", "60-99", "20-39", "20-39", "40-59", "40-59", "20-39", "40-59", "60-99", "40-59", "20-39", "20-39", "60-99", "40-59", "20-39", "60-99", "20-39", "20-39", "20-39", "60-99", "40-59"],
+          "bmi": [null, 22.699999999999999, null, null, 20.399999999999999, null, 22.5, 30.100000000000001, 22, null, null, null, 21.699999999999999, 28.699999999999999, 29.600000000000001, null, 27.199999999999999, 26.300000000000001, 35.299999999999997, 25.5, null, 33.200000000000003, 27.5, 24.899999999999999, 27.399999999999999],
+          "hyp": [null, "no", "no", null, "no", null, "no", "no", "no", null, null, null, "no", "yes", "no", null, "yes", "yes", "no", "yes", null, "no", "no", "no", "no"],
+          "chl": [null, 187, 187, null, 113, 184, 118, 187, 238, null, null, null, 206, 204, null, null, 284, 199, 218, null, null, 229, 131, null, 186]
+        },
+        "levels": {
+          "age": ["20-39", "40-59", "60-99"],
+          "hyp": ["no", "yes"]
+        },
+        "ordered": {
+          "age": false,
+          "hyp": false
+        }
+      },
+      "where": "missing",
+      "method_arg": null,
+      "nmis": {
+        "age": 0,
+        "bmi": 9,
+        "hyp": 8,
+        "chl": 10
+      },
+      "nimp": {
+        "age": 0,
+        "bmi": 9,
+        "hyp": 8,
+        "chl": 10
+      },
+      "make_method": {
+        "age": "",
+        "bmi": "pmm",
+        "hyp": "logreg",
+        "chl": "pmm"
+      },
+      "method": {
+        "age": "",
+        "bmi": "pmm",
+        "hyp": "logreg",
+        "chl": "pmm"
+      },
+      "predictor_matrix": {
+        "rows": ["age", "bmi", "hyp", "chl"],
+        "cols": ["age", "bmi", "hyp", "chl"],
+        "values": [
+          [0, 1, 1, 1],
+          [1, 0, 1, 1],
+          [1, 1, 0, 1],
+          [1, 1, 1, 0]
+        ]
+      },
+      "visit_sequence_default": ["age", "bmi", "hyp", "chl"],
+      "visit_sequence": {
+        "roman": ["bmi", "hyp", "chl"],
+        "arabic": ["chl", "hyp", "bmi"],
+        "monotone": ["age", "hyp", "bmi", "chl"],
+        "revmonotone": ["chl", "bmi", "hyp", "age"]
+      },
+      "imputed_variables": ["bmi", "hyp", "chl"],
+      "effective_visit_sequence": {
+        "roman": ["bmi", "hyp", "chl"],
+        "arabic": ["chl", "hyp", "bmi"],
+        "monotone": ["hyp", "bmi", "chl"],
+        "revmonotone": ["chl", "bmi", "hyp"]
+      },
+      "effective_visit_sequence_default": ["bmi", "hyp", "chl"]
+    },
+    {
+      "name": "nhanes2_all",
+      "data": {
+        "columns": ["age", "bmi", "hyp", "chl"],
+        "nrow": 25,
+        "data": {
+          "age": ["20-39", "40-59", "20-39", "60-99", "20-39", "60-99", "20-39", "20-39", "40-59", "40-59", "20-39", "40-59", "60-99", "40-59", "20-39", "20-39", "60-99", "40-59", "20-39", "60-99", "20-39", "20-39", "20-39", "60-99", "40-59"],
+          "bmi": [null, 22.699999999999999, null, null, 20.399999999999999, null, 22.5, 30.100000000000001, 22, null, null, null, 21.699999999999999, 28.699999999999999, 29.600000000000001, null, 27.199999999999999, 26.300000000000001, 35.299999999999997, 25.5, null, 33.200000000000003, 27.5, 24.899999999999999, 27.399999999999999],
+          "hyp": [null, "no", "no", null, "no", null, "no", "no", "no", null, null, null, "no", "yes", "no", null, "yes", "yes", "no", "yes", null, "no", "no", "no", "no"],
+          "chl": [null, 187, 187, null, 113, 184, 118, 187, 238, null, null, null, 206, 204, null, null, 284, 199, 218, null, null, 229, 131, null, 186]
+        },
+        "levels": {
+          "age": ["20-39", "40-59", "60-99"],
+          "hyp": ["no", "yes"]
+        },
+        "ordered": {
+          "age": false,
+          "hyp": false
+        }
+      },
+      "where": "all",
+      "method_arg": null,
+      "nmis": {
+        "age": 0,
+        "bmi": 9,
+        "hyp": 8,
+        "chl": 10
+      },
+      "nimp": {
+        "age": 25,
+        "bmi": 25,
+        "hyp": 25,
+        "chl": 25
+      },
+      "make_method": {
+        "age": "polyreg",
+        "bmi": "pmm",
+        "hyp": "logreg",
+        "chl": "pmm"
+      },
+      "method": {
+        "age": "polyreg",
+        "bmi": "pmm",
+        "hyp": "logreg",
+        "chl": "pmm"
+      },
+      "predictor_matrix": {
+        "rows": ["age", "bmi", "hyp", "chl"],
+        "cols": ["age", "bmi", "hyp", "chl"],
+        "values": [
+          [0, 1, 1, 1],
+          [1, 0, 1, 1],
+          [1, 1, 0, 1],
+          [1, 1, 1, 0]
+        ]
+      },
+      "visit_sequence_default": ["age", "bmi", "hyp", "chl"],
+      "visit_sequence": {
+        "roman": ["age", "bmi", "hyp", "chl"],
+        "arabic": ["chl", "hyp", "bmi", "age"],
+        "monotone": ["age", "bmi", "hyp", "chl"],
+        "revmonotone": ["chl", "hyp", "bmi", "age"]
+      },
+      "imputed_variables": ["age", "bmi", "hyp", "chl"],
+      "effective_visit_sequence": {
+        "roman": ["age", "bmi", "hyp", "chl"],
+        "arabic": ["chl", "hyp", "bmi", "age"],
+        "monotone": ["age", "bmi", "hyp", "chl"],
+        "revmonotone": ["chl", "hyp", "bmi", "age"]
+      },
+      "effective_visit_sequence_default": ["age", "bmi", "hyp", "chl"]
+    },
+    {
+      "name": "nhanes2_observed",
+      "data": {
+        "columns": ["age", "bmi", "hyp", "chl"],
+        "nrow": 25,
+        "data": {
+          "age": ["20-39", "40-59", "20-39", "60-99", "20-39", "60-99", "20-39", "20-39", "40-59", "40-59", "20-39", "40-59", "60-99", "40-59", "20-39", "20-39", "60-99", "40-59", "20-39", "60-99", "20-39", "20-39", "20-39", "60-99", "40-59"],
+          "bmi": [null, 22.699999999999999, null, null, 20.399999999999999, null, 22.5, 30.100000000000001, 22, null, null, null, 21.699999999999999, 28.699999999999999, 29.600000000000001, null, 27.199999999999999, 26.300000000000001, 35.299999999999997, 25.5, null, 33.200000000000003, 27.5, 24.899999999999999, 27.399999999999999],
+          "hyp": [null, "no", "no", null, "no", null, "no", "no", "no", null, null, null, "no", "yes", "no", null, "yes", "yes", "no", "yes", null, "no", "no", "no", "no"],
+          "chl": [null, 187, 187, null, 113, 184, 118, 187, 238, null, null, null, 206, 204, null, null, 284, 199, 218, null, null, 229, 131, null, 186]
+        },
+        "levels": {
+          "age": ["20-39", "40-59", "60-99"],
+          "hyp": ["no", "yes"]
+        },
+        "ordered": {
+          "age": false,
+          "hyp": false
+        }
+      },
+      "where": "observed",
+      "method_arg": null,
+      "nmis": {
+        "age": 0,
+        "bmi": 9,
+        "hyp": 8,
+        "chl": 10
+      },
+      "nimp": {
+        "age": 25,
+        "bmi": 16,
+        "hyp": 17,
+        "chl": 15
+      },
+      "make_method": {
+        "age": "polyreg",
+        "bmi": "pmm",
+        "hyp": "logreg",
+        "chl": "pmm"
+      },
+      "method": {
+        "age": "polyreg",
+        "bmi": "pmm",
+        "hyp": "logreg",
+        "chl": "pmm"
+      },
+      "predictor_matrix": {
+        "rows": ["age", "bmi", "hyp", "chl"],
+        "cols": ["age", "bmi", "hyp", "chl"],
+        "values": [
+          [0, 1, 1, 1],
+          [1, 0, 1, 1],
+          [1, 1, 0, 1],
+          [1, 1, 1, 0]
+        ]
+      },
+      "visit_sequence_default": ["age", "bmi", "hyp", "chl"],
+      "visit_sequence": {
+        "roman": ["age", "bmi", "hyp", "chl"],
+        "arabic": ["chl", "hyp", "bmi", "age"],
+        "monotone": ["chl", "bmi", "hyp", "age"],
+        "revmonotone": ["age", "hyp", "bmi", "chl"]
+      },
+      "imputed_variables": ["age", "bmi", "hyp", "chl"],
+      "effective_visit_sequence": {
+        "roman": ["age", "bmi", "hyp", "chl"],
+        "arabic": ["chl", "hyp", "bmi", "age"],
+        "monotone": ["chl", "bmi", "hyp", "age"],
+        "revmonotone": ["age", "hyp", "bmi", "chl"]
+      },
+      "effective_visit_sequence_default": ["age", "bmi", "hyp", "chl"]
+    },
+    {
+      "name": "nhanes2_none",
+      "data": {
+        "columns": ["age", "bmi", "hyp", "chl"],
+        "nrow": 25,
+        "data": {
+          "age": ["20-39", "40-59", "20-39", "60-99", "20-39", "60-99", "20-39", "20-39", "40-59", "40-59", "20-39", "40-59", "60-99", "40-59", "20-39", "20-39", "60-99", "40-59", "20-39", "60-99", "20-39", "20-39", "20-39", "60-99", "40-59"],
+          "bmi": [null, 22.699999999999999, null, null, 20.399999999999999, null, 22.5, 30.100000000000001, 22, null, null, null, 21.699999999999999, 28.699999999999999, 29.600000000000001, null, 27.199999999999999, 26.300000000000001, 35.299999999999997, 25.5, null, 33.200000000000003, 27.5, 24.899999999999999, 27.399999999999999],
+          "hyp": [null, "no", "no", null, "no", null, "no", "no", "no", null, null, null, "no", "yes", "no", null, "yes", "yes", "no", "yes", null, "no", "no", "no", "no"],
+          "chl": [null, 187, 187, null, 113, 184, 118, 187, 238, null, null, null, 206, 204, null, null, 284, 199, 218, null, null, 229, 131, null, 186]
+        },
+        "levels": {
+          "age": ["20-39", "40-59", "60-99"],
+          "hyp": ["no", "yes"]
+        },
+        "ordered": {
+          "age": false,
+          "hyp": false
+        }
+      },
+      "where": "none",
+      "method_arg": null,
+      "nmis": {
+        "age": 0,
+        "bmi": 9,
+        "hyp": 8,
+        "chl": 10
+      },
+      "nimp": {
+        "age": 0,
+        "bmi": 0,
+        "hyp": 0,
+        "chl": 0
+      },
+      "make_method": {
+        "age": "",
+        "bmi": "",
+        "hyp": "",
+        "chl": ""
+      },
+      "method": {
+        "age": "",
+        "bmi": "",
+        "hyp": "",
+        "chl": ""
+      },
+      "predictor_matrix": {
+        "rows": ["age", "bmi", "hyp", "chl"],
+        "cols": ["age", "bmi", "hyp", "chl"],
+        "values": [
+          [0, 1, 1, 1],
+          [1, 0, 1, 1],
+          [1, 1, 0, 1],
+          [1, 1, 1, 0]
+        ]
+      },
+      "visit_sequence_default": ["age", "bmi", "hyp", "chl"],
+      "visit_sequence": {
+        "roman": [],
+        "arabic": [],
+        "monotone": ["age", "bmi", "hyp", "chl"],
+        "revmonotone": ["chl", "hyp", "bmi", "age"]
+      },
+      "imputed_variables": [],
+      "effective_visit_sequence": {
+        "roman": [],
+        "arabic": [],
+        "monotone": [],
+        "revmonotone": []
+      },
+      "effective_visit_sequence_default": []
+    },
+    {
+      "name": "nhanes2_matrix",
+      "data": {
+        "columns": ["age", "bmi", "hyp", "chl"],
+        "nrow": 25,
+        "data": {
+          "age": ["20-39", "40-59", "20-39", "60-99", "20-39", "60-99", "20-39", "20-39", "40-59", "40-59", "20-39", "40-59", "60-99", "40-59", "20-39", "20-39", "60-99", "40-59", "20-39", "60-99", "20-39", "20-39", "20-39", "60-99", "40-59"],
+          "bmi": [null, 22.699999999999999, null, null, 20.399999999999999, null, 22.5, 30.100000000000001, 22, null, null, null, 21.699999999999999, 28.699999999999999, 29.600000000000001, null, 27.199999999999999, 26.300000000000001, 35.299999999999997, 25.5, null, 33.200000000000003, 27.5, 24.899999999999999, 27.399999999999999],
+          "hyp": [null, "no", "no", null, "no", null, "no", "no", "no", null, null, null, "no", "yes", "no", null, "yes", "yes", "no", "yes", null, "no", "no", "no", "no"],
+          "chl": [null, 187, 187, null, 113, 184, 118, 187, 238, null, null, null, 206, 204, null, null, 284, 199, 218, null, null, 229, 131, null, 186]
+        },
+        "levels": {
+          "age": ["20-39", "40-59", "60-99"],
+          "hyp": ["no", "yes"]
+        },
+        "ordered": {
+          "age": false,
+          "hyp": false
+        }
+      },
+      "where": {
+        "cols": ["age", "bmi", "hyp", "chl"],
+        "values": [
+          [false, false, false, true],
+          [true, false, false, true],
+          [false, false, false, false],
+          [false, false, false, true],
+          [true, false, false, true],
+          [false, false, false, false],
+          [true, false, false, false],
+          [true, false, false, false],
+          [true, false, false, false],
+          [false, false, true, true],
+          [false, false, true, true],
+          [false, false, true, true],
+          [true, false, false, false],
+          [false, false, false, false],
+          [false, false, false, true],
+          [false, false, true, true],
+          [false, false, false, false],
+          [false, false, false, false],
+          [false, false, false, false],
+          [false, false, false, true],
+          [false, false, true, true],
+          [false, false, false, false],
+          [false, false, false, false],
+          [false, false, false, true],
+          [false, false, false, false]
+        ]
+      },
+      "method_arg": null,
+      "nmis": {
+        "age": 0,
+        "bmi": 9,
+        "hyp": 8,
+        "chl": 10
+      },
+      "nimp": {
+        "age": 6,
+        "bmi": 0,
+        "hyp": 5,
+        "chl": 12
+      },
+      "make_method": {
+        "age": "polyreg",
+        "bmi": "",
+        "hyp": "logreg",
+        "chl": "pmm"
+      },
+      "method": {
+        "age": "polyreg",
+        "bmi": "",
+        "hyp": "logreg",
+        "chl": "pmm"
+      },
+      "predictor_matrix": {
+        "rows": ["age", "bmi", "hyp", "chl"],
+        "cols": ["age", "bmi", "hyp", "chl"],
+        "values": [
+          [0, 1, 1, 1],
+          [1, 0, 1, 1],
+          [1, 1, 0, 1],
+          [1, 1, 1, 0]
+        ]
+      },
+      "visit_sequence_default": ["age", "bmi", "hyp", "chl"],
+      "visit_sequence": {
+        "roman": ["age", "hyp", "chl"],
+        "arabic": ["chl", "hyp", "age"],
+        "monotone": ["bmi", "hyp", "age", "chl"],
+        "revmonotone": ["chl", "age", "hyp", "bmi"]
+      },
+      "imputed_variables": ["age", "hyp", "chl"],
+      "effective_visit_sequence": {
+        "roman": ["age", "hyp", "chl"],
+        "arabic": ["chl", "hyp", "age"],
+        "monotone": ["hyp", "age", "chl"],
+        "revmonotone": ["chl", "age", "hyp"]
+      },
+      "effective_visit_sequence_default": ["age", "hyp", "chl"]
+    },
+    {
+      "name": "nhanes2_matrix_user_method",
+      "data": {
+        "columns": ["age", "bmi", "hyp", "chl"],
+        "nrow": 25,
+        "data": {
+          "age": ["20-39", "40-59", "20-39", "60-99", "20-39", "60-99", "20-39", "20-39", "40-59", "40-59", "20-39", "40-59", "60-99", "40-59", "20-39", "20-39", "60-99", "40-59", "20-39", "60-99", "20-39", "20-39", "20-39", "60-99", "40-59"],
+          "bmi": [null, 22.699999999999999, null, null, 20.399999999999999, null, 22.5, 30.100000000000001, 22, null, null, null, 21.699999999999999, 28.699999999999999, 29.600000000000001, null, 27.199999999999999, 26.300000000000001, 35.299999999999997, 25.5, null, 33.200000000000003, 27.5, 24.899999999999999, 27.399999999999999],
+          "hyp": [null, "no", "no", null, "no", null, "no", "no", "no", null, null, null, "no", "yes", "no", null, "yes", "yes", "no", "yes", null, "no", "no", "no", "no"],
+          "chl": [null, 187, 187, null, 113, 184, 118, 187, 238, null, null, null, 206, 204, null, null, 284, 199, 218, null, null, 229, 131, null, 186]
+        },
+        "levels": {
+          "age": ["20-39", "40-59", "60-99"],
+          "hyp": ["no", "yes"]
+        },
+        "ordered": {
+          "age": false,
+          "hyp": false
+        }
+      },
+      "where": {
+        "cols": ["age", "bmi", "hyp", "chl"],
+        "values": [
+          [false, false, false, true],
+          [true, false, false, true],
+          [false, false, false, false],
+          [false, false, false, true],
+          [true, false, false, true],
+          [false, false, false, false],
+          [true, false, false, false],
+          [true, false, false, false],
+          [true, false, false, false],
+          [false, false, true, true],
+          [false, false, true, true],
+          [false, false, true, true],
+          [true, false, false, false],
+          [false, false, false, false],
+          [false, false, false, true],
+          [false, false, true, true],
+          [false, false, false, false],
+          [false, false, false, false],
+          [false, false, false, false],
+          [false, false, false, true],
+          [false, false, true, true],
+          [false, false, false, false],
+          [false, false, false, false],
+          [false, false, false, true],
+          [false, false, false, false]
+        ]
+      },
+      "method_arg": {
+        "age": "polyreg",
+        "bmi": "norm",
+        "hyp": "logreg",
+        "chl": "pmm"
+      },
+      "nmis": {
+        "age": 0,
+        "bmi": 9,
+        "hyp": 8,
+        "chl": 10
+      },
+      "nimp": {
+        "age": 6,
+        "bmi": 0,
+        "hyp": 5,
+        "chl": 12
+      },
+      "make_method": {
+        "age": "polyreg",
+        "bmi": "",
+        "hyp": "logreg",
+        "chl": "pmm"
+      },
+      "method": {
+        "age": "polyreg",
+        "bmi": "",
+        "hyp": "logreg",
+        "chl": "pmm"
+      },
+      "predictor_matrix": {
+        "rows": ["age", "bmi", "hyp", "chl"],
+        "cols": ["age", "bmi", "hyp", "chl"],
+        "values": [
+          [0, 1, 1, 1],
+          [1, 0, 1, 1],
+          [1, 1, 0, 1],
+          [1, 1, 1, 0]
+        ]
+      },
+      "visit_sequence_default": ["age", "bmi", "hyp", "chl"],
+      "visit_sequence": {
+        "roman": ["age", "hyp", "chl"],
+        "arabic": ["chl", "hyp", "age"],
+        "monotone": ["bmi", "hyp", "age", "chl"],
+        "revmonotone": ["chl", "age", "hyp", "bmi"]
+      },
+      "imputed_variables": ["age", "hyp", "chl"],
+      "effective_visit_sequence": {
+        "roman": ["age", "hyp", "chl"],
+        "arabic": ["chl", "hyp", "age"],
+        "monotone": ["hyp", "age", "chl"],
+        "revmonotone": ["chl", "age", "hyp"]
+      },
+      "effective_visit_sequence_default": ["age", "hyp", "chl"]
+    }
+  ],
+  "monotone_cases": [
+    {
+      "name": "nhanes_monotone",
+      "data": {
+        "columns": ["age", "bmi", "hyp", "chl"],
+        "nrow": 25,
+        "data": {
+          "age": [1, 2, 1, 3, 1, 3, 1, 1, 2, 2, 1, 2, 3, 2, 1, 1, 3, 2, 1, 3, 1, 1, 1, 3, 2],
+          "bmi": [null, 22.699999999999999, null, null, 20.399999999999999, null, 22.5, 30.100000000000001, 22, null, null, null, 21.699999999999999, 28.699999999999999, 29.600000000000001, null, 27.199999999999999, 26.300000000000001, 35.299999999999997, 25.5, null, 33.200000000000003, 27.5, 24.899999999999999, 27.399999999999999],
+          "hyp": [null, 1, 1, null, 1, null, 1, 1, 1, null, null, null, 1, 2, 1, null, 2, 2, 1, 2, null, 1, 1, 1, 1],
+          "chl": [null, 187, 187, null, 113, 184, 118, 187, 238, null, null, null, 206, 204, null, null, 284, 199, 218, null, null, 229, 131, null, 186]
+        },
+        "levels": {},
+        "ordered": {}
+      },
+      "where": null,
+      "maxit": 1,
+      "visit_sequence_arg": "monotone",
+      "method": {
+        "age": "",
+        "bmi": "norm.predict",
+        "hyp": "norm.predict",
+        "chl": "norm.predict"
+      },
+      "predictor_matrix": {
+        "rows": ["age", "bmi", "hyp", "chl"],
+        "cols": ["age", "bmi", "hyp", "chl"],
+        "values": [
+          [0, 0, 0, 0],
+          [1, 0, 1, 0],
+          [1, 0, 0, 0],
+          [1, 1, 1, 0]
+        ]
+      },
+      "visit_sequence": ["age", "hyp", "bmi", "chl"],
+      "effective_visit_sequence": ["hyp", "bmi", "chl"],
+      "completed": {
+        "columns": ["age", "bmi", "hyp", "chl"],
+        "nrow": 25,
+        "data": {
+          "age": [1, 2, 1, 3, 1, 3, 1, 1, 2, 2, 1, 2, 3, 2, 1, 1, 3, 2, 1, 3, 1, 1, 1, 3, 2],
+          "bmi": [28.07755039193729, 22.699999999999999, 27.984736842105264, 24.333916573348265, 20.399999999999999, 24.333916573348265, 22.5, 30.100000000000001, 22, 26.205733482642781, 28.07755039193729, 26.205733482642781, 21.699999999999999, 28.699999999999999, 29.600000000000001, 28.07755039193729, 27.199999999999999, 26.300000000000001, 35.299999999999997, 25.5, 28.07755039193729, 33.200000000000003, 27.5, 24.899999999999999, 27.399999999999999],
+          "hyp": [1.0319148936170215, 1, 1, 1.5638297872340432, 1, 1.5638297872340432, 1, 1, 1, 1.2978723404255323, 1.0319148936170215, 1.2978723404255323, 1, 2, 1, 1.0319148936170215, 2, 2, 1, 2, 1.0319148936170215, 1, 1, 1, 1],
+          "chl": [171.22289054610695, 187, 187, 230.49810474958952, 113, 184, 118, 187, 238, 200.86049764784829, 171.22289054610695, 200.86049764784829, 206, 204, 181.93436848847634, 171.22289054610695, 284, 199, 218, 236.38998289513952, 171.22289054610695, 229, 131, 237.25178497242888, 186]
+        },
+        "levels": {},
+        "ordered": {}
+      }
+    },
+    {
+      "name": "nhanes_monotone_where",
+      "data": {
+        "columns": ["age", "bmi", "hyp", "chl"],
+        "nrow": 25,
+        "data": {
+          "age": [1, 2, 1, 3, 1, 3, 1, 1, 2, 2, 1, 2, 3, 2, 1, 1, 3, 2, 1, 3, 1, 1, 1, 3, 2],
+          "bmi": [null, 22.699999999999999, null, null, 20.399999999999999, null, 22.5, 30.100000000000001, 22, null, null, null, 21.699999999999999, 28.699999999999999, 29.600000000000001, null, 27.199999999999999, 26.300000000000001, 35.299999999999997, 25.5, null, 33.200000000000003, 27.5, 24.899999999999999, 27.399999999999999],
+          "hyp": [null, 1, 1, null, 1, null, 1, 1, 1, null, null, null, 1, 2, 1, null, 2, 2, 1, 2, null, 1, 1, 1, 1],
+          "chl": [null, 187, 187, null, 113, 184, 118, 187, 238, null, null, null, 206, 204, null, null, 284, 199, 218, null, null, 229, 131, null, 186]
+        },
+        "levels": {},
+        "ordered": {}
+      },
+      "where": {
+        "cols": ["age", "bmi", "hyp", "chl"],
+        "values": [
+          [false, true, true, true],
+          [false, false, true, false],
+          [false, true, false, false],
+          [false, true, true, true],
+          [false, false, true, false],
+          [false, true, true, false],
+          [false, false, true, false],
+          [false, false, true, false],
+          [false, false, true, false],
+          [false, true, true, true],
+          [false, true, true, true],
+          [false, true, true, true],
+          [false, false, true, false],
+          [false, false, false, false],
+          [false, false, false, true],
+          [false, true, true, true],
+          [false, false, false, false],
+          [false, false, false, false],
+          [false, false, false, false],
+          [false, false, false, true],
+          [false, true, true, true],
+          [false, false, false, false],
+          [false, false, false, false],
+          [false, false, false, true],
+          [false, false, false, false]
+        ]
+      },
+      "maxit": 1,
+      "visit_sequence_arg": "monotone",
+      "method": {
+        "age": "",
+        "bmi": "norm.predict",
+        "hyp": "norm.predict",
+        "chl": "norm.predict"
+      },
+      "predictor_matrix": {
+        "rows": ["age", "bmi", "hyp", "chl"],
+        "cols": ["age", "bmi", "hyp", "chl"],
+        "values": [
+          [0, 0, 0, 0],
+          [1, 0, 0, 0],
+          [1, 1, 0, 1],
+          [1, 1, 0, 0]
+        ]
+      },
+      "visit_sequence": ["age", "bmi", "chl", "hyp"],
+      "effective_visit_sequence": ["bmi", "chl", "hyp"],
+      "completed": {
+        "columns": ["age", "bmi", "hyp", "chl"],
+        "nrow": 25,
+        "data": {
+          "age": [1, 2, 1, 3, 1, 3, 1, 1, 2, 2, 1, 2, 3, 2, 1, 1, 3, 2, 1, 3, 1, 1, 1, 3, 2],
+          "bmi": [28.089221556886226, 22.699999999999999, 28.089221556886226, 24.331137724550899, 20.399999999999999, 24.331137724550899, 22.5, 30.100000000000001, 22, 26.210179640718561, 28.089221556886226, 26.210179640718561, 21.699999999999999, 28.699999999999999, 29.600000000000001, 28.089221556886226, 27.199999999999999, 26.300000000000001, 35.299999999999997, 25.5, 28.089221556886226, 33.200000000000003, 27.5, 24.899999999999999, 27.399999999999999],
+          "hyp": [1.0307395995504027, 1.1908647507731742, 1, 1.57252696332702, 0.81488467530860764, 1.6167180202318754, 0.88423304572579253, 1.0866298847609723, 1.1174890326481977, 1.3016332814387115, 1.0307395995504027, 1.3016332814387115, 1.5028570603435167, 2, 1, 1.0307395995504027, 2, 2, 1, 2, 1.0307395995504027, 1, 1, 1, 1],
+          "chl": [171.19727803970767, 187, 187, 230.30748973890039, 113, 184, 118, 187, 238, 200.75238388930401, 171.19727803970767, 200.75238388930401, 206, 204, 181.45918404092137, 171.19727803970767, 284, 199, 218, 238.24694297487707, 171.19727803970767, 229, 131, 234.17146544288494, 186]
+        },
+        "levels": {},
+        "ordered": {}
+      }
+    },
+    {
+      "name": "nhanes_monotone_maxit_2",
+      "data": {
+        "columns": ["age", "bmi", "hyp", "chl"],
+        "nrow": 25,
+        "data": {
+          "age": [1, 2, 1, 3, 1, 3, 1, 1, 2, 2, 1, 2, 3, 2, 1, 1, 3, 2, 1, 3, 1, 1, 1, 3, 2],
+          "bmi": [null, 22.699999999999999, null, null, 20.399999999999999, null, 22.5, 30.100000000000001, 22, null, null, null, 21.699999999999999, 28.699999999999999, 29.600000000000001, null, 27.199999999999999, 26.300000000000001, 35.299999999999997, 25.5, null, 33.200000000000003, 27.5, 24.899999999999999, 27.399999999999999],
+          "hyp": [null, 1, 1, null, 1, null, 1, 1, 1, null, null, null, 1, 2, 1, null, 2, 2, 1, 2, null, 1, 1, 1, 1],
+          "chl": [null, 187, 187, null, 113, 184, 118, 187, 238, null, null, null, 206, 204, null, null, 284, 199, 218, null, null, 229, 131, null, 186]
+        },
+        "levels": {},
+        "ordered": {}
+      },
+      "where": null,
+      "maxit": 2,
+      "visit_sequence_arg": "monotone",
+      "method": {
+        "age": "",
+        "bmi": "norm.predict",
+        "hyp": "norm.predict",
+        "chl": "norm.predict"
+      },
+      "predictor_matrix": {
+        "rows": ["age", "bmi", "hyp", "chl"],
+        "cols": ["age", "bmi", "hyp", "chl"],
+        "values": [
+          [0, 1, 1, 1],
+          [1, 0, 1, 1],
+          [1, 1, 0, 1],
+          [1, 1, 1, 0]
+        ]
+      },
+      "visit_sequence": ["age", "hyp", "bmi", "chl"],
+      "effective_visit_sequence": ["hyp", "bmi", "chl"],
+      "completed": null
+    },
+    {
+      "name": "nhanes_revmonotone",
+      "data": {
+        "columns": ["age", "bmi", "hyp", "chl"],
+        "nrow": 25,
+        "data": {
+          "age": [1, 2, 1, 3, 1, 3, 1, 1, 2, 2, 1, 2, 3, 2, 1, 1, 3, 2, 1, 3, 1, 1, 1, 3, 2],
+          "bmi": [null, 22.699999999999999, null, null, 20.399999999999999, null, 22.5, 30.100000000000001, 22, null, null, null, 21.699999999999999, 28.699999999999999, 29.600000000000001, null, 27.199999999999999, 26.300000000000001, 35.299999999999997, 25.5, null, 33.200000000000003, 27.5, 24.899999999999999, 27.399999999999999],
+          "hyp": [null, 1, 1, null, 1, null, 1, 1, 1, null, null, null, 1, 2, 1, null, 2, 2, 1, 2, null, 1, 1, 1, 1],
+          "chl": [null, 187, 187, null, 113, 184, 118, 187, 238, null, null, null, 206, 204, null, null, 284, 199, 218, null, null, 229, 131, null, 186]
+        },
+        "levels": {},
+        "ordered": {}
+      },
+      "where": null,
+      "maxit": 1,
+      "visit_sequence_arg": "revmonotone",
+      "method": {
+        "age": "",
+        "bmi": "norm.predict",
+        "hyp": "norm.predict",
+        "chl": "norm.predict"
+      },
+      "predictor_matrix": {
+        "rows": ["age", "bmi", "hyp", "chl"],
+        "cols": ["age", "bmi", "hyp", "chl"],
+        "values": [
+          [0, 1, 1, 1],
+          [1, 0, 1, 1],
+          [1, 1, 0, 1],
+          [1, 1, 1, 0]
+        ]
+      },
+      "visit_sequence": ["chl", "bmi", "hyp", "age"],
+      "effective_visit_sequence": ["chl", "bmi", "hyp"],
+      "completed": null
     }
   ],
   "meta": {

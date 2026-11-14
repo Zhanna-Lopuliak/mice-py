@@ -84,7 +84,7 @@ Written by `write_fixture(name, payload)` in `r/_common.R` and read by
 | `l1_quantify` | `mice:::quantify(y, ry, x)` | `imputation.PMM.quantify` (equal up to sign) |
 | `l1_pmm_one_donor` | `mice.impute.pmm(y, ry, x, donors = 1, matchtype)` with captured draws | `imputation.PMM.pmm` |
 | `l1_matchindex` | donors reached by 2000 calls of `matchindex(d, t, k)` | `imputation.PMM.matchindex` |
-| `l1_setup` | `mice(data, maxit = 0)`: method, predictorMatrix, visitSequence, loggedEvents | `MICE.impute`: `.method`, `.predictor_matrix`, `.visit_sequence`; `imputation.make_method` |
+| `l1_setup` | `mice(data, maxit = 0)`: method, predictorMatrix, visitSequence, loggedEvents. `where_cases`: `make.method(data, where = )` and `mice(data, maxit = 0, where = )` for the four keywords and a matrix (a complete column with where-cells, an incomplete one without, also with a method named by the user; where-counts that reorder `"monotone"`), with the visit sequence of each keyword. `monotone_cases`: `mice(data, m = 1, maxit, visitSequence, method = "norm.predict", where)`, the predictorMatrix that `mice.edit.predictorMatrix()` edits for `"monotone"` with `maxit = 1` (also under a `where` that changes the order) and leaves alone for `maxit = 2` and `"revmonotone"`; the completed data of the edited runs | `MICE.impute`: `.method`, `.predictor_matrix`, `.visit_sequence`, `.imputed_datasets`; `imputation.make_method` |
 | `l1_make_method` | `make.method(data)` and `make.method(data, defaultMethod = ...)` on one column of each type `assign.method` tells apart (numeric, integer 0/1, logical, factors with 1, 2 and 3 levels, a factor with 3 declared and 2 observed levels, ordered factors with 2 and 4 levels, character, complete), with `class()` of each column | `imputation.make_method` |
 | `l1_design` | `mice:::obtain.design`, `mice:::remove.lindep`, `mice:::find.collinear` | `imputation.design` |
 | `l1_quickpred` | `quickpred(data, ...)` on nhanes and boys | `imputation.quickpred` |
@@ -97,7 +97,7 @@ Written by `write_fixture(name, payload)` in `r/_common.R` and read by
 | `l1_vmmin` | `optim(par, fn, gr, method = "BFGS")` (R's C function `vmmin`, which `nnet` and `MASS::polr` call too) on a quadratic, Rosenbrock's function, a logistic likelihood, a function that is NaN outside its domain and one started at its minimum, with other `maxit`, `abstol` and `reltol`: parameters, value, function and gradient counts, convergence | `imputation.fitting.vmmin` |
 | `l1_polyreg` | `mice.impute.polyreg()` with its uniform numbers captured by re-seeding, rebuilt from `augment()`, `nnet::multinom()` and `predict()`: objective, convergence, coefficients, probabilities of every imputed cell, labels; R's errors where the port goes on or stops; direct `nnet::multinom()` fits (two classes on separated data, case weights) | `imputation.polyreg._polyreg` (the steps of `polyreg`), driven by a strict `ScriptedGenerator`; `imputation.fitting.multinom_fit` |
 | `l1_polr` | `mice.impute.polr()` with its uniform numbers captured by re-seeding, rebuilt from `augment()`, `MASS::polr()` or `nnet::multinom()` and the cumulative rule: the class of the fit R made and polr's error (the reason for the fallback), coefficients, cut points, deviance (objective), convergence, probabilities of every imputed cell, labels; R's errors or other results where the port goes on or stops; direct `MASS::polr()` fits (case weights, 3 and 5 levels, no predictor, an aliased column) and the conditions under which it stops | `imputation.polr._polr` (the steps of `polr`), driven by a strict `ScriptedGenerator`; `imputation.fitting.polr_fit` |
-| `l1_chain` | Whole chains: `mice(data, m, maxit = 0)` for the start values and the generator state after them, `mice(data, m, maxit)` and `mice.mids()` for the run: `imp`, the completed data, `chainMean`, `chainVar`, method, visit sequence, predictor matrix, `loggedEvents`, `iteration` after each step. Deterministic cases (`norm.predict`, `mean`; nothing drawn after the start), scripted cases (`norm`, `logreg`, one chain; every draw of the chain captured by replaying it from `lastSeedValue`, the state after each imputer call proving kind, number and order) and spy cases (a method `mice.impute.spy` records what `sampler.univ()` hands the imputer at every call) | `MICE.impute(maxit=0)` with R's start values and a strict `ScriptedGenerator` written into each chain state, then `MICE.continue_chains` (`tests/test_parity/_l1_chain.py`); for the spy, a method registered under the same name |
+| `l1_chain` | Whole chains: `mice(data, m, maxit = 0)` for the start values and the generator state after them, `mice(data, m, maxit)` and `mice.mids()` for the run: `imp`, the completed data, `chainMean`, `chainVar`, method, visit sequence, predictor matrix, `loggedEvents`, `iteration` after each step. Deterministic cases (`norm.predict`, `mean`; nothing drawn after the start), scripted cases (`norm`, `logreg`, one chain; every draw of the chain captured by replaying it from `lastSeedValue`, the state after each imputer call proving kind, number and order) and spy cases (a method `mice.impute.spy` records what `sampler.univ()` hands the imputer at every call). The cases with `where`: the keywords `"all"` (deterministic, spy, scripted `norm` and `logreg`), `"observed"` and `"none"`; matrices with missing cells left out, a complete column with where-cells, observed where-cells in predictor columns, where-cells without complete predictors (observed and missing; all of a column), a column with where-cells and method `""` (the user's, the setup step's), a continued run; for the cases whose completed data lose observed values, their number per variable after the start and each step (`lost_observed`) | `MICE.impute(maxit=0)` with R's start values and a strict `ScriptedGenerator` written into each chain state, then `MICE.continue_chains` (`tests/test_parity/_l1_chain.py`); for the spy, a method registered under the same name; the counts of the warning about lost observed values |
 
 Behaviours of R mice 3.19.0 that the fixtures pin down and that are easy to
 get wrong:
@@ -174,6 +174,38 @@ get wrong:
   log "df set to 1" again, while `remove.lindep()` logs its events in every
   iteration, numbered on from the earlier calls (`l1_chain`, case
   `continue_events`).
+- Under `where`, `sampler()` writes into the data it works on only the
+  imputations of missing where-cells: an observed where-cell keeps its
+  observed value there, so the other variables are predicted from it, and
+  the model of its own variable is fitted on it, while `complete()` writes
+  the imputation (`l1_chain`, cases `spy_all`, `spy_observed_where_cells`).
+  A missing cell that `where` leaves out stays `NA` and puts the rows of
+  other variables in neither mask (`spy_left_out`).
+- `complete()` writes `imp` into every where-cell, so a where-cell without
+  an imputation is `NA` in the completed data, also over an observed value:
+  all where-cells of a variable with method `""`, given by the user or set
+  by the setup step for a constant variable (`user_empty_method`,
+  `constant_removed`), and the where-cells whose predictors are incomplete
+  at the visit (`incomplete_predictors`, `spy_observed`). R does this
+  silently; mice-py warns with the number of observed values lost per
+  variable, which the fixture records (`lost_observed`). When no where-cell
+  of a variable has complete predictors, `sampler.univ()` returns
+  `numeric(0)`, `imp` holds `NA` for all of them, `chainMean` is `NaN` and
+  `chainVar` `NA` (`no_complete_predictors`).
+- `chainMean` and `chainVar` are taken over all where-cells, observed ones
+  included: under `where = "all"` with `mean`, `chainMean` is the observed
+  mean and `chainVar` 0 (`all_mean_norm_predict`).
+- `make.method()` and `check.method()` count where-cells, not missing
+  values: a complete variable with where-cells gets the method of its type,
+  and a variable without where-cells gets `""`, also when the user names a
+  method for it (`l1_setup`, `where_cases`). With `where = "none"` every
+  method is `""` and `visitSequence` still lists every variable.
+- `"monotone"` orders all variables by their number of where-cells, those
+  without any included. With `maxit = 1` and `visitSequence = "monotone"`
+  (the keyword, given by the user), `mice.edit.predictorMatrix()` keeps for
+  each variable only the variables before it in that order, before the
+  methods are set; one such iteration uses no start value. `maxit = 2` and
+  `"revmonotone"` leave the matrix alone (`l1_setup`, `monotone_cases`).
 
 ## Layer 2 fixtures
 
@@ -259,9 +291,11 @@ for the missing rows that differ by at least 0.15 (they differ by up to
 mixed frame of 100 rows: per statistic of the last iteration, the mean,
 variance and kurtosis over the chains of the mean and variance of the
 imputed numeric values and of the share of each level but the first among
-the imputed labels) and `l3_mini_s4` (scenario S4 of the simulation study
-with pmm, midastouch and norm, 20,000 replications) have their own formats,
-described at the top of their scripts.
+the imputed labels), `l2_chain_where` (the same with `where = "all"` on the
+same frame, the complete column imputed too, the statistics taken over all
+where-cells) and `l3_mini_s4` (scenario S4 of the simulation study with pmm,
+midastouch and norm, 20,000 replications) have their own formats, described
+at the top of their scripts.
 
 ## Licence
 

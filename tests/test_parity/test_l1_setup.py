@@ -15,6 +15,17 @@ must give R's ``imp$method`` (the default of each column's type, then the
 setup step), and ``imputation.make_method`` R's ``make.method`` where the
 setup step changed nothing (nhanes2: logreg for the factor ``hyp``; boys:
 polr for the ordered ``gen`` and ``phb``, polyreg for ``reg``).
+
+Under ``where`` (``where_cases``): ``make_method(data, where=)`` and the
+methods, predictor matrix and visit sequences of ``impute(maxit=0, where=)``
+against R's ``make.method(data, where = )`` and ``mice(data, maxit = 0,
+where = )``, for R's keywords and a matrix whose where-counts differ from
+the missing counts. ``monotone_cases``: the predictor matrix that R's
+``mice.edit.predictorMatrix`` leaves for ``visitSequence = "monotone"`` with
+``maxit = 1`` (each column predicted only by the columns before it), and
+leaves alone otherwise; one such iteration uses no start value, so its
+completed data are compared too. test_l1_chain_mutants runs these
+comparisons against a defective library.
 """
 
 import warnings
@@ -200,6 +211,150 @@ def _visit_params():
 def test_visit_sequence_matches_r(case, code):
     df, mice = _impute(case, visit_sequence=code)
     _check_visit_sequence(case, df, mice.visit_sequence, case["effective_visit_sequence"][code])
+
+
+# ---------------------------------------------------------------------------
+# where: make_method, methods, predictor matrix, visit sequence
+# ---------------------------------------------------------------------------
+
+WHERE = SETUP["where_cases"]
+MONOTONE = SETUP["monotone_cases"]
+RTOL = 1e-8
+ATOL = 1e-10
+
+
+def _where(case, df):
+    """The ``where`` of the case for `impute`: R's keyword, or its matrix as a frame with the index of `df`."""
+    where = case["where"]
+    if where is None or isinstance(where, str):
+        return where
+    return pd.DataFrame(np.array(where["values"], dtype=bool), index=df.index, columns=str_list(where["cols"]))
+
+
+def _impute_where(case, **kwargs):
+    """``impute(maxit=0)`` with the ``where`` and ``method`` of the case, as R's ``mice(maxit = 0)``."""
+    df = decode_frame(case["data"])
+    mice = MICE(df)
+    if case["method_arg"] is not None:
+        kwargs["method"] = {col: str(meth) for col, meth in case["method_arg"].items()}
+    impute_checking_log_warning(mice, n_imputations=1, maxit=0, seed=20261112, where=_where(case, df), **kwargs)
+    return mice
+
+
+def check_where_methods(case):
+    """``make_method(data, where=)`` and the methods of ``impute(where=)``: R's ``make.method`` and ``imp$method``."""
+    df = decode_frame(case["data"])
+    made = {str(col): meth for col, meth in make_method(df, where=_where(case, df)).items()}
+    assert made == case["make_method"], f"{case['name']}: make_method gives {made}, R's {case['make_method']}"
+    method = {str(col): meth for col, meth in _impute_where(case).method.items()}
+    assert method == case["method"], f"{case['name']}: methods {method}, R's {case['method']}"
+
+
+def check_where_visit_sequences(case):
+    """The visit sequence by default and for each keyword: R's, restricted to the variables R imputes."""
+    for code in [None, *VISITS]:
+        if code is None:
+            mice, expected = _impute_where(case), case["effective_visit_sequence_default"]
+        else:
+            mice, expected = _impute_where(case, visit_sequence=code), case["effective_visit_sequence"][code]
+        visits = [str(col) for col in mice.visit_sequence]
+        assert visits == str_list(expected), (
+            f"{case['name']}: visit sequence {code or 'default'} {visits}, R's {str_list(expected)}"
+        )
+
+
+def _check_predictor_matrix(case, mice):
+    """The whole predictor matrix: R's."""
+    expected = _r_matrix(case["predictor_matrix"])
+    got = mice.predictor_matrix.loc[expected.index, expected.columns].astype(int)
+    rows = [row for row in expected.index if not (got.loc[row] == expected.loc[row]).all()]
+    assert rows == [], f"{case['name']}: the predictor matrix differs from R's in the rows {rows}"
+
+
+@pytest.mark.parametrize("case", WHERE, ids=[c["name"] for c in WHERE])
+def test_where_methods_match_r(case):
+    check_where_methods(case)
+
+
+@pytest.mark.parametrize("case", WHERE, ids=[c["name"] for c in WHERE])
+def test_where_predictor_matrix_matches_r(case):
+    _check_predictor_matrix(case, _impute_where(case))
+
+
+@pytest.mark.parametrize("case", WHERE, ids=[c["name"] for c in WHERE])
+def test_where_visit_sequences_match_r(case):
+    check_where_visit_sequences(case)
+
+
+def test_where_cases_cover_the_keywords_and_the_counts():
+    keywords = {case["where"] for case in WHERE if isinstance(case["where"], str)}
+    assert keywords == {"missing", "all", "observed", "none"}
+    cases = [case for case in WHERE if not isinstance(case["where"], str)]
+    for case in cases:
+        nmis, nimp = case["nmis"], case["nimp"]
+        assert any(nmis[col] == 0 and nimp[col] > 0 for col in nimp), "no complete column with where-cells"
+        assert any(nmis[col] > 0 and nimp[col] == 0 for col in nimp), "no incomplete column without where-cells"
+        # R's monotone order by where-cells, not by missing values
+        imputed = str_list(case["imputed_variables"])
+        by_missing = sorted(imputed, key=lambda col: nmis[col])
+        assert str_list(case["effective_visit_sequence"]["monotone"]) != by_missing
+    # the user names a method for the column without where-cells: R gives it ""
+    assert any(
+        case["method_arg"] is not None
+        and any(case["method_arg"][col] and case["nimp"][col] == 0 for col in case["method_arg"])
+        for case in cases
+    )
+
+
+# ---------------------------------------------------------------------------
+# the monotone edit of the predictor matrix (R's mice.edit.predictorMatrix)
+# ---------------------------------------------------------------------------
+
+
+def check_monotone_case(case):
+    """``impute(n_imputations=1, maxit, visit_sequence, method="norm.predict", where)``: R's predictor matrix and
+    visit sequence; for one iteration of "monotone" R's completed data."""
+    df = decode_frame(case["data"])
+    mice = MICE(df)
+    impute_checking_log_warning(
+        mice,
+        n_imputations=1,
+        maxit=case["maxit"],
+        seed=20261112,
+        method="norm.predict",
+        visit_sequence=case["visit_sequence_arg"],
+        where=_where(case, df),
+    )
+    _check_predictor_matrix(case, mice)
+    visits = [str(col) for col in mice.visit_sequence]
+    r_visits = str_list(case["effective_visit_sequence"])
+    assert visits == r_visits, f"{case['name']}: visit sequence {visits}, R's {r_visits}"
+    if case["completed"] is None:
+        return
+    r_frame = decode_frame(case["completed"])
+    for col in r_frame.columns:
+        np.testing.assert_allclose(
+            mice.imputed_datasets[0][col].to_numpy(dtype=float, na_value=np.nan),
+            r_frame[col].to_numpy(dtype=float),
+            rtol=RTOL,
+            atol=ATOL,
+            err_msg=f"{case['name']}: completed data, {col!r}",
+        )
+
+
+@pytest.mark.parametrize("case", MONOTONE, ids=[c["name"] for c in MONOTONE])
+def test_monotone_edit_matches_r(case):
+    check_monotone_case(case)
+
+
+def test_monotone_cases_cover_the_edit_and_its_absence():
+    runs = {(case["maxit"], case["visit_sequence_arg"], case["where"] is not None) for case in MONOTONE}
+    assert {(1, "monotone", False), (1, "monotone", True), (2, "monotone", False), (1, "revmonotone", False)} <= runs
+    for case in MONOTONE:
+        # R's matrix is the default (all ones off the diagonal) unless edited
+        matrix = np.array(case["predictor_matrix"]["values"], dtype=int)
+        unedited = (matrix == 1 - np.eye(len(matrix), dtype=int)).all()
+        assert unedited == (case["completed"] is None), case["name"]
 
 
 # ---------------------------------------------------------------------------

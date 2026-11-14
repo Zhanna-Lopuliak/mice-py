@@ -14,15 +14,17 @@ put in (`_edit_iterate`). The comparisons are those of test_l1_chain
 * rows in neither mask dropped before the imputer: the spy receives fewer
   rows. Under the base cases (the missing cells imputed, no row ignored) the
   rows in neither mask are exactly those with incomplete predictors, so this
-  and the mutant above drop the same rows; the cases of phase 5 with
-  ``ignore`` (ignored rows have complete predictors) and with missing cells
-  left out of ``where`` tell them apart;
+  and the mutant above drop the same rows; in ``spy_left_out`` missing
+  cells of bmi left out of ``where`` put rows with complete predictors in
+  neither mask, which only this mutant drops;
 * ``cx`` taken after ``_remove_lindep``: ``_remove_lindep`` gets every
   observed row, whatever its predictors, so a predictor that is missing in
   such a row is dropped, and ``cx`` and the masks are taken from the
   predictors left. The spy receives other predictors and other masks;
 * a where-cell outside ``cx`` keeping its start value instead of NaN
-  (``_store_imputations``);
+  (``_store_imputations``), for missing cells and, in
+  ``incomplete_predictors``, for an observed where-cell, which then keeps a
+  value where R's completed data lose the observed one;
 * the working column not refreshed after a visit
   (``_refresh_working_column``): the next columns are predicted from the
   start values;
@@ -32,10 +34,25 @@ put in (`_edit_iterate`). The comparisons are those of test_l1_chain
   restarted (events numbered from 1 again, "df set to 1" logged again, the
   rows of the chain statistics overwritten).
 
-Not visible yet: chain statistics over the missing where-cells only instead
-of all where-cells. While ``where`` is the missing cells the two are the
-same cells; the cases of phase 5 with observed where-cells (``where="all"``)
-will show it. Chain statistics taken right after each visit from the
+``where``:
+
+* ``where`` not used, only the missing cells imputed (``check_where``):
+  MICE then has other where-cells than R and cannot take R's start, which
+  `_l1_chain.run_case` compares first (the columns and rows of the start);
+* the completed data built from the working data (``MICE._impute_once``):
+  observed where-cells keep their observed values;
+* the imputations of observed where-cells written to the working data
+  (``_refresh_working_column`` called by ``MICE._iterate``): the next column
+  is predicted from them (``x`` of the spy);
+* the chain statistics over the missing where-cells only
+  (``MICE._record_chain_statistics``): a complete column under
+  ``where="all"`` has none;
+* method ``""`` by completeness instead of by where-cells (``make_method``),
+  ``"monotone"`` by the number of missing values (``_monotone``) and the
+  monotone edit of the predictor matrix left out
+  (``_monotone_predictor_matrix``): the comparisons of test_l1_setup.
+
+Not visible yet: chain statistics taken right after each visit from the
 imputer's output, instead of from ``imp`` at the end of the iteration, are
 the same values as long as no column is visited twice in an iteration and
 no ``post`` changes the imputations; the ``post`` cases and the visit
@@ -54,6 +71,7 @@ import pytest
 
 from imputation import MICE
 
+from ._helpers import decode_frame
 from ._l1_chain import (
     CASES,
     check_calls,
@@ -63,8 +81,10 @@ from ._l1_chain import (
     check_imputations,
     check_iteration,
     check_logged_events,
+    check_lost_observed_values,
     run_case,
 )
+from .test_l1_setup import MONOTONE, WHERE, check_monotone_case, check_where_methods, check_where_visit_sequences
 
 pytestmark = pytest.mark.parity
 
@@ -117,6 +137,11 @@ def test_rows_with_incomplete_predictors_dropped_as_in_0_3_are_caught(monkeypatc
         check_imputations(case, run)
     check_draws(case, run)
 
+    # only row 6 of bmi has an incomplete predictor here; the rows in neither mask with complete predictors
+    # stay (see test_rows_in_neither_mask_with_complete_predictors_dropped_are_caught)
+    run = run_case(CASES["spy_left_out"])
+    assert len(run.calls[0].y) == 24
+
 
 def test_rows_in_neither_mask_dropped_are_caught(monkeypatch):
     reached = _edit_iterate(
@@ -131,6 +156,27 @@ def test_rows_in_neither_mask_dropped_are_caught(monkeypatch):
     case = CASES["spy_empty_method_predictor"]
     run = run_case(case)
     assert reached, "mutant not applied: no column had rows in neither mask"
+    with pytest.raises(AssertionError, match=r"call 1 \(bmi, iteration 1, imputation 1\): ry"):
+        check_calls(case, run)
+
+
+def test_rows_in_neither_mask_with_complete_predictors_dropped_are_caught(monkeypatch):
+    """bmi is left out of where in rows 1 and 3 (R's numbers), where its predictors are complete: those rows are in
+    neither mask, and the mutant of 0.3 (rows with incomplete predictors dropped) keeps them."""
+    reached = _edit_iterate(
+        monkeypatch,
+        _TARGET,
+        _TARGET
+        + "        used = ry | wy\n"
+        + "        if (~used & cx).any():\n"
+        + "            _reached()\n"
+        + "        y, x_values, ry, wy = y[used], x_values[used], ry[used], wy[used]\n",
+    )
+    case = CASES["spy_left_out"]
+    run = run_case(case)
+    assert reached, "mutant not applied: no row in neither mask with complete predictors"
+    # rows 1 and 3 (complete predictors) and 6 (hyp missing) of 25
+    assert len(run.calls[0].y) == 22
     with pytest.raises(AssertionError, match=r"call 1 \(bmi, iteration 1, imputation 1\): ry"):
         check_calls(case, run)
 
@@ -184,6 +230,27 @@ def test_start_value_kept_outside_cx_is_caught(monkeypatch):
         check_imputations(case, run)
 
 
+def test_start_value_kept_for_an_observed_where_cell_outside_cx_is_caught(monkeypatch):
+    """The observed where-cell of bmi in row 15 (R's number) has chl, left out of where, missing: R's completed
+    data lose its observed value. With its start value kept MICE loses nothing there."""
+    case = CASES["incomplete_predictors"]
+    data = decode_frame(case["data"])
+    kept_observed = []
+
+    def keeping_start_values(imp, imputable, values):
+        kept_observed.append(data.loc[imp.index[~imputable], imp.name].notna().any())
+        if imputable.any():
+            imp.iloc[np.flatnonzero(imputable)] = values
+
+    monkeypatch.setattr(MICE_MODULE, "_store_imputations", keeping_start_values)
+    run = run_case(case)
+    assert any(kept_observed), "mutant not applied: no observed where-cell outside cx"
+    with pytest.raises(AssertionError, match=r"incomplete_predictors, step 1: observed values lost per column \{\}"):
+        check_lost_observed_values(case, run)
+    with pytest.raises(AssertionError, match=r"incomplete_predictors, step 1, chain 1: completed data, 'bmi'"):
+        check_completed(case, run)
+
+
 def test_working_column_not_refreshed_after_a_visit_is_caught(monkeypatch):
     calls = []
     original = MICE_MODULE._refresh_working_column
@@ -223,8 +290,69 @@ def test_check_df_in_every_iteration_is_caught(monkeypatch):
     assert reached, "mutant not applied: no second iteration"
 
 
-def test_chain_statistics_over_the_missing_cells_only_are_not_seen_before_where(monkeypatch):
-    """The where-cells are the missing cells until phase 5 adds ``where``."""
+# ---------------------------------------------------------------------------
+# where
+# ---------------------------------------------------------------------------
+
+
+def test_where_not_used_is_caught(monkeypatch):
+    """Only the missing cells imputed: age, complete, has no where-cell and gets no start, unlike R's."""
+    calls = []
+
+    def missing_cells(where, data):
+        calls.append(where)
+        return data.isna()
+
+    monkeypatch.setattr(MICE_MODULE, "check_where", missing_cells)
+    columns = r"\['bmi', 'hyp', 'chl'\], R's \['age', 'bmi', 'hyp', 'chl'\]"
+    with pytest.raises(AssertionError, match=rf"all_mean_norm_predict: the start has the columns {columns}"):
+        run_case(CASES["all_mean_norm_predict"])
+    assert calls == ["all"], "mutant not applied"
+
+
+def test_completed_data_from_the_working_data_are_caught(monkeypatch):
+    """The observed where-cells keep their observed values: age is not its observed mean (R's mean imputations)."""
+    calls = []
+
+    def from_working_data(self, state, chain_idx, iterations):
+        calls.append(len(iterations))
+        working = self._working_frame(state.imp)
+        for iter_idx in iterations:
+            self._iterate(working, state, iter_idx, chain_idx)
+        return working
+
+    monkeypatch.setattr(MICE, "_impute_once", from_working_data)
+    case = CASES["all_mean_norm_predict"]
+    run = run_case(case)
+    assert any(calls), "mutant not applied: no iteration ran"
+    with pytest.raises(AssertionError, match=r"all_mean_norm_predict, step 1, chain 1: completed data, 'age'"):
+        check_completed(case, run)
+    check_imputations(case, run)  # imp is R's
+
+
+def test_imputations_of_observed_where_cells_in_the_working_data_are_caught(monkeypatch):
+    """age is visited first, its where-cells in rows 3, 10 and 20 (R's numbers) are observed: bmi, visited next,
+    must be predicted from the observed age."""
+    calls = []
+    original = MICE_MODULE._refresh_working_column
+
+    def every_where_cell_after_a_visit(working, column, imp, where, observed):
+        if sys._getframe(1).f_code.co_name != "_iterate":
+            original(working, column, imp, where, observed)
+            return
+        calls.append((where & observed).any())
+        working.loc[where, column] = MICE_MODULE._values(imp)
+
+    monkeypatch.setattr(MICE_MODULE, "_refresh_working_column", every_where_cell_after_a_visit)
+    case = CASES["spy_observed_where_cells"]
+    run = run_case(case)
+    assert any(calls), "mutant not applied: no observed where-cell refreshed"
+    with pytest.raises(AssertionError, match=r"call 2 \(bmi, iteration 1, imputation 1\): x"):
+        check_calls(case, run)
+
+
+def test_chain_statistics_over_the_missing_cells_only_are_caught(monkeypatch):
+    """Under where="all" the complete age has where-cells but no missing cell: its chain mean would be NaN."""
     calls = []
     original = MICE._record_chain_statistics
 
@@ -234,10 +362,68 @@ def test_chain_statistics_over_the_missing_cells_only_are_not_seen_before_where(
         original(self, missing, iter_idx, chain_idx)
 
     monkeypatch.setattr(MICE, "_record_chain_statistics", missing_cells_only)
-    for name in ("spy_empty_method_predictor", "boys_mean_norm_predict"):
-        case = CASES[name]
-        check_chain_statistics(case, run_case(case))
+    case = CASES["all_mean_norm_predict"]
+    run = run_case(case)
     assert calls, "mutant not applied: MICE._iterate does not call _record_chain_statistics"
+    with pytest.raises(AssertionError, match=r"all_mean_norm_predict, step 1: chain_mean of 'age'"):
+        check_chain_statistics(case, run)
+    check_completed(case, run)  # only the statistics
+
+
+# ---------------------------------------------------------------------------
+# where in the setup (test_l1_setup)
+# ---------------------------------------------------------------------------
+
+
+def _setup_case(cases, name):
+    return next(case for case in cases if case["name"] == name)
+
+
+def test_method_by_completeness_is_caught(monkeypatch):
+    """make_method without where: the complete age gets "" under where="all", R's polyreg."""
+    calls = []
+    original = MICE_MODULE.make_method
+
+    def by_completeness(data, default_method, where=None):
+        calls.append(where)
+        return original(data, default_method)
+
+    monkeypatch.setattr(MICE_MODULE, "make_method", by_completeness)
+    # without a method, the 25 where-cells of age are missing in the completed data
+    with pytest.warns(UserWarning, match=r"'age': 25 \(no method\)"):
+        with pytest.raises(AssertionError, match=r"nhanes2_all: methods \{'age': ''"):
+            check_where_methods(_setup_case(WHERE, "nhanes2_all"))
+    assert any(where is not None for where in calls), "mutant not applied"
+
+
+def test_monotone_by_the_number_of_missing_values_is_caught(monkeypatch):
+    """R orders by where-cells: hyp (5) age (6) chl (12), not age (0) hyp (8) chl (10)."""
+    calls = []
+    original = MICE_MODULE._monotone
+    case = _setup_case(WHERE, "nhanes2_matrix")
+    missing = decode_frame(case["data"]).isna()
+
+    def by_missing_values(where, columns):
+        calls.append(1)
+        return original(missing, columns)
+
+    monkeypatch.setattr(MICE_MODULE, "_monotone", by_missing_values)
+    with pytest.raises(AssertionError, match=r"nhanes2_matrix: visit sequence monotone \['age', 'hyp', 'chl'\]"):
+        check_where_visit_sequences(case)
+    assert calls, "mutant not applied"
+
+
+def test_monotone_edit_left_out_is_caught(monkeypatch):
+    calls = []
+
+    def unedited(predictor_matrix, where):
+        calls.append(1)
+        return predictor_matrix
+
+    monkeypatch.setattr(MICE_MODULE, "_monotone_predictor_matrix", unedited)
+    with pytest.raises(AssertionError, match=r"nhanes_monotone: the predictor matrix differs from R's"):
+        check_monotone_case(_setup_case(MONOTONE, "nhanes_monotone"))
+    assert calls, "mutant not applied"
 
 
 # ---------------------------------------------------------------------------
