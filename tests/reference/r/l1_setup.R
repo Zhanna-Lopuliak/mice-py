@@ -230,6 +230,92 @@ monotone_cases <- list(
   monotone_case("nhanes_revmonotone", nhanes, 1L, "revmonotone")
 )
 
+# ---------------------------------------------------------------------------
+# passive variables: methods and visit sequence
+# ---------------------------------------------------------------------------
+
+# mice(data, maxit = 0, method, where) with the passive variables of
+# `passive` (recipes, see _common.R; their formulas go into method), for the
+# default visit sequence, each keyword and the vector `visit`, which names a
+# variable twice. Without visitSequence, mice.edit.setup() moves the passive
+# variables to the end; a keyword or a vector places them as it says. The
+# only warning allowed is the count of logged events
+passive_case <- function(name, data, method, passive, visit, where = NULL) {
+  args <- with_recipes(list(method = method, passive = passive), data)
+  if (!is.null(where)) args$where <- where
+  run <- function(...) {
+    withCallingHandlers(
+      do.call(mice, c(list(data, maxit = 0, printFlag = FALSE, seed = 1L), args, list(...))),
+      warning = function(w) {
+        if (!startsWith(conditionMessage(w), "Number of logged events")) {
+          stop("unexpected warning: ", conditionMessage(w))
+        }
+        invokeRestart("muffleWarning")
+      }
+    )
+  }
+  imp <- run()
+  visits <- lapply(VISITS, function(v) I(run(visitSequence = v)$visitSequence))
+  names(visits) <- VISITS
+  visit_vector <- run(visitSequence = visit)$visitSequence
+  imputed <- names(imp$method)[imp$method != ""]
+  effective <- function(v) I(v[v %in% imputed])
+  list(
+    name = name,
+    data = encode_frame(data),
+    where = if (is.null(where)) NULL else encode_where(where),
+    method_arg = as.list(method),
+    passive = passive,
+    visit_sequence_arg = I(visit),
+    method = as.list(imp$method),
+    predictor_matrix = named_matrix(imp$predictorMatrix),
+    logged_events = logged_events(imp),
+    visit_sequence_default = I(imp$visitSequence),
+    visit_sequence = visits,
+    visit_sequence_vector = I(visit_vector),
+    imputed_variables = I(imputed),
+    effective_visit_sequence_default = effective(imp$visitSequence),
+    effective_visit_sequence = lapply(visits, effective),
+    effective_visit_sequence_vector = effective(visit_vector)
+  )
+}
+
+# nhanes with s, the passive sum of bmi and chl (rounded where both are
+# observed), placed before them: data order and "roman" visit s first, the
+# default last
+nhanes_sum <- data.frame(age = nhanes$age, s = round(nhanes$bmi + nhanes$chl), nhanes[c("bmi", "hyp", "chl")])
+pmm_methods <- c(age = "", bmi = "pmm", hyp = "pmm", chl = "pmm")
+
+# where: s has two observed where-cells and one missing one (the others
+# left out), hyp none, so "monotone" puts s first and hyp gets ""
+nhanes_sum_where <- where_cells(nhanes_sum,
+  add = list(s = c(2, 5)), drop = list(s = setdiff(which(is.na(nhanes_sum$s)), 1L), hyp = seq_len(nrow(nhanes)))
+)
+stopifnot(identical(unname(colSums(nhanes_sum_where)), c(0, 3, 9, 0, 10)))
+
+passive_cases <- list(
+  passive_case("nhanes_sum", nhanes_sum, pmm_methods, list(s = passive_sum("bmi", "chl")),
+    visit = c("bmi", "s", "hyp", "chl", "s")
+  ),
+  passive_case("nhanes_sum_where", nhanes_sum, pmm_methods, list(s = passive_sum("bmi", "chl")),
+    visit = c("s", "bmi", "chl", "s"), where = nhanes_sum_where
+  ),
+  # c2, a passive copy of chl: collinear, method "" (logged)
+  passive_case("nhanes_copy", cbind(nhanes, c2 = 2 * nhanes$chl), pmm_methods, list(c2 = passive_multiple("chl", 2)),
+    visit = c("chl", "bmi", "hyp", "chl")
+  ),
+  # a2, a complete passive variable: method ""
+  passive_case("nhanes_complete", cbind(nhanes, a2 = nhanes$age * nhanes$age), pmm_methods,
+    list(a2 = passive_product("age", "age")),
+    visit = c("chl", "bmi", "hyp", "chl")
+  ),
+  # s missing in every row: the setup step does not check a passive
+  # variable for being constant, so it keeps its formula
+  passive_case("nhanes_all_missing", cbind(nhanes, s = NA_real_), pmm_methods, list(s = passive_sum("bmi", "chl")),
+    visit = c("s", "bmi", "hyp", "chl", "s")
+  )
+)
+
 write_fixture("l1_setup", list(
   description = paste(
     "mice(data, maxit = 0) with default arguments and with each visitSequence",
@@ -240,11 +326,16 @@ write_fixture("l1_setup", list(
     "method given to mice(). monotone_cases: mice(data, m = 1, maxit,",
     "visitSequence = visit_sequence_arg, method = 'norm.predict', where): the",
     "predictorMatrix that mice.edit.predictorMatrix() leaves, and for maxit =",
-    "1 with 'monotone' the completed data, which use no start value."
+    "1 with 'monotone' the completed data, which use no start value.",
+    "passive_cases: mice(data, maxit = 0, method, where) with method_arg and",
+    "the passive variables of `passive` (recipes, see _common.R, whose",
+    "formulas R's method holds), for the default visit sequence, each",
+    "keyword and the vector visit_sequence_arg (visit_sequence_vector)."
   ),
   cases = setup_cases,
   where_cases = where_cases,
-  monotone_cases = monotone_cases
+  monotone_cases = monotone_cases,
+  passive_cases = passive_cases
 ))
 
 # ---------------------------------------------------------------------------

@@ -67,11 +67,35 @@ put in (`_edit_iterate`). The comparisons are those of test_l1_chain
   ``logreg`` target is held only by ignored rows, it is not a category any
   more, so nothing is drawn.
 
-Not visible yet: chain statistics taken right after each visit from the
-imputer's output, instead of from ``imp`` at the end of the iteration, are
-the same values as long as no column is visited twice in an iteration and
-no ``post`` changes the imputations; the ``post`` cases and the visit
-sequence with a repeated column of phase 6 will show it.
+``post``:
+
+* ``post`` not applied (``MICE._apply_post``): the bounds of
+  ``norm_post_bounds`` do not hold;
+* the working data not refreshed after ``post`` (``_refresh_working_column``
+  called by ``MICE._apply_post``): the next column is predicted from the
+  values before ``post`` (``x`` of the spy);
+* ``post`` applied in the last iteration only (``MICE._apply_post``): the
+  chain statistics of the earlier iterations are not bounded;
+* the chain statistics taken right after the imputer, before ``post``,
+  instead of from ``imp`` at the end of the iteration (``MICE._iterate``,
+  edited): the chain mean of a bounded column is not bounded.
+
+Passive columns:
+
+* the chain statistics of a column visited twice taken at its first visit
+  (``MICE._iterate``, edited): ``passive_twice`` visits bmi after hgt and
+  again after wgt;
+* the passive columns moved last also under a keyword
+  (``MICE._set_visit_sequence``) and not moved last by default
+  (``_passive_last``): the visit sequence and the imputations of the chain
+  cases, and the visit sequences of test_l1_setup;
+* passive values written over the observed cells of the working data
+  (``_refresh_working_column`` called by ``MICE._visit_passive``): the column
+  that the passive one predicts;
+* the passive function given only the rows being imputed, as R's formula
+  (``MICE._passive_values``): not caught by any row-wise case, and the
+  aggregate of ``passive_aggregate`` then equals R's, so that the test of
+  the deliberate difference fails.
 """
 
 import __future__
@@ -89,6 +113,8 @@ from imputation import MICE
 from ._helpers import decode_frame
 from ._l1_chain import (
     CASES,
+    CHECKS,
+    DIFFERENCES,
     check_calls,
     check_chain_statistics,
     check_completed,
@@ -97,9 +123,19 @@ from ._l1_chain import (
     check_iteration,
     check_logged_events,
     check_lost_observed_values,
+    check_passive_function_gets_all_rows,
+    check_setup,
     run_case,
 )
-from .test_l1_setup import MONOTONE, WHERE, check_monotone_case, check_where_methods, check_where_visit_sequences
+from .test_l1_setup import (
+    MONOTONE,
+    PASSIVE,
+    WHERE,
+    check_monotone_case,
+    check_passive_visit_sequences,
+    check_where_methods,
+    check_where_visit_sequences,
+)
 
 pytestmark = pytest.mark.parity
 
@@ -590,6 +626,234 @@ def test_monotone_edit_left_out_is_caught(monkeypatch):
     with pytest.raises(AssertionError, match=r"nhanes_monotone: the predictor matrix differs from R's"):
         check_monotone_case(_setup_case(MONOTONE, "nhanes_monotone"))
     assert calls, "mutant not applied"
+
+
+# ---------------------------------------------------------------------------
+# post
+# ---------------------------------------------------------------------------
+
+
+def test_post_not_applied_is_caught(monkeypatch):
+    """bmi is drawn by norm and bounded to [22, 30] by post in every iteration: without post, R's imputations at
+    the bounds are not reached."""
+    calls = []
+    monkeypatch.setattr(MICE, "_apply_post", lambda self, working, imp, col, *args: calls.append(col in self.post))
+    case = CASES["norm_post_bounds"]
+    run = run_case(case)
+    assert any(calls), "mutant not applied: no column with post"
+    with pytest.raises(AssertionError, match=r"norm_post_bounds, step 1, chain 1: imputations of 'bmi'"):
+        check_imputations(case, run)
+    check_draws(case, run)  # the same draws
+
+
+def test_working_data_not_refreshed_after_post_is_caught(monkeypatch):
+    """bmi is shifted by post; hyp, visited next, must be predicted from the shifted values."""
+    calls = []
+    original = MICE_MODULE._refresh_working_column
+
+    def not_after_post(working, column, imp, where, observed):
+        if sys._getframe(1).f_code.co_name == "_apply_post":
+            calls.append(column)
+            return
+        original(working, column, imp, where, observed)
+
+    monkeypatch.setattr(MICE_MODULE, "_refresh_working_column", not_after_post)
+    case = CASES["spy_post"]
+    run = run_case(case)
+    assert calls, "mutant not applied: MICE._apply_post does not refresh the working data"
+    with pytest.raises(AssertionError, match=r"spy_post, call 2 \(hyp, iteration 1, imputation 1\): x"):
+        check_calls(case, run)
+
+
+def test_post_in_the_last_iteration_only_is_caught(monkeypatch):
+    """post applied once per column and chain, after the last of the 3 iterations: the imputations of bmi in
+    iterations 1 and 2 are not bounded, nor is its chain mean there."""
+    case = CASES["norm_post_bounds"]
+    last = sum(case["maxit"]) - 1
+    calls = []
+    original = MICE._apply_post
+
+    def last_iteration_only(self, working, imp, col, iter_idx, chain_idx):
+        if iter_idx == last:
+            calls.append(iter_idx)
+            original(self, working, imp, col, iter_idx, chain_idx)
+
+    monkeypatch.setattr(MICE, "_apply_post", last_iteration_only)
+    run = run_case(case)
+    assert calls and set(calls) == {last}, "mutant not applied"
+    with pytest.raises(AssertionError, match=r"norm_post_bounds, step 1: chain_mean of 'bmi'"):
+        check_chain_statistics(case, run)
+
+
+def test_chain_statistics_before_post_are_caught(monkeypatch):
+    """The chain statistics of each column taken from the imputer's output, before post: the chain mean of the
+    bounded bmi is that of the draws. imp is R's."""
+    reached = _edit_iterate(
+        monkeypatch,
+        "    for col in self.visit_sequence:\n",
+        "    before_post = {}\n    for col in self.visit_sequence:\n",
+        (
+            "        # R's post, right after the univariate imputation\n",
+            "        if col in self.post:\n"
+            "            _reached()\n"
+            "        before_post[col] = imp.copy()\n"
+            "        # R's post, right after the univariate imputation\n",
+        ),
+        (
+            "    self._record_chain_statistics(state.imp, iter_idx, chain_idx)\n",
+            "    self._record_chain_statistics({**state.imp, **before_post}, iter_idx, chain_idx)\n",
+        ),
+    )
+    case = CASES["norm_post_bounds"]
+    run = run_case(case)
+    assert reached, "mutant not applied: no column with post"
+    with pytest.raises(AssertionError, match=r"norm_post_bounds, step 1: chain_mean of 'bmi'"):
+        check_chain_statistics(case, run)
+    check_imputations(case, run)  # only the statistics
+
+
+# ---------------------------------------------------------------------------
+# passive columns
+# ---------------------------------------------------------------------------
+
+
+def test_chain_statistics_at_the_first_visit_are_caught(monkeypatch):
+    """bmi is visited after hgt and again after wgt: its chain statistics are those of the second visit, at the
+    end of the iteration. Taken at the first visit, they hold bmi from the start values of wgt."""
+    snapshot = "first_visit.setdefault(col, {}.copy())\n"
+    reached = _edit_iterate(
+        monkeypatch,
+        "    for col in self.visit_sequence:\n",
+        "    first_visit = {}\n    for col in self.visit_sequence:\n",
+        (
+            "            self._visit_passive(working, state.imp[col], col, iter_idx, chain_idx)\n",
+            "            self._visit_passive(working, state.imp[col], col, iter_idx, chain_idx)\n"
+            "            if col in first_visit:\n"
+            "                _reached()\n"
+            "            " + snapshot.format("state.imp[col]"),
+        ),
+        (
+            "        self._apply_post(working, imp, col, iter_idx, chain_idx)\n\n"
+            "    self._record_chain_statistics(state.imp, iter_idx, chain_idx)\n",
+            "        self._apply_post(working, imp, col, iter_idx, chain_idx)\n"
+            "        " + snapshot.format("imp") + "\n"
+            "    self._record_chain_statistics({**state.imp, **first_visit}, iter_idx, chain_idx)\n",
+        ),
+    )
+    case = CASES["passive_twice"]
+    run = run_case(case)
+    assert reached, "mutant not applied: no column visited twice"
+    with pytest.raises(AssertionError, match=r"passive_twice, step 1: chain_mean of 'bmi'"):
+        check_chain_statistics(case, run)
+    check_imputations(case, run)  # only the statistics
+
+
+def test_passive_columns_last_under_a_keyword_are_caught(monkeypatch):
+    """Under "roman" bmi is visited first, before its inputs hgt and wgt, as in R; moved last, it is the formula
+    of their imputations."""
+    calls = []
+    original = MICE._set_visit_sequence
+
+    def passive_last(self, visit_sequence, rng=None):
+        original(self, visit_sequence, rng)
+        moved = MICE_MODULE._passive_last(self.visit_sequence, self.method)
+        calls.append(moved != self.visit_sequence)
+        self.visit_sequence = moved
+
+    monkeypatch.setattr(MICE, "_set_visit_sequence", passive_last)
+    case = CASES["passive_roman"]
+    run = run_case(case)
+    assert any(calls), "mutant not applied: no passive column moved"
+    with pytest.raises(
+        AssertionError,
+        match=r"passive_roman: visit sequence \['hgt', 'wgt', 'tv', 'bmi'\] differs from R's \['bmi', 'hgt', 'wgt', "
+        r"'tv'\]",
+    ):
+        check_setup(case, run)
+    with pytest.raises(AssertionError, match=r"passive_roman, step 1, chain 1: imputations of 'bmi'"):
+        check_imputations(case, run)
+    with pytest.raises(
+        AssertionError, match=r"nhanes_sum: visit sequence roman \['bmi', 'hyp', 'chl', 's'\], R's \['s', 'bmi', "
+    ):
+        check_passive_visit_sequences(_setup_case(PASSIVE, "nhanes_sum"))
+
+
+def test_passive_columns_not_moved_last_by_default_are_caught(monkeypatch):
+    """Data order puts bmi before hgt and wgt: computed before their imputations of the same iteration, it is
+    not their formula."""
+    calls = []
+
+    def data_order(columns, method):
+        calls.append(list(columns))
+        return list(columns)
+
+    monkeypatch.setattr(MICE_MODULE, "_passive_last", data_order)
+    case = CASES["boys_passive_post"]
+    run = run_case(case)
+    assert calls, "mutant not applied"
+    with pytest.raises(
+        AssertionError,
+        match=r"boys_passive_post: visit sequence \['bmi', 'hgt', 'wgt', 'tv'\] differs from R's \['hgt', 'wgt', "
+        r"'tv', 'bmi'\]",
+    ):
+        check_setup(case, run)
+    with pytest.raises(AssertionError, match=r"boys_passive_post, step 1, chain 1: imputations of 'bmi'"):
+        check_imputations(case, run)
+    with pytest.raises(
+        AssertionError, match=r"nhanes_sum: visit sequence default \['s', 'bmi', 'hyp', 'chl'\], R's \['bmi', "
+    ):
+        check_passive_visit_sequences(_setup_case(PASSIVE, "nhanes_sum"))
+
+
+def test_passive_values_over_observed_cells_of_the_working_data_are_caught(monkeypatch):
+    """s has observed where-cells in rows 2, 5 and 7 (R's numbers), rounded values of bmi + chl. The working data
+    keep them, and hyp is predicted from them in iteration 2; written over with the formula, hyp's model changes."""
+    calls = []
+    original = MICE_MODULE._refresh_working_column
+
+    def every_where_cell(working, column, imp, where, observed):
+        if sys._getframe(1).f_code.co_name != "_visit_passive":
+            original(working, column, imp, where, observed)
+            return
+        calls.append((where & observed).any())
+        working.loc[where, column] = MICE_MODULE._values(imp)
+
+    monkeypatch.setattr(MICE_MODULE, "_refresh_working_column", every_where_cell)
+    case = CASES["passive_where_observed"]
+    run = run_case(case)
+    assert any(calls), "mutant not applied: no observed where-cell of a passive column"
+    with pytest.raises(AssertionError, match=r"passive_where_observed, step 1, chain 1: imputations of 'hyp'"):
+        check_imputations(case, run)
+
+
+def test_passive_function_given_only_the_rows_being_imputed_equals_r_in_the_aggregate(monkeypatch):
+    """The deliberate difference: MICE passes the passive function all rows, R evaluates its formula on the rows
+    of the where-cells (model.frame on data[wy, ]). Given only those rows, a row-wise function gives the same
+    values, so no row-wise case catches it; the aggregate of passive_aggregate then equals R's, and the test of
+    the deliberate difference fails."""
+    calls = []
+
+    def where_rows_only(self, col, working, when):
+        where = self.where[col].to_numpy()
+        calls.append(int(where.sum()))
+        values = self.passive[col](working[where].copy())
+        return values.reindex(working.index).to_numpy()
+
+    monkeypatch.setattr(MICE, "_passive_values", where_rows_only)
+    for name in ("boys_passive_post", "passive_where_observed", "passive_input_missing", "continue_post_passive"):
+        case = CASES[name]
+        run = run_case(case)
+        for check in CHECKS.values():
+            check(case, run)
+    assert calls and max(calls) < 25, "mutant not applied"
+    case = DIFFERENCES["passive_aggregate"]
+    run = run_case(case)
+    for check in CHECKS.values():
+        check(case, run)  # every column is R's, q too
+    with pytest.raises(
+        AssertionError, match=r"passive_aggregate, step 1, chain 1: 'q' is not the function of all rows"
+    ):
+        check_passive_function_gets_all_rows(case, run)
 
 
 # ---------------------------------------------------------------------------

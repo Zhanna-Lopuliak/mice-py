@@ -53,6 +53,18 @@
 # of mice() other than "Number of logged events" names it (`warnings`); the
 # fixture holds it. r_errors holds calls of mice() that stop in R, for tests
 # of what mice-py does there (stop_case()).
+#
+# The cases after the first 35 pass `post` or passive variables, as recipes
+# (see "Recipes for post and passive imputation" in _common.R): the R code
+# of post and the passive formulas are built from them here, the functions
+# of mice-py by the Python helper. Such a case also holds the variables
+# whose post R keeps after the setup step (`post_columns`). The replay
+# applies post after each univariate imputation and computes the passive
+# variables, as sampler() does. `differences` holds a case where mice-py
+# deliberately differs from R (the passive formula with an aggregate:
+# R evaluates it on the rows of the where-cells, mice-py on all rows), and
+# `post_never_run` a call of mice() with a post for a passive variable,
+# which R keeps and never runs (mice-py raises).
 
 source(file.path("tests", "reference", "r", "_common.R"))
 
@@ -230,6 +242,68 @@ labels_g_missing <- data.frame(x = x, g = replace(g, c(5L, 9L, 14L), NA))
 labels_o <- data.frame(x = x, o = o)
 no_predictor <- matrix(0, 2, 2, dimnames = list(c("x", "g"), c("x", "g")))
 
+# The variables of boys with bmi, the passive variable of the cases below
+# (~ I(wgt / (hgt / 100)^2)), placed before its inputs hgt and wgt, so that
+# "roman" visits it first; 21 rows: hgt missing in three young boys, hgt
+# and wgt in one older boy (bmi missing in these four rows), tv missing in
+# the seven young boys and in three older ones, where norm.predict gives
+# values below 1 and above 25 (the bounds of tv in the cases with post)
+set.seed(7480)
+body3 <- c("hgt", "wgt", "bmi")
+hgt_only <- which(is.na(boys$hgt) & !is.na(boys$wgt))
+young <- which(complete.cases(boys[body3]) & boys$age < 8)
+older_tv <- which(complete.cases(boys[c(body3, "tv")]) & boys$age >= 8)
+older_no_tv <- which(complete.cases(boys[body3]) & is.na(boys$tv) & boys$age >= 8)
+picked <- c(
+  match("4268", rownames(boys)), sample(hgt_only, 3), sample(young, 4), sample(older_tv, 10), sample(older_no_tv, 3)
+)
+boys_bmi <- boys[sort(picked), c("age", "bmi", "hgt", "wgt", "tv")]
+rownames(boys_bmi) <- NULL
+stopifnot(identical(is.na(boys_bmi$bmi), is.na(boys_bmi$hgt) | is.na(boys_bmi$wgt)))
+
+# The default predictor matrix, except that the passive variable `p` does
+# not predict its inputs
+not_predicting_inputs <- function(data, p, inputs) {
+  pred <- make.predictorMatrix(data)
+  pred[inputs, p] <- 0
+  pred
+}
+
+# nhanes with s, the passive sum of bmi and chl (~ I(bmi + chl)): rounded
+# to whole numbers where both are observed, missing otherwise, so that an
+# observed value of s differs from the formula
+nhanes_s <- cbind(nhanes, s = round(nhanes$bmi + nhanes$chl))
+
+# The default predictor matrix, except that s does not predict its inputs
+# and hyp is predicted by age and s only (with bmi and chl, remove.lindep()
+# would drop s, nearly their sum)
+predictors_of_s <- function(data) {
+  pred <- not_predicting_inputs(data, "s", c("bmi", "chl"))
+  pred["hyp", ] <- 0
+  pred["hyp", c("age", "s")] <- 1
+  pred
+}
+
+# nhanes with p, the passive product of bmi and hyp, observed where both
+# are, and in rows 6 and 16, where both are missing (measured otherwise)
+nhanes_p <- cbind(nhanes, p = replace(nhanes$bmi * nhanes$hyp, c(6L, 16L), c(30, 27)))
+
+# nhanes with c2, a passive copy of chl (~ I(2 * chl)), and a2, a complete
+# passive variable (~ I(age * age), correlation with age below 0.999)
+nhanes_c <- cbind(nhanes, c2 = 2 * nhanes$chl, a2 = nhanes$age * nhanes$age)
+stopifnot(identical(mice:::find.collinear(nhanes_c), "c2"))
+
+# nhanes with s missing in every row
+nhanes_s0 <- cbind(nhanes, s = NA_real_)
+
+# nhanes with q, the passive squared deviation of chl from its mean
+# (~ I((chl - mean(chl))^2)), observed where chl is
+nhanes_q <- cbind(nhanes, q = (nhanes$chl - mean(nhanes$chl, na.rm = TRUE))^2)
+
+# nhanes with k, constant where observed and missing in three rows: the
+# setup step removes its method and clears its post
+nhanes_k3 <- cbind(nhanes, k = replace(rep(1, n_rows), c(3L, 8L, 15L), NA))
+
 # The missing cells of `data`, with the cells of `add` (variable = rows) put
 # in and those of `drop` left out
 where_cells <- function(data, add = list(), drop = list()) {
@@ -296,6 +370,7 @@ quietly <- function(expr) {
 }
 
 run_mice <- function(data, m, maxit, seed, args) {
+  args <- with_recipes(args, data)
   quietly(do.call(mice, c(list(data, m = m, maxit = maxit, seed = seed, printFlag = FALSE), args)))
 }
 
@@ -350,6 +425,20 @@ completed_data <- function(data, imp, where) {
   data
 }
 
+# The imputations `values` of variable j after its post command `cmd`,
+# evaluated as sampler() evaluates it: imp[[j]][, i] holds the imputations
+# of the chain, `data` the working data
+post_processed <- function(cmd, values, j, data, where) {
+  env <- new.env(parent = asNamespace("mice"))
+  env$imp <- setNames(list(data.frame(values)), j)
+  env$i <- 1L
+  env$j <- j
+  env$data <- data
+  env$where <- where
+  eval(parse(text = cmd), envir = env)
+  env$imp[[j]][, 1L]
+}
+
 # Go through the chain of `start` (m = 1) for sum(maxit) iterations as
 # sampler() and sampler.univ() do, from the generator state after the start,
 # and draw what each imputer is expected to draw (see the top of the file).
@@ -386,16 +475,26 @@ replay_chain <- function(start, maxit) {
     for (h in start$visitSequence) {
       meth <- start$method[[h]]
       if (meth == "") next
+      fill <- !r[, h] & where[, h]
+      if (startsWith(meth, "~")) {
+        # passive: the formula on the rows of the where-cells, no draw
+        imp[[h]] <- model.frame(as.formula(meth), data[where[, h], ], na.action = na.pass)[[1L]]
+        data[fill, h] <- imp[[h]][fill[where[, h]]]
+        next
+      }
       xnames <- setdiff(colnames(data)[start$predictorMatrix[h, ] != 0], h)
       formula <- if (length(xnames) > 0L) reformulate(xnames, response = h) else as.formula(paste(h, "~ 1"))
       x <- mice:::obtain.design(data, formula)[, -1L, drop = FALSE]
       y <- data[, h]
       ry <- complete.cases(x, y) & r[, h] & !ignore
       wy <- complete.cases(x) & where[, h]
-      fill <- !r[, h] & where[, h]
       if (!any(wy)) {
         data[fill, h] <- NA
         imp[[h]][] <- NA
+        if (start$post[[h]] != "") {
+          imp[[h]] <- post_processed(start$post[[h]], imp[[h]], h, data, where)
+          data[fill, h] <- imp[[h]][fill[where[, h]]]
+        }
         next
       }
       keep <- mice:::remove.lindep(x, y, ry)
@@ -433,6 +532,11 @@ replay_chain <- function(start, maxit) {
       new[wy[where[, h]]] <- imputes
       imp[[h]] <- new
       data[fill, h] <- new[fill[where[, h]]]
+      # post, then the working data refreshed from its result
+      if (start$post[[h]] != "") {
+        imp[[h]] <- post_processed(start$post[[h]], imp[[h]], h, data, where)
+        data[fill, h] <- imp[[h]][fill[where[, h]]]
+      }
     }
     if (k %in% cumsum(maxit)) {
       steps[[length(steps) + 1L]] <- list(
@@ -464,11 +568,12 @@ logged_events <- function(obj) {
 # The arguments of mice() a case passes, for the Python side. `where` is
 # written only when given: a keyword, or the matrix with its column names
 # (values a list of rows). `ignore` too, as given (one value per row, also
-# where it is not logical)
+# where it is not logical). `post` and `passive` too, as recipes per
+# variable; `method` is then written without the passive formulas
 encode_args <- function(args) {
   stopifnot(
     "encode_args() knows the arguments of mice() a case passes" =
-      all(names(args) %in% c("method", "predictorMatrix", "visitSequence", "where", "ignore"))
+      all(names(args) %in% c("method", "predictorMatrix", "visitSequence", "where", "ignore", "post", "passive"))
   )
   method <- args$method
   vis <- args$visitSequence
@@ -484,6 +589,12 @@ encode_args <- function(args) {
   }
   if (!is.null(args$ignore)) {
     out$ignore <- I(args$ignore)
+  }
+  if (!is.null(args$post)) {
+    out$post <- args$post
+  }
+  if (!is.null(args$passive)) {
+    out$passive <- args$passive
   }
   out
 }
@@ -505,8 +616,9 @@ encode_imp <- function(obj) {
 }
 
 # chainMean or chainVar of the numeric variables R imputes, iteration x chain
+# (once for a variable visited twice)
 encode_chain <- function(obj, stat) {
-  vis <- effective_visits(obj)
+  vis <- unique(effective_visits(obj))
   cols <- vis[!vapply(obj$data[vis], is.factor, logical(1))]
   out <- lapply(cols, function(j) matrix(obj[[stat]][j, , ], nrow = obj$iteration, ncol = obj$m))
   setNames(out, cols)
@@ -611,8 +723,37 @@ chain_case <- function(name, kind, data, m, maxit, seed, ..., lost = NULL, warni
   if (!is.null(warnings)) {
     case$warnings <- I(warnings)
   }
+  if (!is.null(args$post)) {
+    case$post_columns <- I(post_columns(last))
+  }
   warning_log$expected <- character(0)
   case
+}
+
+# The variables whose post R keeps after the setup step
+post_columns <- function(obj) names(obj$post)[obj$post != ""]
+
+# A call of mice() with a post for a passive variable (`post` names it):
+# R keeps it (post_columns) and never runs it, so the run equals the run
+# without it. mice-py raises instead (test_l1_chain)
+post_never_run_case <- function(name, data, m, maxit, seed, ...) {
+  args <- list(...)
+  passive <- intersect(names(args$post), names(args$passive))
+  stopifnot(length(passive) > 0L)
+  without <- args
+  without$post[passive] <- NULL
+  if (length(without$post) == 0L) without$post <- NULL
+  run <- run_mice(data, m, maxit, seed, args)
+  stopifnot(same_run(run, run_mice(data, m, maxit, seed, without)), all(passive %in% post_columns(run)))
+  list(
+    name = name,
+    data = encode_frame(data),
+    m = m,
+    maxit = maxit,
+    seed = seed,
+    args = encode_args(args),
+    post_columns = I(post_columns(run))
+  )
 }
 
 # A call of mice() that stops in R: its arguments, its error and the
@@ -827,6 +968,106 @@ cases <- tryCatch(
     chain_case("polr_one_row_outside", "scripted", labels_o, 1L, c(1L, 1L), 7473L,
       where = where_cells(labels_o, add = list(o = c(2, 7, 11, 16, 19))),
       method = c(x = "", o = "polr"), ignore = ignored_lab
+    ),
+    # post: bounds on the draws of norm in every iteration; the next
+    # iteration predicts from the bounded values
+    chain_case("norm_post_bounds", "scripted", nhanes, 1L, 3L, 7481L,
+      method = "norm", post = list(bmi = post_bounds(22, 30))
+    ),
+    # a shift, and a rule that reads age in the rows of the where-cells
+    chain_case("post_shift_rule", "deterministic", nhanes, 2L, 2L, 7482L,
+      method = "norm.predict", post = list(bmi = post_shift(2.5), hyp = post_rule("age", 2, 1))
+    ),
+    # hyp and chl are predicted from the shifted bmi (x of their calls)
+    chain_case("spy_post", "spy", nhanes, 1L, 1L, 7483L, method = "spy", post = list(bmi = post_shift(-3))),
+    # the function gets every where-cell: the observed cells of chl are
+    # shifted in the completed data, and kept in the working data
+    chain_case("post_where_all", "deterministic", nhanes, 2L, 1L, 7484L,
+      where = "all", method = "norm.predict", post = list(chl = post_shift(10))
+    ),
+    # bounds on the imputations of ignored rows too
+    chain_case("post_ignore", "deterministic", nhanes, 2L, 2L, 7485L,
+      method = "norm.predict", ignore = ignored_nhanes, post = list(bmi = post_bounds(24, 28))
+    ),
+    # no where-cell of bmi has complete predictors (as no_complete_predictors):
+    # post still runs and fills them
+    chain_case("post_no_imputation", "deterministic", nhanes, 2L, 2L, 7486L,
+      where = where_cells(nhanes, drop = list(hyp = seq_len(n_rows), bmi = 3)), method = "norm.predict",
+      post = list(bmi = post_fill_missing(99))
+    ),
+    # k is constant: the setup step removes its method and clears its post
+    chain_case("post_constant_removed", "deterministic", nhanes_k3, 2L, 1L, 7487L,
+      method = "norm.predict", post = list(k = post_shift(1), bmi = post_shift(2))
+    ),
+    # passive bmi, visited last by default, and bounds on tv
+    chain_case("boys_passive_post", "deterministic", boys_bmi, 2L, 2L, 7488L,
+      method = c(age = "", hgt = "norm.predict", wgt = "norm.predict", tv = "norm.predict"),
+      passive = list(bmi = passive_bmi("wgt", "hgt")), post = list(tv = post_bounds(1, 25)),
+      predictorMatrix = not_predicting_inputs(boys_bmi, "bmi", c("hgt", "wgt"))
+    ),
+    # "roman" visits bmi first, from the start values of hgt and wgt: after
+    # one iteration bmi is not the formula of the completed hgt and wgt
+    chain_case("passive_roman", "deterministic", boys_bmi, 2L, 1L, 7489L,
+      method = c(age = "", hgt = "norm.predict", wgt = "norm.predict", tv = "norm.predict"),
+      passive = list(bmi = passive_bmi("wgt", "hgt")), visitSequence = "roman",
+      predictorMatrix = not_predicting_inputs(boys_bmi, "bmi", c("hgt", "wgt"))
+    ),
+    # bmi visited twice, after hgt and after wgt; its chain statistics are
+    # those of the second visit
+    chain_case("passive_twice", "deterministic", boys_bmi, 2L, 1L, 7490L,
+      method = c(age = "", hgt = "norm.predict", wgt = "norm.predict", tv = "norm.predict"),
+      passive = list(bmi = passive_bmi("wgt", "hgt")), visitSequence = c("hgt", "bmi", "wgt", "bmi", "tv"),
+      predictorMatrix = not_predicting_inputs(boys_bmi, "bmi", c("hgt", "wgt"))
+    ),
+    # s, computed from the imputations of bmi and chl, predicts hyp (x of
+    # its call)
+    chain_case("spy_passive_predictor", "spy", nhanes_s, 1L, 1L, 7491L,
+      method = c(age = "", bmi = "spy", hyp = "spy", chl = "spy"), passive = list(s = passive_sum("bmi", "chl")),
+      predictorMatrix = predictors_of_s(nhanes_s), visitSequence = c("bmi", "chl", "s", "hyp")
+    ),
+    # observed where-cells of s (rows 2, 5 and 7): the formula in the
+    # completed data, the observed (rounded) value in the working data,
+    # from which hyp is predicted in iteration 2
+    chain_case("passive_where_observed", "deterministic", nhanes_s, 2L, 2L, 7492L,
+      method = c(age = "", bmi = "norm.predict", hyp = "norm.predict", chl = "norm.predict"),
+      passive = list(s = passive_sum("bmi", "chl")), predictorMatrix = predictors_of_s(nhanes_s),
+      where = where_cells(nhanes_s, add = list(s = c(2, 5, 7)))
+    ),
+    # hyp keeps its missing values (method ""): p is missing in those rows,
+    # also in its observed where-cells in rows 6 and 16 (lost), and so, in
+    # iteration 2, are the cells of chl predicted from it, but in row 16,
+    # where the working data keep the observed p
+    chain_case("passive_input_missing", "deterministic", nhanes_p, 2L, 2L, 7493L,
+      where = where_cells(nhanes_p, add = list(p = c(6, 16))), lost = "p",
+      method = c(age = "", bmi = "norm.predict", hyp = "", chl = "norm.predict"),
+      passive = list(p = passive_product("bmi", "hyp")),
+      predictorMatrix = matrix(
+        c(
+          0, 0, 0, 0, 0,
+          1, 0, 0, 1, 0,
+          0, 0, 0, 0, 0,
+          1, 0, 0, 0, 1,
+          0, 0, 0, 0, 0
+        ),
+        nrow = 5, byrow = TRUE, dimnames = list(names(nhanes_p), names(nhanes_p))
+      )
+    ),
+    # c2, a passive copy of chl, is collinear: method "", missing values
+    # kept; a2 is complete: method ""
+    chain_case("passive_copy_complete", "deterministic", nhanes_c, 2L, 1L, 7494L,
+      method = c(age = "", bmi = "norm.predict", hyp = "norm.predict", chl = "norm.predict"),
+      passive = list(c2 = passive_multiple("chl", 2), a2 = passive_product("age", "age"))
+    ),
+    # s has no observed value: it starts from rnorm() and is the formula
+    # after its first visit
+    chain_case("passive_all_missing", "deterministic", nhanes_s0, 2L, 2L, 7495L,
+      method = c(age = "", bmi = "norm.predict", hyp = "norm.predict", chl = "norm.predict"),
+      passive = list(s = passive_sum("bmi", "chl")), predictorMatrix = predictors_of_s(nhanes_s0)
+    ),
+    # passive s and bounds on chl, continued with mice.mids()
+    chain_case("continue_post_passive", "scripted", nhanes_s, 1L, c(2L, 2L), 7496L,
+      method = c(age = "", bmi = "norm", hyp = "norm", chl = "norm"), passive = list(s = passive_sum("bmi", "chl")),
+      post = list(chl = post_bounds(150, 230)), predictorMatrix = predictors_of_s(nhanes_s)
     )
   ),
   finally = {
@@ -860,6 +1101,31 @@ r_errors <- list(
   stop_case("ignore_short", nhanes, 1L, 1L, 7478L, ignore = ignored_nhanes[-n_rows])
 )
 
+# Where mice-py deliberately differs; test_l1_chain tests its own result
+differences <- list(
+  # R takes the mean of chl over the rows of the where-cells of q (those
+  # where chl is missing), mice-py over all rows. q predicts nothing, so
+  # the other variables are R's
+  chain_case("passive_aggregate", "deterministic", nhanes_q, 2L, 1L, 7497L,
+    method = c(age = "", bmi = "norm.predict", hyp = "norm.predict", chl = "norm.predict"),
+    passive = list(q = passive_centred_square("chl")),
+    predictorMatrix = local({
+      pred <- make.predictorMatrix(nhanes_q)
+      pred[, "q"] <- 0
+      pred
+    })
+  )
+)
+
+# A post for the passive bmi: R keeps it and never runs it; mice-py raises
+post_never_run <- list(
+  post_never_run_case("post_for_passive", boys_bmi, 1L, 1L, 7498L,
+    method = c(age = "", hgt = "norm.predict", wgt = "norm.predict", tv = "norm.predict"),
+    passive = list(bmi = passive_bmi("wgt", "hgt")), post = list(bmi = post_shift(100), tv = post_bounds(1, 25)),
+    predictorMatrix = not_predicting_inputs(boys_bmi, "bmi", c("hgt", "wgt"))
+  )
+)
+
 write_fixture("l1_chain", list(
   description = paste(
     "Whole chains of mice(data, m, maxit, ..., seed). start: imp of",
@@ -882,8 +1148,17 @@ write_fixture("l1_chain", list(
     "warnings (only in cases with such warnings): what each call of mice()",
     "warned besides 'Number of logged events'; mice.mids() warns nothing.",
     "r_errors: calls of mice(data, m, maxit, ..., seed) that stop in R, with",
-    "args as above, the error message and the warnings before it."
+    "args as above, the error message and the warnings before it.",
+    "args post and passive (only when given): per variable a recipe, its",
+    "name and parameters (see _common.R), from which R's post command and",
+    "passive formula are built; method is then given without the passive",
+    "variables. post_columns (only in cases with post): the variables whose",
+    "post R keeps after the setup step. differences: cases as above where",
+    "mice-py deliberately differs from R. post_never_run: calls with a post",
+    "for a passive variable, which R keeps (post_columns) and never runs."
   ),
   cases = cases,
-  r_errors = r_errors
+  r_errors = r_errors,
+  differences = differences,
+  post_never_run = post_never_run
 ))

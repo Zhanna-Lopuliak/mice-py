@@ -6,9 +6,10 @@ continued with ``continue_chains`` as R ran ``mice()`` and ``mice.mids()``
 (`_l1_chain.run_case`). Every comparison of `_l1_chain.CHECKS` runs on every
 case: ``imp`` cell by cell, the completed datasets, the chain statistics,
 the logged events, ``iteration``, method, visit sequence and predictor
-matrix, the draws (none, or R's in R's order), for the spy cases what the
-imputer received at every call, and the numbers of observed values that the
-completed data lose under ``where`` (R silently, MICE with a warning).
+matrix (with ``post``, the columns whose function is in effect), the draws
+(none, or R's in R's order), for the spy cases what the imputer received at
+every call, and the numbers of observed values that the completed data lose
+under ``where`` (R silently, MICE with a warning).
 test_l1_chain_mutants runs the same comparisons against a defective
 library.
 
@@ -17,9 +18,17 @@ end record R's error and test what MICE does instead: it raises its own
 ``ValueError`` before the chains start, or, for ``polyreg`` with a label
 held only by an ignored row where the augmentation is skipped, it imputes
 (the label gets probability 0) where R stops.
+
+``post`` and passive columns: where MICE deliberately differs from R, the
+last tests test MICE's own result. A passive function that is not row-wise
+gets all rows, while R evaluates the formula on the rows of the where-cells
+(``differences``: the other columns are R's, the passive one is the
+function of all rows); a ``post`` for a passive column raises, while R
+keeps it and never runs it (``post_never_run``).
 """
 
 import functools
+import re
 import warnings
 
 import numpy as np
@@ -28,8 +37,18 @@ import pytest
 
 from imputation import MICE
 
-from ._helpers import as_bool, decode_frame, str_list
-from ._l1_chain import CASES, CHECKS, R_ERRORS, impute_kwargs, run_case
+from ._helpers import as_array, as_bool, decode_frame, passive_function, str_list
+from ._l1_chain import (
+    CASES,
+    CHECKS,
+    DIFFERENCES,
+    POST_NEVER_RUN,
+    R_ERRORS,
+    check_passive_function_gets_all_rows,
+    impute_kwargs,
+    run_case,
+    without_column,
+)
 
 pytestmark = pytest.mark.parity
 
@@ -383,6 +402,187 @@ def test_fixture_covers_the_ignore_cases():
 
 
 # ---------------------------------------------------------------------------
+# what the fixture covers: post and passive
+# ---------------------------------------------------------------------------
+
+
+def _post(case):
+    """The post recipes of the case by column ({} without post)."""
+    return case["args"].get("post") or {}
+
+
+def _passive(case):
+    """The passive recipes of the case by column ({} without passive columns)."""
+    return case["args"].get("passive") or {}
+
+
+def _post_recipes(case):
+    return {recipe["recipe"] for recipe in _post(case).values()}
+
+
+def _bounds_bind(case):
+    """Bounds on a column, with an imputation of R's last step at a bound: the chain statistics are those after
+    post."""
+    for col, recipe in _post(case).items():
+        if recipe["recipe"] == "bounds" and col in (case["steps"][-1]["chain_mean"] or {}):
+            values = np.concatenate([as_array(chain) for chain in case["steps"][-1]["imp"][col]["values"]])
+            if np.isin(values, [recipe["lower"], recipe["upper"]]).any():
+                return True
+    return False
+
+
+def _later_column_predicted_from_post(case):
+    """A column with post predicts a column visited after it in the same iteration."""
+    visits = str_list(case["effective_visit_sequence"])
+    return any(
+        set(_predictors(case, col)) & set(visits[visits.index(col) + 1 :]) for col in _post(case) if col in visits
+    )
+
+
+def _post_fills_where_cells_without_imputation(case):
+    """fill_missing on a column none of whose where-cells has an imputation: R's imp holds the value in every
+    where-cell after every step."""
+    for col, recipe in _post(case).items():
+        if recipe["recipe"] == "fill_missing":
+            values = [v for step in case["steps"] for chain in step["imp"][col]["values"] for v in chain]
+            if all(v == recipe["value"] for v in values):
+                return True
+    return False
+
+
+def _setup_events(case):
+    """The events of the setup step (iteration 0) as (out, meth) pairs."""
+    events = case["steps"][-1]["logged_events"]
+    if events is None:
+        return set()
+    rows = zip(*(np.atleast_1d(events[name]) for name in ("it", "out", "meth")))
+    return {(str(out), str(meth)) for it, out, meth in rows if it == 0}
+
+
+def _post_cleared_by_the_setup_step(case):
+    """post given for a column whose method the setup step removed (logged): R clears it."""
+    removed = {out for out, _ in _setup_events(case)}
+    return any(col in removed and col not in str_list(case.get("post_columns")) for col in _post(case))
+
+
+def _inputs(recipe):
+    return [str(recipe[key]) for key in ("weight", "height", "left", "right", "column") if key in recipe]
+
+
+def _before_its_inputs(case, col, order):
+    return all(order.index(col) < order.index(name) for name in _inputs(_passive(case)[col]) if name in order)
+
+
+def _function_holds(case, col, step):
+    """In R's completed data of every chain after the step, the passive column is its function in its where-cells."""
+    function, where = passive_function(_passive(case)[col]), _where(case)[col].to_numpy()
+    for payload in case["steps"][step]["completed"]:
+        completed = decode_frame(payload)
+        values, expected = completed[col].to_numpy()[where], function(completed).to_numpy()[where]
+        if not np.allclose(values, expected, rtol=1e-8, atol=1e-10, equal_nan=True):
+            return False
+    return True
+
+
+def _passive_last_by_default(case):
+    """No visit sequence given, the passive column before its inputs in the data, visited last, and the function
+    of its row in the completed data."""
+    columns = str_list(case["data"]["columns"])
+    return case["args"]["visit_sequence"] is None and any(
+        _before_its_inputs(case, col, columns)
+        and str_list(case["effective_visit_sequence"])[-1] == col
+        and _function_holds(case, col, -1)
+        for col in _passive(case)
+    )
+
+
+def _roman_passive_before_its_inputs(case):
+    """Under "roman" the passive column is visited before its inputs, and after one iteration it is not their
+    function."""
+    visits = str_list(case["effective_visit_sequence"])
+    return case["args"]["visit_sequence"] == "roman" and any(
+        _before_its_inputs(case, col, visits) and case["maxit"][0] == 1 and not _function_holds(case, col, 0)
+        for col in _passive(case)
+    )
+
+
+def _imp_has_missing(case, col, step=-1):
+    return any(v is None for chain in case["steps"][step]["imp"][col]["values"] for v in chain)
+
+
+def _input_without_method(case):
+    """An input of a passive column has method "" and missing values: the passive column, and a column it
+    predicts, have missing imputations."""
+    data = decode_frame(case["data"])
+    return any(
+        any(case["method"][name] == "" and data[name].isna().any() for name in _inputs(recipe))
+        and _imp_has_missing(case, col)
+        and any(_imp_has_missing(case, target) for target in _predictors(case, col))
+        for col, recipe in _passive(case).items()
+    )
+
+
+def _passive_copy(case):
+    """A passive column that the setup step removes as collinear: method "", logged."""
+    return any(case["method"][col] == "" and (col, "collinear") in _setup_events(case) for col in _passive(case))
+
+
+POST_PASSIVE_CASES = {
+    "post bounds, scripted norm, 3 iterations": lambda c: (
+        c["kind"] == "scripted" and _post_recipes(c) == {"bounds"} and _methods(c) == {"norm"} and sum(c["maxit"]) >= 3
+    ),
+    "post bounds, norm.predict": lambda c: (
+        c["kind"] == "deterministic" and "bounds" in _post_recipes(c) and "norm.predict" in _methods(c)
+    ),
+    "post shift": lambda c: "shift" in _post_recipes(c),
+    "post rule on another column": lambda c: "rule" in _post_recipes(c),
+    "a later column predicted from the processed values, spy": lambda c: (
+        c["kind"] == "spy" and _later_column_predicted_from_post(c)
+    ),
+    "post, 2 or more iterations": lambda c: bool(_post(c)) and sum(c["maxit"]) >= 2,
+    'post under where "all"': lambda c: bool(_post(c)) and _where_keyword(c) == "all",
+    "post with ignore": lambda c: bool(_post(c)) and _ignored(c).any(),
+    "post fills where-cells that could not be imputed": _post_fills_where_cells_without_imputation,
+    "post bounds that bind, chain statistics after post": _bounds_bind,
+    "continued with post": lambda c: bool(_post(c)) and len(c["steps"]) > 1,
+    "post of a column the setup step removes, cleared as in R": _post_cleared_by_the_setup_step,
+    "passive bmi, visited last by default": lambda c: (
+        any(r["recipe"] == "bmi" for r in _passive(c).values()) and _passive_last_by_default(c)
+    ),
+    '"roman" with the passive column before its inputs': _roman_passive_before_its_inputs,
+    "a visit sequence that names the passive column twice": lambda c: any(
+        str_list(c["effective_visit_sequence"]).count(col) == 2 for col in _passive(c)
+    ),
+    "a passive column as predictor, spy": lambda c: (
+        c["kind"] == "spy" and any(_predictors(c, col) for col in _passive(c))
+    ),
+    "observed where-cells of a passive column": lambda c: any(
+        (_where(c)[col] & decode_frame(c["data"])[col].notna()).any() for col in _passive(c)
+    ),
+    'an input with method "": the passive value is missing and spreads': _input_without_method,
+    "observed values of a passive column lost": lambda c: any(
+        col in step for step in (c.get("lost_observed") or {"steps": []})["steps"] for col in _passive(c)
+    ),
+    'a passive copy of a column: collinear, method ""': _passive_copy,
+    'a complete passive column: method ""': lambda c: any(
+        decode_frame(c["data"])[col].notna().all() and c["method"][col] == "" for col in _passive(c)
+    ),
+    "a passive column without observed values": lambda c: any(
+        decode_frame(c["data"])[col].isna().all() and c["method"][col].startswith("~") for col in _passive(c)
+    ),
+    "continued with a passive column": lambda c: bool(_passive(c)) and len(c["steps"]) > 1,
+    "post and passive in one run": lambda c: bool(_post(c)) and bool(_passive(c)),
+}
+
+
+def test_fixture_covers_the_post_and_passive_cases():
+    missing = [name for name, covers in POST_PASSIVE_CASES.items() if not any(covers(case) for case in CASES.values())]
+    assert missing == []
+    # post_columns is written for every case with post, and only then
+    assert all(("post_columns" in case) == bool(_post(case)) for case in CASES.values())
+
+
+# ---------------------------------------------------------------------------
 # where R stops
 # ---------------------------------------------------------------------------
 
@@ -444,3 +644,40 @@ def test_where_r_stops_polyreg_imputes_without_the_label_of_the_ignored_row(name
     imputed = pd.Series(np.concatenate([completed["g"].to_numpy()[where] for completed in out]))
     assert set(imputed) == {"a", "b"}, imputed.value_counts().to_dict()
     assert mice.method["g"] == "polyreg" and mice.ignore[2]
+
+
+# ---------------------------------------------------------------------------
+# post and passive: where MICE deliberately differs
+# ---------------------------------------------------------------------------
+
+
+def test_fixture_differences_are_those_tested():
+    assert sorted(DIFFERENCES) == ["passive_aggregate"]
+    assert sorted(POST_NEVER_RUN) == ["post_for_passive"]
+
+
+def test_passive_function_that_is_not_row_wise_gets_all_rows_unlike_r():
+    """q = (chl - mean(chl))^2 is passive, its where-cells are those where chl is missing, and it predicts
+    nothing. R evaluates the formula on the rows of the where-cells, so its mean of chl is that of the imputed
+    values only; MICE passes all rows to the function, so its mean is that of the whole completed column. Every
+    other column is R's; q is the function of all rows and differs from R's."""
+    case = DIFFERENCES["passive_aggregate"]
+    run = run_case(case)
+    other_case, other_run = without_column(case, run, "q")
+    for check in CHECKS.values():
+        check(other_case, other_run)
+    check_passive_function_gets_all_rows(case, run)
+
+
+@pytest.mark.parametrize("name", list(POST_NEVER_RUN))
+def test_post_for_a_passive_column_raises_where_r_never_runs_it(name):
+    """R keeps the post command of a passive column after the setup step (post_columns) and never runs it:
+    l1_chain.R requires that the run equals the run without it. MICE raises before the chains start."""
+    case = POST_NEVER_RUN[name]
+    kwargs = impute_kwargs(case)
+    both = [col for col in kwargs["post"] if col in kwargs["passive"]]
+    assert both and set(both) <= set(str_list(case["post_columns"]))
+    mice = MICE(decode_frame(case["data"]))
+    with pytest.raises(ValueError, match=re.escape(f"post names the passive columns {both}: post is not applied")):
+        mice.impute(maxit=case["maxit"], **kwargs)
+    assert not getattr(mice, "imputed_datasets", None)

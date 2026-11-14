@@ -1,5 +1,5 @@
 {
-  "description": "mice(data, maxit = 0) with default arguments and with each visitSequence code. effective_visit_sequence keeps only variables with a non-empty method, in R's order: the order in which R actually imputes. where_cases: make.method(data, where = ) and mice(data, maxit = 0, where = ), where a keyword or cols and values (a list of rows), method_arg the method given to mice(). monotone_cases: mice(data, m = 1, maxit, visitSequence = visit_sequence_arg, method = 'norm.predict', where): the predictorMatrix that mice.edit.predictorMatrix() leaves, and for maxit = 1 with 'monotone' the completed data, which use no start value.",
+  "description": "mice(data, maxit = 0) with default arguments and with each visitSequence code. effective_visit_sequence keeps only variables with a non-empty method, in R's order: the order in which R actually imputes. where_cases: make.method(data, where = ) and mice(data, maxit = 0, where = ), where a keyword or cols and values (a list of rows), method_arg the method given to mice(). monotone_cases: mice(data, m = 1, maxit, visitSequence = visit_sequence_arg, method = 'norm.predict', where): the predictorMatrix that mice.edit.predictorMatrix() leaves, and for maxit = 1 with 'monotone' the completed data, which use no start value. passive_cases: mice(data, maxit = 0, method, where) with method_arg and the passive variables of `passive` (recipes, see _common.R, whose formulas R's method holds), for the default visit sequence, each keyword and the vector visit_sequence_arg (visit_sequence_vector).",
   "cases": [
     {
       "name": "nhanes",
@@ -1022,6 +1022,378 @@
       "visit_sequence": ["chl", "bmi", "hyp", "age"],
       "effective_visit_sequence": ["chl", "bmi", "hyp"],
       "completed": null
+    }
+  ],
+  "passive_cases": [
+    {
+      "name": "nhanes_sum",
+      "data": {
+        "columns": ["age", "s", "bmi", "hyp", "chl"],
+        "nrow": 25,
+        "data": {
+          "age": [1, 2, 1, 3, 1, 3, 1, 1, 2, 2, 1, 2, 3, 2, 1, 1, 3, 2, 1, 3, 1, 1, 1, 3, 2],
+          "s": [null, 210, null, null, 133, null, 140, 217, 260, null, null, null, 228, 233, null, null, 311, 225, 253, null, null, 262, 158, null, 213],
+          "bmi": [null, 22.699999999999999, null, null, 20.399999999999999, null, 22.5, 30.100000000000001, 22, null, null, null, 21.699999999999999, 28.699999999999999, 29.600000000000001, null, 27.199999999999999, 26.300000000000001, 35.299999999999997, 25.5, null, 33.200000000000003, 27.5, 24.899999999999999, 27.399999999999999],
+          "hyp": [null, 1, 1, null, 1, null, 1, 1, 1, null, null, null, 1, 2, 1, null, 2, 2, 1, 2, null, 1, 1, 1, 1],
+          "chl": [null, 187, 187, null, 113, 184, 118, 187, 238, null, null, null, 206, 204, null, null, 284, 199, 218, null, null, 229, 131, null, 186]
+        },
+        "levels": {},
+        "ordered": {}
+      },
+      "where": null,
+      "method_arg": {
+        "age": "",
+        "bmi": "pmm",
+        "hyp": "pmm",
+        "chl": "pmm"
+      },
+      "passive": {
+        "s": {
+          "recipe": "sum",
+          "left": "bmi",
+          "right": "chl"
+        }
+      },
+      "visit_sequence_arg": ["bmi", "s", "hyp", "chl", "s"],
+      "method": {
+        "age": "",
+        "s": "~ I(bmi + chl)",
+        "bmi": "pmm",
+        "hyp": "pmm",
+        "chl": "pmm"
+      },
+      "predictor_matrix": {
+        "rows": ["age", "s", "bmi", "hyp", "chl"],
+        "cols": ["age", "s", "bmi", "hyp", "chl"],
+        "values": [
+          [0, 1, 1, 1, 1],
+          [1, 0, 1, 1, 1],
+          [1, 1, 0, 1, 1],
+          [1, 1, 1, 0, 1],
+          [1, 1, 1, 1, 0]
+        ]
+      },
+      "logged_events": null,
+      "visit_sequence_default": ["age", "bmi", "hyp", "chl", "s"],
+      "visit_sequence": {
+        "roman": ["s", "bmi", "hyp", "chl"],
+        "arabic": ["chl", "hyp", "bmi", "s"],
+        "monotone": ["age", "hyp", "bmi", "chl", "s"],
+        "revmonotone": ["s", "chl", "bmi", "hyp", "age"]
+      },
+      "visit_sequence_vector": ["bmi", "s", "hyp", "chl", "s"],
+      "imputed_variables": ["s", "bmi", "hyp", "chl"],
+      "effective_visit_sequence_default": ["bmi", "hyp", "chl", "s"],
+      "effective_visit_sequence": {
+        "roman": ["s", "bmi", "hyp", "chl"],
+        "arabic": ["chl", "hyp", "bmi", "s"],
+        "monotone": ["hyp", "bmi", "chl", "s"],
+        "revmonotone": ["s", "chl", "bmi", "hyp"]
+      },
+      "effective_visit_sequence_vector": ["bmi", "s", "hyp", "chl", "s"]
+    },
+    {
+      "name": "nhanes_sum_where",
+      "data": {
+        "columns": ["age", "s", "bmi", "hyp", "chl"],
+        "nrow": 25,
+        "data": {
+          "age": [1, 2, 1, 3, 1, 3, 1, 1, 2, 2, 1, 2, 3, 2, 1, 1, 3, 2, 1, 3, 1, 1, 1, 3, 2],
+          "s": [null, 210, null, null, 133, null, 140, 217, 260, null, null, null, 228, 233, null, null, 311, 225, 253, null, null, 262, 158, null, 213],
+          "bmi": [null, 22.699999999999999, null, null, 20.399999999999999, null, 22.5, 30.100000000000001, 22, null, null, null, 21.699999999999999, 28.699999999999999, 29.600000000000001, null, 27.199999999999999, 26.300000000000001, 35.299999999999997, 25.5, null, 33.200000000000003, 27.5, 24.899999999999999, 27.399999999999999],
+          "hyp": [null, 1, 1, null, 1, null, 1, 1, 1, null, null, null, 1, 2, 1, null, 2, 2, 1, 2, null, 1, 1, 1, 1],
+          "chl": [null, 187, 187, null, 113, 184, 118, 187, 238, null, null, null, 206, 204, null, null, 284, 199, 218, null, null, 229, 131, null, 186]
+        },
+        "levels": {},
+        "ordered": {}
+      },
+      "where": {
+        "cols": ["age", "s", "bmi", "hyp", "chl"],
+        "values": [
+          [false, true, true, false, true],
+          [false, true, false, false, false],
+          [false, false, true, false, false],
+          [false, false, true, false, true],
+          [false, true, false, false, false],
+          [false, false, true, false, false],
+          [false, false, false, false, false],
+          [false, false, false, false, false],
+          [false, false, false, false, false],
+          [false, false, true, false, true],
+          [false, false, true, false, true],
+          [false, false, true, false, true],
+          [false, false, false, false, false],
+          [false, false, false, false, false],
+          [false, false, false, false, true],
+          [false, false, true, false, true],
+          [false, false, false, false, false],
+          [false, false, false, false, false],
+          [false, false, false, false, false],
+          [false, false, false, false, true],
+          [false, false, true, false, true],
+          [false, false, false, false, false],
+          [false, false, false, false, false],
+          [false, false, false, false, true],
+          [false, false, false, false, false]
+        ]
+      },
+      "method_arg": {
+        "age": "",
+        "bmi": "pmm",
+        "hyp": "pmm",
+        "chl": "pmm"
+      },
+      "passive": {
+        "s": {
+          "recipe": "sum",
+          "left": "bmi",
+          "right": "chl"
+        }
+      },
+      "visit_sequence_arg": ["s", "bmi", "chl", "s"],
+      "method": {
+        "age": "",
+        "s": "~ I(bmi + chl)",
+        "bmi": "pmm",
+        "hyp": "",
+        "chl": "pmm"
+      },
+      "predictor_matrix": {
+        "rows": ["age", "s", "bmi", "hyp", "chl"],
+        "cols": ["age", "s", "bmi", "hyp", "chl"],
+        "values": [
+          [0, 1, 1, 1, 1],
+          [1, 0, 1, 1, 1],
+          [1, 1, 0, 1, 1],
+          [1, 1, 1, 0, 1],
+          [1, 1, 1, 1, 0]
+        ]
+      },
+      "logged_events": null,
+      "visit_sequence_default": ["age", "bmi", "hyp", "chl", "s"],
+      "visit_sequence": {
+        "roman": ["s", "bmi", "chl"],
+        "arabic": ["chl", "bmi", "s"],
+        "monotone": ["age", "hyp", "s", "bmi", "chl"],
+        "revmonotone": ["chl", "bmi", "s", "hyp", "age"]
+      },
+      "visit_sequence_vector": ["s", "bmi", "chl", "s"],
+      "imputed_variables": ["s", "bmi", "chl"],
+      "effective_visit_sequence_default": ["bmi", "chl", "s"],
+      "effective_visit_sequence": {
+        "roman": ["s", "bmi", "chl"],
+        "arabic": ["chl", "bmi", "s"],
+        "monotone": ["s", "bmi", "chl"],
+        "revmonotone": ["chl", "bmi", "s"]
+      },
+      "effective_visit_sequence_vector": ["s", "bmi", "chl", "s"]
+    },
+    {
+      "name": "nhanes_copy",
+      "data": {
+        "columns": ["age", "bmi", "hyp", "chl", "c2"],
+        "nrow": 25,
+        "data": {
+          "age": [1, 2, 1, 3, 1, 3, 1, 1, 2, 2, 1, 2, 3, 2, 1, 1, 3, 2, 1, 3, 1, 1, 1, 3, 2],
+          "bmi": [null, 22.699999999999999, null, null, 20.399999999999999, null, 22.5, 30.100000000000001, 22, null, null, null, 21.699999999999999, 28.699999999999999, 29.600000000000001, null, 27.199999999999999, 26.300000000000001, 35.299999999999997, 25.5, null, 33.200000000000003, 27.5, 24.899999999999999, 27.399999999999999],
+          "hyp": [null, 1, 1, null, 1, null, 1, 1, 1, null, null, null, 1, 2, 1, null, 2, 2, 1, 2, null, 1, 1, 1, 1],
+          "chl": [null, 187, 187, null, 113, 184, 118, 187, 238, null, null, null, 206, 204, null, null, 284, 199, 218, null, null, 229, 131, null, 186],
+          "c2": [null, 374, 374, null, 226, 368, 236, 374, 476, null, null, null, 412, 408, null, null, 568, 398, 436, null, null, 458, 262, null, 372]
+        },
+        "levels": {},
+        "ordered": {}
+      },
+      "where": null,
+      "method_arg": {
+        "age": "",
+        "bmi": "pmm",
+        "hyp": "pmm",
+        "chl": "pmm"
+      },
+      "passive": {
+        "c2": {
+          "recipe": "multiple",
+          "column": "chl",
+          "factor": 2
+        }
+      },
+      "visit_sequence_arg": ["chl", "bmi", "hyp", "chl"],
+      "method": {
+        "age": "",
+        "bmi": "pmm",
+        "hyp": "pmm",
+        "chl": "pmm",
+        "c2": ""
+      },
+      "predictor_matrix": {
+        "rows": ["age", "bmi", "hyp", "chl", "c2"],
+        "cols": ["age", "bmi", "hyp", "chl", "c2"],
+        "values": [
+          [0, 1, 1, 1, 0],
+          [1, 0, 1, 1, 0],
+          [1, 1, 0, 1, 0],
+          [1, 1, 1, 0, 0],
+          [0, 0, 0, 0, 0]
+        ]
+      },
+      "logged_events": {
+        "it": [0],
+        "im": [0],
+        "dep": [""],
+        "meth": ["collinear"],
+        "out": ["c2"]
+      },
+      "visit_sequence_default": ["age", "bmi", "hyp", "chl", "c2"],
+      "visit_sequence": {
+        "roman": ["bmi", "hyp", "chl", "c2"],
+        "arabic": ["c2", "chl", "hyp", "bmi"],
+        "monotone": ["age", "hyp", "bmi", "chl", "c2"],
+        "revmonotone": ["c2", "chl", "bmi", "hyp", "age"]
+      },
+      "visit_sequence_vector": ["chl", "bmi", "hyp", "chl"],
+      "imputed_variables": ["bmi", "hyp", "chl"],
+      "effective_visit_sequence_default": ["bmi", "hyp", "chl"],
+      "effective_visit_sequence": {
+        "roman": ["bmi", "hyp", "chl"],
+        "arabic": ["chl", "hyp", "bmi"],
+        "monotone": ["hyp", "bmi", "chl"],
+        "revmonotone": ["chl", "bmi", "hyp"]
+      },
+      "effective_visit_sequence_vector": ["chl", "bmi", "hyp", "chl"]
+    },
+    {
+      "name": "nhanes_complete",
+      "data": {
+        "columns": ["age", "bmi", "hyp", "chl", "a2"],
+        "nrow": 25,
+        "data": {
+          "age": [1, 2, 1, 3, 1, 3, 1, 1, 2, 2, 1, 2, 3, 2, 1, 1, 3, 2, 1, 3, 1, 1, 1, 3, 2],
+          "bmi": [null, 22.699999999999999, null, null, 20.399999999999999, null, 22.5, 30.100000000000001, 22, null, null, null, 21.699999999999999, 28.699999999999999, 29.600000000000001, null, 27.199999999999999, 26.300000000000001, 35.299999999999997, 25.5, null, 33.200000000000003, 27.5, 24.899999999999999, 27.399999999999999],
+          "hyp": [null, 1, 1, null, 1, null, 1, 1, 1, null, null, null, 1, 2, 1, null, 2, 2, 1, 2, null, 1, 1, 1, 1],
+          "chl": [null, 187, 187, null, 113, 184, 118, 187, 238, null, null, null, 206, 204, null, null, 284, 199, 218, null, null, 229, 131, null, 186],
+          "a2": [1, 4, 1, 9, 1, 9, 1, 1, 4, 4, 1, 4, 9, 4, 1, 1, 9, 4, 1, 9, 1, 1, 1, 9, 4]
+        },
+        "levels": {},
+        "ordered": {}
+      },
+      "where": null,
+      "method_arg": {
+        "age": "",
+        "bmi": "pmm",
+        "hyp": "pmm",
+        "chl": "pmm"
+      },
+      "passive": {
+        "a2": {
+          "recipe": "product",
+          "left": "age",
+          "right": "age"
+        }
+      },
+      "visit_sequence_arg": ["chl", "bmi", "hyp", "chl"],
+      "method": {
+        "age": "",
+        "bmi": "pmm",
+        "hyp": "pmm",
+        "chl": "pmm",
+        "a2": ""
+      },
+      "predictor_matrix": {
+        "rows": ["age", "bmi", "hyp", "chl", "a2"],
+        "cols": ["age", "bmi", "hyp", "chl", "a2"],
+        "values": [
+          [0, 1, 1, 1, 1],
+          [1, 0, 1, 1, 1],
+          [1, 1, 0, 1, 1],
+          [1, 1, 1, 0, 1],
+          [1, 1, 1, 1, 0]
+        ]
+      },
+      "logged_events": null,
+      "visit_sequence_default": ["age", "bmi", "hyp", "chl", "a2"],
+      "visit_sequence": {
+        "roman": ["bmi", "hyp", "chl"],
+        "arabic": ["chl", "hyp", "bmi"],
+        "monotone": ["age", "a2", "hyp", "bmi", "chl"],
+        "revmonotone": ["chl", "bmi", "hyp", "a2", "age"]
+      },
+      "visit_sequence_vector": ["chl", "bmi", "hyp", "chl"],
+      "imputed_variables": ["bmi", "hyp", "chl"],
+      "effective_visit_sequence_default": ["bmi", "hyp", "chl"],
+      "effective_visit_sequence": {
+        "roman": ["bmi", "hyp", "chl"],
+        "arabic": ["chl", "hyp", "bmi"],
+        "monotone": ["hyp", "bmi", "chl"],
+        "revmonotone": ["chl", "bmi", "hyp"]
+      },
+      "effective_visit_sequence_vector": ["chl", "bmi", "hyp", "chl"]
+    },
+    {
+      "name": "nhanes_all_missing",
+      "data": {
+        "columns": ["age", "bmi", "hyp", "chl", "s"],
+        "nrow": 25,
+        "data": {
+          "age": [1, 2, 1, 3, 1, 3, 1, 1, 2, 2, 1, 2, 3, 2, 1, 1, 3, 2, 1, 3, 1, 1, 1, 3, 2],
+          "bmi": [null, 22.699999999999999, null, null, 20.399999999999999, null, 22.5, 30.100000000000001, 22, null, null, null, 21.699999999999999, 28.699999999999999, 29.600000000000001, null, 27.199999999999999, 26.300000000000001, 35.299999999999997, 25.5, null, 33.200000000000003, 27.5, 24.899999999999999, 27.399999999999999],
+          "hyp": [null, 1, 1, null, 1, null, 1, 1, 1, null, null, null, 1, 2, 1, null, 2, 2, 1, 2, null, 1, 1, 1, 1],
+          "chl": [null, 187, 187, null, 113, 184, 118, 187, 238, null, null, null, 206, 204, null, null, 284, 199, 218, null, null, 229, 131, null, 186],
+          "s": [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null]
+        },
+        "levels": {},
+        "ordered": {}
+      },
+      "where": null,
+      "method_arg": {
+        "age": "",
+        "bmi": "pmm",
+        "hyp": "pmm",
+        "chl": "pmm"
+      },
+      "passive": {
+        "s": {
+          "recipe": "sum",
+          "left": "bmi",
+          "right": "chl"
+        }
+      },
+      "visit_sequence_arg": ["s", "bmi", "hyp", "chl", "s"],
+      "method": {
+        "age": "",
+        "bmi": "pmm",
+        "hyp": "pmm",
+        "chl": "pmm",
+        "s": "~ I(bmi + chl)"
+      },
+      "predictor_matrix": {
+        "rows": ["age", "bmi", "hyp", "chl", "s"],
+        "cols": ["age", "bmi", "hyp", "chl", "s"],
+        "values": [
+          [0, 1, 1, 1, 1],
+          [1, 0, 1, 1, 1],
+          [1, 1, 0, 1, 1],
+          [1, 1, 1, 0, 1],
+          [1, 1, 1, 1, 0]
+        ]
+      },
+      "logged_events": null,
+      "visit_sequence_default": ["age", "bmi", "hyp", "chl", "s"],
+      "visit_sequence": {
+        "roman": ["bmi", "hyp", "chl", "s"],
+        "arabic": ["s", "chl", "hyp", "bmi"],
+        "monotone": ["age", "hyp", "bmi", "chl", "s"],
+        "revmonotone": ["s", "chl", "bmi", "hyp", "age"]
+      },
+      "visit_sequence_vector": ["s", "bmi", "hyp", "chl", "s"],
+      "imputed_variables": ["bmi", "hyp", "chl", "s"],
+      "effective_visit_sequence_default": ["bmi", "hyp", "chl", "s"],
+      "effective_visit_sequence": {
+        "roman": ["bmi", "hyp", "chl", "s"],
+        "arabic": ["s", "chl", "hyp", "bmi"],
+        "monotone": ["hyp", "bmi", "chl", "s"],
+        "revmonotone": ["s", "chl", "bmi", "hyp"]
+      },
+      "effective_visit_sequence_vector": ["s", "bmi", "hyp", "chl", "s"]
     }
   ],
   "meta": {

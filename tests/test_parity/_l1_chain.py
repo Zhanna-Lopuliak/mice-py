@@ -30,6 +30,16 @@ with R's (``warnings`` of the case; a case without it has none).
 ``R_ERRORS`` holds the calls of R's ``mice()`` that stop, with R's error, for
 the tests of what MICE does there (test_l1_chain).
 
+A case with ``post`` or passive columns names them as recipes
+(``post_function`` and ``passive_function`` in ``_helpers``), from which
+`impute_kwargs` builds the functions of ``impute(post=, passive=)``; R's
+method of a passive column is its formula, MICE's ``"passive"``.
+``DIFFERENCES`` holds the cases where MICE deliberately differs from R (a
+passive function that is not row-wise: R evaluates its formula on the rows
+of the where-cells, MICE passes all rows), ``POST_NEVER_RUN`` the calls with
+a ``post`` for a passive column, which R keeps and never runs and MICE
+rejects; test_l1_chain tests MICE's own results there.
+
 The comparisons are separate functions, so that test_l1_chain_mutants can
 run them against a defective library; each raises ``AssertionError`` with a
 message that names the case and what differs. Tolerances as in the other L1
@@ -37,10 +47,11 @@ tests: values ``rtol 1e-8``, ``atol 1e-10``; labels, masks, the positions of
 missing values, events and draws identical.
 """
 
+import copy
 import re
 import sys
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import NamedTuple
 
 import numpy as np
@@ -52,7 +63,16 @@ from imputation.norm import norm_predict
 
 from .._logged_events import continue_checking_log_warning, impute_checking_log_warning
 from ..test_properties._helpers import register_imputer
-from ._helpers import ScriptedGenerator, as_array, as_bool, decode_frame, load_fixture, str_list
+from ._helpers import (
+    ScriptedGenerator,
+    as_array,
+    as_bool,
+    decode_frame,
+    load_fixture,
+    passive_function,
+    post_function,
+    str_list,
+)
 
 RTOL = 1e-8
 ATOL = 1e-10
@@ -60,9 +80,11 @@ ATOL = 1e-10
 FIXTURE = load_fixture("l1_chain")
 CASES = {case["name"]: case for case in FIXTURE["cases"]}
 R_ERRORS = {case["name"]: case for case in FIXTURE["r_errors"]}
+DIFFERENCES = {case["name"]: case for case in FIXTURE["differences"]}
+POST_NEVER_RUN = {case["name"]: case for case in FIXTURE["post_never_run"]}
 
 # The arguments of mice() a case may pass, under the names of the matching arguments of impute
-_ARGUMENTS = ("method", "predictor_matrix", "visit_sequence", "where", "ignore")
+_ARGUMENTS = ("method", "predictor_matrix", "visit_sequence", "where", "ignore", "post", "passive")
 _LOG_COLUMNS = ("it", "im", "dep", "meth", "out")
 _POOLS = ("chisq", "normal", "uniform")
 
@@ -141,7 +163,17 @@ def impute_kwargs(case):
     if ignore is not None:
         # R's vector as given: a list of booleans, or of what R was given where it stops
         kwargs["ignore"] = ignore if isinstance(ignore, list) else [ignore]
+    # the functions of the recipes, from which R built its post commands and passive formulas
+    if args.get("post") is not None:
+        kwargs["post"] = {col: post_function(recipe) for col, recipe in args["post"].items()}
+    if args.get("passive") is not None:
+        kwargs["passive"] = {col: passive_function(recipe) for col, recipe in args["passive"].items()}
     return kwargs
+
+
+def mice_method(r_method):
+    """The entry of ``MICE.method`` for R's method of a column: ``"passive"`` for R's passive formula ("~ ...")."""
+    return "passive" if r_method.startswith("~") else r_method
 
 
 def run_case(case):
@@ -397,16 +429,22 @@ def check_iteration(case, run):
 
 
 def check_setup(case, run):
-    """The method of every column, the visit sequence and the predictor matrix: R's."""
+    """The method of every column, the visit sequence and the predictor matrix: R's; with ``post``, the columns
+    whose function is in effect (``MICE.post``): those whose post command R keeps after the setup step."""
     mice = run.mice
     method = {str(col): meth for col, meth in mice.method.items()}
-    assert method == case["method"], f"{case['name']}: methods {method} differ from R's {case['method']}"
+    r_method = {col: mice_method(meth) for col, meth in case["method"].items()}
+    assert method == r_method, f"{case['name']}: methods {method} differ from R's {r_method}"
     visits = [str(col) for col in mice.visit_sequence]
     r_visits = str_list(case["effective_visit_sequence"])
     assert visits == r_visits, f"{case['name']}: visit sequence {visits} differs from R's {r_visits}"
     r_matrix = _matrix(case["predictor_matrix"])
     matrix = mice.predictor_matrix.loc[r_matrix.index, r_matrix.columns].astype(int)
     np.testing.assert_array_equal(matrix.to_numpy(), r_matrix.to_numpy(), err_msg=f"{case['name']}: predictor matrix")
+    if "post_columns" in case:
+        post = sorted(str(col) for col in mice.post)
+        r_post = sorted(str_list(case["post_columns"]))
+        assert post == r_post, f"{case['name']}: post in effect for {post}, in R for {r_post}"
 
 
 def check_draws(case, run):
@@ -447,10 +485,13 @@ def check_calls(case, run):
         np.testing.assert_allclose(call.x, r_x, rtol=RTOL, atol=ATOL, err_msg=f"{label}: x")
 
 
+_LOST_REASONS = {"": "no method", "passive": "passive function missing in these rows"}
+
+
 def check_lost_observed_values(case, run):
     """MICE's warning about lost observed values after the start and after every step: R's number of observed
     where-cells that are NA in the completed data of some chain, per column, and the reason ("no method" for a
-    column whose method is ``""``)."""
+    column whose method is ``""``, the function for a passive column)."""
     expected = case.get("lost_observed") or {"start": {}, "steps": [{}] * len(case["steps"])}
     labelled = [(f"{case['name']}, start", expected["start"], run.start_lost_observed)]
     for (label, _, got), r_lost in zip(_steps(case, run), expected["steps"]):
@@ -460,7 +501,7 @@ def check_lost_observed_values(case, run):
         counts = {col: n for col, (n, _) in lost.items()}
         assert counts == r_counts, f"{label}: observed values lost per column {counts}, R's {r_counts}"
         for col, (_, reason) in lost.items():
-            r_reason = "no method" if case["method"][col] == "" else "predictors incomplete in these rows"
+            r_reason = _LOST_REASONS.get(mice_method(case["method"][col]), "predictors incomplete in these rows")
             assert reason == r_reason, f"{label}: observed values of {col!r} lost for {reason!r}, by R for {r_reason!r}"
 
 
@@ -473,6 +514,62 @@ def check_warnings(case, run):
     )
     for label, _, got in _steps(case, run):
         assert got.warnings == [], f"{label}: continue_chains warned {got.warnings}, R's mice.mids() nothing"
+
+
+def without_column(case, run, col):
+    """Copies of `case` and `run` without the column `col` in ``imp``, the completed data and the chain statistics,
+    for the comparisons of the other columns where MICE deliberately differs from R in `col`."""
+    case = copy.deepcopy(case)
+    for step in case["steps"]:
+        step["imp"].pop(col)
+        step["chain_mean"].pop(col)
+        step["chain_var"].pop(col)
+        for payload in step["completed"]:
+            payload["columns"] = [name for name in payload["columns"] if name != col]
+            payload["data"].pop(col)
+    steps = [
+        replace(
+            step,
+            imp=[{name: values for name, values in imp.items() if name != col} for imp in step.imp],
+            datasets=[dataset.drop(columns=col) for dataset in step.datasets],
+            chain_mean={name: values for name, values in step.chain_mean.items() if name != col},
+            chain_var={name: values for name, values in step.chain_var.items() if name != col},
+        )
+        for step in run.steps
+    ]
+    return case, replace(run, steps=steps)
+
+
+def check_passive_function_gets_all_rows(case, run):
+    """A passive function that is not row-wise, ``(x - x.mean()) ** 2`` (recipe ``centred_square``): MICE's values
+    are those of all rows, R's those of the rows of the where-cells, as R evaluates the formula on ``data[wy, ]``.
+
+    In every completed dataset after every step, the passive column holds in its where-cells the function of
+    the completed ``x`` with the mean of all rows; R's values are the same function with the mean of the
+    where-rows (computed here from MICE's ``x``, which is R's), and differ.
+    """
+    ((col, recipe),) = case["args"]["passive"].items()
+    assert recipe["recipe"] == "centred_square"
+    source = str(recipe["column"])
+    where = run.mice.where[col].to_numpy()
+    for label, expected, got in _steps(case, run):
+        for chain, dataset in enumerate(got.datasets):
+            message = f"{label}, chain {chain + 1}: {col!r}"
+            x = dataset[source].to_numpy(dtype=float)
+            all_rows = (x - x.mean()) ** 2
+            values = dataset[col].to_numpy(dtype=float)[where]
+            np.testing.assert_allclose(
+                values, all_rows[where], rtol=RTOL, atol=ATOL, err_msg=f"{message} is not the function of all rows"
+            )
+            r_values = as_array(expected["imp"][col]["values"][chain])
+            np.testing.assert_allclose(
+                r_values,
+                (x[where] - x[where].mean()) ** 2,
+                rtol=RTOL,
+                atol=ATOL,
+                err_msg=f"{message}: R's values are not the function of the where-rows",
+            )
+            assert np.abs(values - r_values).max() > 1, f"{message}: MICE's values equal R's"
 
 
 CHECKS = {

@@ -26,6 +26,16 @@ the missing counts. ``monotone_cases``: the predictor matrix that R's
 leaves alone otherwise; one such iteration uses no start value, so its
 completed data are compared too. test_l1_chain_mutants runs these
 comparisons against a defective library.
+
+Passive columns (``passive_cases``): ``impute(maxit=0, method=, passive=,
+where=)`` against R's ``mice(data, maxit = 0, method, where)`` with the
+passive formulas in ``method`` (built from the same recipes, see
+``_helpers.passive_function``): the methods after the setup step, where
+MICE shows ``"passive"`` for R's formula and ``""`` for a passive copy of a
+column (collinear) and a complete passive column; the predictor matrix; the
+logged events; the visit sequence by default (the passive columns last),
+for each keyword and for a list that names a column twice (R's sequence
+restricted to the columns R imputes, as MICE lists only those).
 """
 
 import warnings
@@ -37,7 +47,7 @@ import pytest
 from imputation import MICE, make_method
 
 from .._logged_events import impute_checking_log_warning
-from ._helpers import as_array, as_bool, decode_frame, load_fixture, str_list
+from ._helpers import as_array, as_bool, decode_frame, load_fixture, passive_function, str_list
 
 pytestmark = pytest.mark.parity
 
@@ -355,6 +365,96 @@ def test_monotone_cases_cover_the_edit_and_its_absence():
         matrix = np.array(case["predictor_matrix"]["values"], dtype=int)
         unedited = (matrix == 1 - np.eye(len(matrix), dtype=int)).all()
         assert unedited == (case["completed"] is None), case["name"]
+
+
+# ---------------------------------------------------------------------------
+# passive columns: methods, predictor matrix, logged events, visit sequence
+# ---------------------------------------------------------------------------
+
+PASSIVE = SETUP["passive_cases"]
+
+
+def _mice_method(r_method):
+    """MICE's method for R's: ``"passive"`` for a passive formula ("~ ...")."""
+    return "passive" if r_method.startswith("~") else r_method
+
+
+def _impute_passive(case, **kwargs):
+    """``impute(maxit=0)`` with the methods, passive columns and ``where`` of the case, as R's ``mice(maxit = 0)``."""
+    df = decode_frame(case["data"])
+    mice = MICE(df)
+    impute_checking_log_warning(
+        mice,
+        n_imputations=1,
+        maxit=0,
+        seed=20261112,
+        method={col: str(meth) for col, meth in case["method_arg"].items()},
+        passive={col: passive_function(recipe) for col, recipe in case["passive"].items()},
+        where=_where(case, df),
+        **kwargs,
+    )
+    return mice
+
+
+def _events(rows):
+    """Logged events as (it, im, dep, meth, out) tuples."""
+    return [(int(it), int(im), str(dep), str(meth), str(out)) for it, im, dep, meth, out in rows]
+
+
+def check_passive_setup(case):
+    """The methods, the predictor matrix and the logged events of the setup step: R's."""
+    mice = _impute_passive(case)
+    method = {str(col): meth for col, meth in mice.method.items()}
+    r_method = {col: _mice_method(meth) for col, meth in case["method"].items()}
+    assert method == r_method, f"{case['name']}: methods {method}, R's {r_method}"
+    _check_predictor_matrix(case, mice)
+    r_log = case["logged_events"] or {name: [] for name in LOG_COLUMNS}
+    r_events = _events(zip(*(r_log[name] for name in LOG_COLUMNS)))
+    events = _events(mice.logged_events.itertuples(index=False))
+    assert events == r_events, f"{case['name']}: logged events {events}, R's {r_events}"
+
+
+def check_passive_visit_sequences(case):
+    """The visit sequence by default, for each keyword and for the list of the case: R's, restricted to the
+    variables R imputes (repeats kept)."""
+    runs = [("default", None, case["effective_visit_sequence_default"])]
+    runs += [(code, code, case["effective_visit_sequence"][code]) for code in VISITS]
+    runs.append(("list", str_list(case["visit_sequence_arg"]), case["effective_visit_sequence_vector"]))
+    for label, visit_sequence, expected in runs:
+        visits = [str(col) for col in _impute_passive(case, visit_sequence=visit_sequence).visit_sequence]
+        expected = str_list(expected)
+        assert visits == expected, f"{case['name']}: visit sequence {label} {visits}, R's {expected}"
+
+
+@pytest.mark.parametrize("case", PASSIVE, ids=[c["name"] for c in PASSIVE])
+def test_passive_setup_matches_r(case):
+    check_passive_setup(case)
+
+
+@pytest.mark.parametrize("case", PASSIVE, ids=[c["name"] for c in PASSIVE])
+def test_passive_visit_sequences_match_r(case):
+    check_passive_visit_sequences(case)
+
+
+def test_passive_cases_cover_the_order_and_the_setup_rules():
+    by_name = {case["name"]: case for case in PASSIVE}
+    case = by_name["nhanes_sum"]
+    # the default moves s to the end; "roman" keeps it first, before its inputs; the list names it twice
+    assert str_list(case["effective_visit_sequence_default"])[-1] == "s"
+    assert str_list(case["effective_visit_sequence"]["roman"])[0] == "s"
+    assert str_list(case["effective_visit_sequence_vector"]).count("s") == 2
+    # a passive copy of a column: method "", logged as collinear; a complete passive column: method "", not logged
+    copy, complete = by_name["nhanes_copy"], by_name["nhanes_complete"]
+    assert copy["method"]["c2"] == "" and copy["logged_events"]["meth"] == ["collinear"]
+    assert complete["method"]["a2"] == "" and complete["logged_events"] is None
+    # an entirely missing passive column keeps its formula
+    case = by_name["nhanes_all_missing"]
+    assert decode_frame(case["data"])["s"].isna().all() and case["method"]["s"].startswith("~")
+    # with where, the passive column has observed where-cells and comes first in "monotone"
+    case = by_name["nhanes_sum_where"]
+    where = _where(case, decode_frame(case["data"]))
+    assert (where["s"] & decode_frame(case["data"])["s"].notna()).any()
+    assert str_list(case["effective_visit_sequence"]["monotone"])[0] == "s"
 
 
 # ---------------------------------------------------------------------------
