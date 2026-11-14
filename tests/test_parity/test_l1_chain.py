@@ -11,16 +11,25 @@ imputer received at every call, and the numbers of observed values that the
 completed data lose under ``where`` (R silently, MICE with a warning).
 test_l1_chain_mutants runs the same comparisons against a defective
 library.
+
+Where R's ``mice()`` stops (``r_errors`` of the fixture), the tests at the
+end record R's error and test what MICE does instead: it raises its own
+``ValueError`` before the chains start, or, for ``polyreg`` with a label
+held only by an ignored row where the augmentation is skipped, it imputes
+(the label gets probability 0) where R stops.
 """
 
 import functools
+import warnings
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from ._helpers import decode_frame, str_list
-from ._l1_chain import CASES, CHECKS, run_case
+from imputation import MICE
+
+from ._helpers import as_bool, decode_frame, str_list
+from ._l1_chain import CASES, CHECKS, R_ERRORS, impute_kwargs, run_case
 
 pytestmark = pytest.mark.parity
 
@@ -246,3 +255,192 @@ def test_fixture_covers_the_where_cases():
         lost = case.get("lost_observed")
         if lost is not None:
             assert any(lost["start"]) or any(any(step) for step in lost["steps"]), case["name"]
+
+
+# ---------------------------------------------------------------------------
+# what the fixture covers: ignore
+# ---------------------------------------------------------------------------
+
+
+def _ignored(case):
+    """The rows the case leaves out of the fits, one boolean per row (all False without ignore)."""
+    ignore = case["args"].get("ignore")
+    return np.zeros(case["data"]["nrow"], dtype=bool) if ignore is None else as_bool(ignore)
+
+
+def _imputed_columns(case, method=None):
+    return [col for col, meth in case["method"].items() if meth and (method is None or meth == method)]
+
+
+def _imputed_and_neither(case):
+    """An ignored row with a missing where-cell (imputed) and one with an observed cell outside where (in
+    neither mask), in one column with a method."""
+    data, where, ignored = decode_frame(case["data"]), _where(case), _ignored(case)
+    return any(
+        (ignored & where[col] & data[col].isna()).any() and (ignored & ~where[col] & data[col].notna()).any()
+        for col in _imputed_columns(case)
+    )
+
+
+def _df_set_counts_fit_rows(case):
+    """'df set to 1' with the number of observed values in the rows that are not ignored, fewer than all."""
+    data, ignored = decode_frame(case["data"]), _ignored(case)
+    for _, _, out in _events(case):
+        if not str(out).startswith("df set to 1"):
+            continue
+        counted = int(str(out).split("# observed cases: ")[1].split()[0])
+        for col in _imputed_columns(case):
+            observed = data[col].notna().to_numpy()
+            if counted == (observed & ~ignored).sum() < observed.sum():
+                return True
+    return False
+
+
+def _lindep_drops_constant_in_fit_rows(case):
+    """remove.lindep drops a predictor in the iterations that is constant in the rows that are not ignored and
+    varies over all rows (so the setup step keeps it)."""
+    data, ignored = decode_frame(case["data"]), _ignored(case)
+    dropped = {name for it, _, out in _events(case) if it > 0 for name in str(out).split(", ")}
+    return any(
+        col in dropped and data.loc[~ignored, col].nunique() == 1 and data[col].nunique() > 1 for col in data.columns
+    )
+
+
+def _logreg_one_cell(case):
+    data, where, ignored = decode_frame(case["data"]), _where(case), _ignored(case)
+    return any(
+        where[col].sum() == 1 and (ignored & data[col].notna()).any() for col in _imputed_columns(case, "logreg")
+    )
+
+
+def _label_only_in_ignored_rows(case, method):
+    data, ignored = decode_frame(case["data"]), _ignored(case)
+    return any(
+        bool(set(data.loc[ignored, col].dropna()) - set(data.loc[~ignored, col].dropna()))
+        for col in _imputed_columns(case, method)
+    )
+
+
+def _clamp_lifted_by_ignored_row(case):
+    """A predictor whose values in the rows that are not ignored have mean + sd / 2 above their maximum (augment
+    clamps), while an ignored row holds a larger value."""
+    data, ignored = decode_frame(case["data"]), _ignored(case)
+    for col in data.columns:
+        if data[col].dtype.kind != "f" or not data[col].notna().all():
+            continue
+        kept = data.loc[~ignored, col]
+        if kept.mean() + kept.std() / 2 > kept.max() and (data.loc[ignored, col] > kept.max()).any():
+            return True
+    return False
+
+
+def _one_row_outside_fit_rows(case, method):
+    """Augment skipped: every where-cell of the column is observed, and one ignored row is the only row
+    outside its fit rows."""
+    data, where, ignored = decode_frame(case["data"]), _where(case), _ignored(case)
+    for col in _imputed_columns(case, method):
+        observed = data[col].notna().to_numpy()
+        outside = ~(observed & ~ignored)
+        if observed.all() and where[col].any() and outside.sum() == (outside & ignored).sum() == 1:
+            return True
+    return False
+
+
+IGNORE_CASES = {
+    "ignored rows with a missing where-cell (imputed) and an observed cell (in neither mask), spy": lambda c: (
+        c["kind"] == "spy" and _imputed_and_neither(c)
+    ),
+    "ignore, deterministic, norm.predict and mean, m = 2": lambda c: (
+        c["kind"] == "deterministic" and _ignored(c).any() and _methods(c) == {"mean", "norm.predict"} and c["m"] == 2
+    ),
+    "ignore, scripted norm": lambda c: c["kind"] == "scripted" and _ignored(c).any() and _methods(c) == {"norm"},
+    "df set to 1 counts the fit rows, not the ignored ones": _df_set_counts_fit_rows,
+    "remove.lindep drops a predictor constant in the rows that are not ignored": _lindep_drops_constant_in_fit_rows,
+    "scripted logreg, one cell to impute and ignored rows": lambda c: c["kind"] == "scripted" and _logreg_one_cell(c),
+    "scripted logreg, a category only in ignored rows": lambda c: (
+        c["kind"] == "scripted" and _label_only_in_ignored_rows(c, "logreg")
+    ),
+    "scripted logreg, a predictor value of an ignored row outside the range of the others": lambda c: (
+        c["kind"] == "scripted" and _methods(c) == {"logreg"} and _clamp_lifted_by_ignored_row(c)
+    ),
+    "scripted polr, augment skipped, a level only in an ignored row": lambda c: (
+        c["kind"] == "scripted" and _one_row_outside_fit_rows(c, "polr") and _label_only_in_ignored_rows(c, "polr")
+    ),
+    "ignore with a where matrix": lambda c: _ignored(c).any() and isinstance(c["args"].get("where"), dict),
+    "continued with ignore": lambda c: len(c["steps"]) > 1 and _ignored(c).any() and _methods(c) == {"norm"},
+    "fewer than 10 rows left for the fits, with R's warning": lambda c: (
+        (~_ignored(c)).sum() < 10 and str_list(c.get("warnings")) == [WARNING_FEWER_ROWS]
+    ),
+}
+WARNING_FEWER_ROWS = "Fewer than 10 rows for fitting the imputation model. Are you sure?"
+
+
+def test_fixture_covers_the_ignore_cases():
+    missing = [name for name, covers in IGNORE_CASES.items() if not any(covers(case) for case in CASES.values())]
+    assert missing == []
+    # a case writes warnings only when R warned
+    assert all(str_list(case["warnings"]) for case in CASES.values() if "warnings" in case)
+
+
+# ---------------------------------------------------------------------------
+# where R stops
+# ---------------------------------------------------------------------------
+
+# What MICE does where R's mice() stops: None where it imputes, else the
+# beginning of its ValueError
+PORT_WHERE_R_STOPS = {
+    "polyreg_no_predictor_label_only_ignored": None,
+    "polyreg_one_row_outside_label_only_ignored": None,
+    "all_observed_ignored": r"^Every observed value of the column 'u' lies in a row that ignore leaves out",
+    "ignore_na": r"^ignore contains missing values: every entry must be True or False\.$",
+    "ignore_numeric": r"^ignore must hold booleans, True or False; it has dtype int64\.",
+    "ignore_short": r"^ignore has 24 entries, the data has 25 rows",
+}
+R_STOPS = {
+    "polyreg_no_predictor_label_only_ignored": r"^dims \[product 6\] do not match the length of object \[9\]$",
+    "polyreg_one_row_outside_label_only_ignored": r"^dims \[product 8\] do not match the length of object \[12\]$",
+    "all_observed_ignored": r"^0 \(non-NA\) cases$",
+    "ignore_na": r"^missing value where TRUE/FALSE needed$",
+    "ignore_numeric": r"^Argument ignore not a logical\.$",
+    "ignore_short": r"^length\(ignore\) \(24\) does not match nrow\(data\) \(25\)\.$",
+}
+
+
+def test_fixture_r_errors_are_those_tested():
+    assert sorted(R_ERRORS) == sorted(PORT_WHERE_R_STOPS) == sorted(R_STOPS)
+    for name, error in R_STOPS.items():
+        assert pd.Series([R_ERRORS[name]["error"]]).str.match(error).all(), (name, R_ERRORS[name]["error"])
+
+
+def _impute_r_error_case(case, n_imputations=None):
+    kwargs = impute_kwargs(case)
+    if n_imputations is not None:
+        kwargs["n_imputations"] = n_imputations
+    return MICE(decode_frame(case["data"])), kwargs
+
+
+@pytest.mark.parametrize("name", [name for name, error in PORT_WHERE_R_STOPS.items() if error is not None])
+def test_where_r_stops_mice_raises_before_the_chains(name):
+    case = R_ERRORS[name]
+    mice, kwargs = _impute_r_error_case(case)
+    with pytest.raises(ValueError, match=PORT_WHERE_R_STOPS[name]):
+        mice.impute(maxit=case["maxit"], **kwargs)
+    assert not getattr(mice, "imputed_datasets", None)
+
+
+@pytest.mark.parametrize("name", [name for name, error in PORT_WHERE_R_STOPS.items() if error is None])
+def test_where_r_stops_polyreg_imputes_without_the_label_of_the_ignored_row(name):
+    """R: multinom() drops the level c, held only by the ignored row 3, with the warning "group 'c' is empty",
+    and polyreg stops comparing its uniform numbers with the probabilities of the two other levels. MICE takes
+    the labels present in all of y (a, b, c), fits a and b, and gives c the probability 0: 40 chains impute a
+    and b, never c."""
+    case = R_ERRORS[name]
+    assert str_list(case["warnings"])[0] == "group 'c' is empty"
+    mice, kwargs = _impute_r_error_case(case, n_imputations=40)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = mice.impute(maxit=case["maxit"], **kwargs)
+    where = mice.where["g"].to_numpy()
+    imputed = pd.Series(np.concatenate([completed["g"].to_numpy()[where] for completed in out]))
+    assert set(imputed) == {"a", "b"}, imputed.value_counts().to_dict()
+    assert mice.method["g"] == "polyreg" and mice.ignore[2]

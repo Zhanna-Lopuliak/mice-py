@@ -12,10 +12,9 @@ introduce the defects a continuation can have and check which comparisons
 see each of them.
 
 The grid has two cases with ``where``: every cell, and the missing cells
-with some left out and some observed cells added. ``impute`` has no
-``ignore`` argument yet (version 0.4 adds it). The case with observed
-where-cells and ignored rows passes ``where`` to ``impute(maxit=0)``, sets
-the private mask ``MICE._ignore`` and starts the chains again by hand.
+with some left out and some observed cells added; one with ``ignore``; and
+one with both. A further case has observed where-cells that cannot be
+imputed and ignored rows.
 """
 
 import functools
@@ -28,7 +27,7 @@ import pandas as pd
 import pytest
 
 from imputation import MICE
-from imputation.MICE import _ChainState, _complete
+from imputation.MICE import _complete
 
 from .._logged_events import continue_checking_log_warning, impute_checking_log_warning
 from ._helpers import (
@@ -131,6 +130,9 @@ def _int64_frame():
     return df
 
 
+IGNORE_EVERY_FIFTH = np.arange(40) % 5 == 0
+
+
 def _partial_where():
     """``numeric_frame`` with the first three missing cells of ``a`` left out of ``where`` (they stay missing,
     and so do the where-cells of the other columns in their rows) and four observed cells of ``b`` added, in
@@ -164,6 +166,12 @@ CASES = {
     "where_all": functools.partial(_numeric, "norm", where="all"),
     # missing cells left out of where, observed cells added
     "where_partial": lambda: (_partial_where()[0], {"method": "pmm", "where": _partial_where()[1]}),
+    # every fifth row left out of the fits, observed and missing cells among them
+    "ignore": functools.partial(_numeric, "norm", ignore=IGNORE_EVERY_FIFTH),
+    "ignore_where": lambda: (
+        _partial_where()[0],
+        {"method": "pmm", "where": _partial_where()[1], "ignore": IGNORE_EVERY_FIFTH},
+    ),
 }
 N_ITER = 5
 SPLITS = [(0, 5), (1, 4), (2, 3), (2, 1, 2)]
@@ -227,15 +235,25 @@ def test_the_cases_have_what_they_are_named_after():
         missing = completed.isna()
         assert missing.loc[left_out].any(axis=1).all() and not missing.drop(index=left_out).any().any()
         assert (completed.loc[added, "b"] != data.loc[added, "b"]).any()
+    # ignored rows with observed and with missing cells; the fits change, the cells that are missing do not
+    data = numeric_frame(n=40, seed=11)
+    ignored = data.loc[IGNORE_EVERY_FIFTH]
+    assert ignored.isna().any(axis=1).sum() >= 2 and ignored.notna().all(axis=1).sum() >= 2
+    for case, without in (("ignore", "norm"), ("ignore_where", "where_partial")):
+        record, reference = _reference(case, SEED), _reference(without, SEED)
+        assert all(
+            completed.isna().equals(other.isna()) and not completed.equals(other)
+            for completed, other in zip(record["datasets"], reference["datasets"])
+        ), case
     for case in CASES:
         assert all(statistics.shape == (N_ITER, N_IMP) for statistics in _reference(case, SEED)["chain_mean"].values())
 
 
-# Observed where-cells, set through the private masks: y is imputed also in
-# rows 1, 2, 20, 21 and 22, where it is observed; z (method "") is missing in
-# rows 0 to 3, so the where-cells of y in rows 1 and 2 cannot be imputed and
-# hold NaN in the state, while the working data keep their observed values.
-# w is predicted by y. Rows 36 to 39 are ignored.
+# Observed where-cells and ignored rows: y is imputed also in rows 1, 2, 20,
+# 21 and 22, where it is observed; z (method "") is missing in rows 0 to 3,
+# so the where-cells of y in rows 1 and 2 cannot be imputed and hold NaN in
+# the state, while the working data keep their observed values. w is
+# predicted by y. Rows 36 to 39 are ignored.
 OBSERVED_WHERE_ROWS = [1, 2, 20, 21, 22]
 IGNORED_ROWS = [36, 37, 38, 39]
 
@@ -253,16 +271,16 @@ def _masked_frame():
 
 
 def _masked_run(splits, seed=SEED):
-    """``impute(maxit=0)`` with ``where`` for the setup; then the ignored rows, a new start of each chain, and
-    ``continue_chains`` with each entry of `splits`; the record of the run."""
+    """``impute(maxit=0)`` with ``where`` and ``ignore``, then ``continue_chains`` with each entry of `splits`;
+    the record of the run."""
     df = _masked_frame()
     mice = MICE(df)
     where = df.isna()
     where.loc[OBSERVED_WHERE_ROWS, "y"] = True
-    mice.impute(n_imputations=N_IMP, maxit=0, method={"y": "norm", "z": "", "w": "norm"}, seed=seed, where=where)
-    mice._ignore = np.isin(np.arange(len(df)), IGNORED_ROWS)
-    rngs = [np.random.default_rng([seed, chain]) for chain in range(N_IMP)]
-    mice._chain_states = [_ChainState(imp=mice._initial_imputation(rng), rng=rng) for rng in rngs]
+    ignore = np.isin(np.arange(len(df)), IGNORED_ROWS)
+    mice.impute(
+        n_imputations=N_IMP, maxit=0, method={"y": "norm", "z": "", "w": "norm"}, seed=seed, where=where, ignore=ignore
+    )
     for maxit in splits:
         # the observed where-cells of y in rows 1 and 2 cannot be imputed
         with pytest.warns(UserWarning, match=r"per column: 'y': 2 \(predictors incomplete in these rows\)"):

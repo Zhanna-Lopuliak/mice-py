@@ -11,9 +11,6 @@ Its properties are tested here: which cells are started and from which
 values, and that ``initial="sample"`` draws with replacement, uniformly over
 the observed values (a chi-square test over many chains, and a mutant that
 draws from half of the observed values, which the test must catch).
-
-``impute`` has no ``ignore`` argument yet (version 0.4 adds it). The test of
-ignored rows sets the private mask ``MICE._ignore`` right before each start.
 """
 
 import importlib
@@ -200,30 +197,15 @@ def test_meanobs_start():
 IGNORE = np.isin(np.arange(21), [10, 11, 12, 13, 14, 19, 20])
 
 
-@pytest.fixture
-def ignored_rows(monkeypatch):
-    """Set ``MICE._ignore`` to ``IGNORE`` right before each start (``impute`` sets it to all False)."""
-    calls = []
-    original = MICE._initial_imputation
-
-    def with_ignore(self, rng):
-        calls.append(1)
-        self._ignore = IGNORE.copy()
-        return original(self, rng)
-
-    monkeypatch.setattr(MICE, "_initial_imputation", with_ignore)
-    return calls
-
-
 @pytest.mark.parametrize("initial", ["sample", "meanobs"])
-def test_start_values_come_from_rows_that_are_not_ignored(ignored_rows, initial):
+def test_start_values_come_from_rows_that_are_not_ignored(initial):
     """Ignored rows are started too. meanobs: the mean of 0 to 9 is 4.5, so 4
     (the first of 4 and 5); with the decoys it would be 9 or 1000."""
     i = np.arange(21)
     y = np.concatenate([np.arange(10.0), 1000.0 + np.arange(5), np.full(6, NAN)])
     df = pd.DataFrame({"y": y, "x": np.sin(i)})
-    mice, out = _start(df, n_imputations=10, method={"y": "pmm"}, initial=initial)
-    assert len(ignored_rows) == 10, "the mask was not set before the start"
+    mice, out = _start(df, n_imputations=10, method={"y": "pmm"}, initial=initial, ignore=IGNORE)
+    np.testing.assert_array_equal(mice.ignore, IGNORE)
     missing = df["y"].isna().to_numpy()
     starts = np.concatenate([completed["y"].to_numpy()[missing] for completed in out])
     assert np.isin(starts, np.arange(10.0)).all(), starts[~np.isin(starts, np.arange(10.0))]

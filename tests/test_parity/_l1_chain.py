@@ -22,7 +22,13 @@ Where R's completed data lose observed values (a where-cell without an
 imputation is NA, also over an observed value), MICE warns with the number
 of them per column. `run_case` records that warning after the start and
 after every step, and `check_lost_observed_values` compares its numbers with
-R's (``lost_observed`` of the case; a case without it loses none).
+R's (``lost_observed`` of the case; a case without it loses none). It also
+records the warnings that MICE gives with R's text (`R_WARNINGS`, such as
+"Fewer than 10 rows ..." for ``ignore``), which `check_warnings` compares
+with R's (``warnings`` of the case; a case without it has none).
+
+``R_ERRORS`` holds the calls of R's ``mice()`` that stop, with R's error, for
+the tests of what MICE does there (test_l1_chain).
 
 The comparisons are separate functions, so that test_l1_chain_mutants can
 run them against a defective library; each raises ``AssertionError`` with a
@@ -53,15 +59,19 @@ ATOL = 1e-10
 
 FIXTURE = load_fixture("l1_chain")
 CASES = {case["name"]: case for case in FIXTURE["cases"]}
+R_ERRORS = {case["name"]: case for case in FIXTURE["r_errors"]}
 
 # The arguments of mice() a case may pass, under the names of the matching arguments of impute
-_ARGUMENTS = ("method", "predictor_matrix", "visit_sequence", "where")
+_ARGUMENTS = ("method", "predictor_matrix", "visit_sequence", "where", "ignore")
 _LOG_COLUMNS = ("it", "im", "dep", "meth", "out")
 _POOLS = ("chisq", "normal", "uniform")
 
 # MICE's warning about observed where-cells that are missing in the completed data, and its count per column
 _LOST_WARNING = "Observed values replaced by missing values in the completed data"
 _LOST_COUNT = re.compile(r"'([^']*)': (\d+) \((no method|predictors incomplete in these rows)\)")
+
+# Warnings that MICE gives with R's text; `run_case` records them for `check_warnings`
+R_WARNINGS = ("Fewer than 10 rows for fitting the imputation model. Are you sure?",)
 
 
 class SpyCall(NamedTuple):
@@ -89,6 +99,7 @@ class Step:
     iteration: int
     draws_used: dict  # pool -> number of values drawn so far, over all chains
     lost_observed: dict  # the warning about lost observed values of the step: column -> (number, reason)
+    warnings: list  # the messages of the step's warnings with R's text (R_WARNINGS)
 
 
 @dataclass
@@ -100,6 +111,7 @@ class ChainRun:
     steps: list = field(default_factory=list)
     calls: list = field(default_factory=list)  # SpyCall, in the order of the calls
     start_lost_observed: dict = field(default_factory=dict)  # as Step.lost_observed, for impute(maxit=0)
+    start_warnings: list = field(default_factory=list)  # as Step.warnings, for impute(maxit=0)
 
 
 def impute_kwargs(case):
@@ -123,14 +135,18 @@ def impute_kwargs(case):
             if isinstance(where, str)
             else pd.DataFrame(np.array(where["values"], dtype=bool), columns=str_list(where["cols"]))
         )
+    ignore = args.get("ignore")
+    if ignore is not None:
+        # R's vector as given: a list of booleans, or of what R was given where it stops
+        kwargs["ignore"] = ignore if isinstance(ignore, list) else [ignore]
     return kwargs
 
 
 def run_case(case):
     """Run the case from R's start with R's draws; return a `ChainRun` with one `Step` per value of ``maxit``.
 
-    The warning about lost observed values is recorded (`_recording_lost_values`); any warning other than
-    that one and the checked "Number of logged events" fails the run.
+    The warning about lost observed values and the warnings with R's text are recorded
+    (`_recording_warnings`); any other warning but the checked "Number of logged events" fails the run.
     """
     mice = MICE(decode_frame(case["data"]))
     run = ChainRun(mice=mice, generators=[])
@@ -138,35 +154,39 @@ def run_case(case):
         warnings.simplefilter("error")
         if case["kind"] == "spy":
             register_imputer(patch, "spy", _spy(run.calls))
-        run.start_lost_observed = _recording_lost_values(
+        run.start_lost_observed, run.start_warnings = _recording_warnings(
             impute_checking_log_warning, mice, maxit=0, **impute_kwargs(case)
         )
         run.generators = _start_from_r(mice, case)
         for maxit in case["maxit"]:
-            lost = _recording_lost_values(continue_checking_log_warning, mice, maxit=maxit)
-            run.steps.append(_snapshot(mice, run.generators, lost))
+            lost, r_warnings = _recording_warnings(continue_checking_log_warning, mice, maxit=maxit)
+            run.steps.append(_snapshot(mice, run.generators, lost, r_warnings))
     return run
 
 
-def _recording_lost_values(call, *args, **kwargs):
-    """``call(*args, **kwargs)``; returns what MICE's warning about lost observed values says.
+def _recording_warnings(call, *args, **kwargs):
+    """``call(*args, **kwargs)``; returns what MICE's warning about lost observed values says, and the messages
+    of its warnings with R's text (`R_WARNINGS`), in their order.
 
-    The result maps each column the warning names to the pair (number of observed values lost, reason); it is
-    empty without the warning. Every other warning is passed on.
+    The first result maps each column the warning about lost values names to the pair (number of observed
+    values lost, reason); it is empty without the warning. Every other warning is passed on.
     """
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         call(*args, **kwargs)
-    lost = {}
+    lost, r_warnings = {}, []
     for warning in caught:
         message = str(warning.message)
+        if message in R_WARNINGS and warning.category is UserWarning:
+            r_warnings.append(message)
+            continue
         if not message.startswith(_LOST_WARNING):
             warnings.warn_explicit(warning.message, warning.category, warning.filename, warning.lineno)
             continue
         assert not lost, "the warning about lost observed values appeared twice"
         lost = {col: (int(n), reason) for col, n, reason in _LOST_COUNT.findall(message)}
         assert lost, f"no column read from the warning {message!r}"
-    return lost
+    return lost, r_warnings
 
 
 def _matrix(payload):
@@ -226,8 +246,8 @@ def _drawn(generators):
     return counts
 
 
-def _snapshot(mice, generators, lost_observed):
-    """The `Step` of `mice` as it is now; `lost_observed` from `_recording_lost_values`."""
+def _snapshot(mice, generators, lost_observed, r_warnings):
+    """The `Step` of `mice` as it is now; `lost_observed` and `r_warnings` from `_recording_warnings`."""
     return Step(
         imp=[{col: values.copy() for col, values in state.imp.items()} for state in mice._chain_states],
         datasets=[dataset.copy() for dataset in mice.imputed_datasets],
@@ -237,6 +257,7 @@ def _snapshot(mice, generators, lost_observed):
         iteration=mice.iteration,
         draws_used=_drawn(generators),
         lost_observed=lost_observed,
+        warnings=r_warnings,
     )
 
 
@@ -441,6 +462,17 @@ def check_lost_observed_values(case, run):
             assert reason == r_reason, f"{label}: observed values of {col!r} lost for {reason!r}, by R for {r_reason!r}"
 
 
+def check_warnings(case, run):
+    """The warnings with R's text (`R_WARNINGS`): ``impute`` gives those of R's ``mice()`` (``warnings`` of the
+    case), ``continue_chains`` none, as R's ``mice.mids()`` does not check its arguments again."""
+    r_warnings = str_list(case.get("warnings"))
+    assert run.start_warnings == r_warnings, (
+        f"{case['name']}: impute warned {run.start_warnings}, R's mice() {r_warnings}"
+    )
+    for label, _, got in _steps(case, run):
+        assert got.warnings == [], f"{label}: continue_chains warned {got.warnings}, R's mice.mids() nothing"
+
+
 CHECKS = {
     "imputations": check_imputations,
     "completed": check_completed,
@@ -451,6 +483,7 @@ CHECKS = {
     "draws": check_draws,
     "calls": check_calls,
     "lost_observed_values": check_lost_observed_values,
+    "warnings": check_warnings,
 }
 
 

@@ -52,6 +52,21 @@ put in (`_edit_iterate`). The comparisons are those of test_l1_chain
   monotone edit of the predictor matrix left out
   (``_monotone_predictor_matrix``): the comparisons of test_l1_setup.
 
+``ignore``:
+
+* ``ignore`` not applied to the fit rows (``_fit_rows``): the spy receives
+  other fit rows, and ``norm`` draws its chi-square with other degrees of
+  freedom;
+* ``ignore`` applied to the rows to impute: the where-cells of ignored rows
+  are not imputed;
+* ``_check_df`` or ``_remove_lindep`` given the fit rows without ``ignore``:
+  "df set to 1" is not logged, and a predictor that is constant in the rows
+  that are not ignored is kept;
+* rows in neither mask dropped before the imputer, here ignored rows with an
+  observed target: the spy receives fewer rows, and where a category of a
+  ``logreg`` target is held only by ignored rows, it is not a category any
+  more, so nothing is drawn.
+
 Not visible yet: chain statistics taken right after each visit from the
 imputer's output, instead of from ``imp`` at the end of the iteration, are
 the same values as long as no column is visited twice in an iteration and
@@ -91,18 +106,21 @@ pytestmark = pytest.mark.parity
 MICE_MODULE = importlib.import_module("imputation.MICE")
 
 
-def _edit_iterate(monkeypatch, old, new):
+def _edit_iterate(monkeypatch, old, new, *more):
     """Make ``MICE._iterate`` its own source with the lines `old` replaced by `new`.
 
     `old` must occur once in the dedented source (the loop body is indented
     by 8 spaces there). `new` may call ``_reached()``; returns the list that
-    collects those calls.
+    collects those calls. `more` holds further pairs ``(old, new)``, replaced
+    in the same way.
     """
     reached = []
     source = textwrap.dedent(inspect.getsource(MICE._iterate))
-    assert source.count(old) == 1, f"mutant not applied: MICE._iterate has no line {old!r}"
+    for old_lines, new_lines in ((old, new), *more):
+        assert source.count(old_lines) == 1, f"mutant not applied: MICE._iterate has no line {old_lines!r}"
+        source = source.replace(old_lines, new_lines)
     namespace = dict(vars(MICE_MODULE), _reached=lambda: reached.append(1))
-    code = compile(source.replace(old, new), MICE_MODULE.__file__, "exec", flags=__future__.annotations.compiler_flag)
+    code = compile(source, MICE_MODULE.__file__, "exec", flags=__future__.annotations.compiler_flag)
     exec(code, namespace)
     monkeypatch.setattr(MICE, "_iterate", namespace["_iterate"])
     return reached
@@ -110,6 +128,13 @@ def _edit_iterate(monkeypatch, old, new):
 
 # Where the imputer's target is taken: the rows it receives can be cut there
 _TARGET = "        y = _target_values(working[col])\n"
+# Where the imputations are stored, by the where-cells inside wy (R's cc). A
+# mutant that cuts the rows passed to the imputer keeps the wy of all rows
+# for it (all_wy)
+_STORE = (
+    "        _store_imputations(imp, wy[where], imputed_values)\n",
+    "        _store_imputations(imp, all_wy[where], imputed_values)\n",
+)
 
 
 def test_rows_with_incomplete_predictors_dropped_as_in_0_3_are_caught(monkeypatch):
@@ -117,9 +142,11 @@ def test_rows_with_incomplete_predictors_dropped_as_in_0_3_are_caught(monkeypatc
         monkeypatch,
         _TARGET,
         _TARGET
+        + "        all_wy = wy\n"
         + "        if not cx.all():\n"
         + "            _reached()\n"
         + "            y, x_values, ry, wy = y[cx], x_values[cx], ry[cx], wy[cx]\n",
+        _STORE,
     )
     case = CASES["spy_empty_method_predictor"]
     run = run_case(case)
@@ -148,10 +175,11 @@ def test_rows_in_neither_mask_dropped_are_caught(monkeypatch):
         monkeypatch,
         _TARGET,
         _TARGET
-        + "        used = ry | wy\n"
+        + "        all_wy, used = wy, ry | wy\n"
         + "        if not used.all():\n"
         + "            _reached()\n"
         + "            y, x_values, ry, wy = y[used], x_values[used], ry[used], wy[used]\n",
+        _STORE,
     )
     case = CASES["spy_empty_method_predictor"]
     run = run_case(case)
@@ -167,10 +195,11 @@ def test_rows_in_neither_mask_with_complete_predictors_dropped_are_caught(monkey
         monkeypatch,
         _TARGET,
         _TARGET
-        + "        used = ry | wy\n"
+        + "        all_wy, used = wy, ry | wy\n"
         + "        if (~used & cx).any():\n"
         + "            _reached()\n"
         + "        y, x_values, ry, wy = y[used], x_values[used], ry[used], wy[used]\n",
+        _STORE,
     )
     case = CASES["spy_left_out"]
     run = run_case(case)
@@ -188,11 +217,11 @@ def test_cx_taken_after_remove_lindep_is_caught(monkeypatch):
     reached = _edit_iterate(
         monkeypatch,
         "        keep, event = _remove_lindep(x, working[col], ry)\n",
-        "        keep, event = _remove_lindep(x, working[col], _fit_rows(np.ones_like(cx), observed, self._ignore))\n"
+        "        keep, event = _remove_lindep(x, working[col], _fit_rows(np.ones_like(cx), observed, self.ignore))\n"
         + "        if (np.isnan(x_values[:, keep]).any(axis=1) == cx).any():\n"
         + "            _reached()\n"
         + "        cx = ~np.isnan(x_values[:, keep]).any(axis=1)\n"
-        + "        ry = _fit_rows(cx, observed, self._ignore)\n"
+        + "        ry = _fit_rows(cx, observed, self.ignore)\n"
         + "        wy = _rows_to_impute(cx, where)\n",
     )
     case = CASES["spy_empty_method_predictor"]
@@ -368,6 +397,143 @@ def test_chain_statistics_over_the_missing_cells_only_are_caught(monkeypatch):
     with pytest.raises(AssertionError, match=r"all_mean_norm_predict, step 1: chain_mean of 'age'"):
         check_chain_statistics(case, run)
     check_completed(case, run)  # only the statistics
+
+
+# ---------------------------------------------------------------------------
+# ignore
+# ---------------------------------------------------------------------------
+
+
+def test_ignore_not_applied_to_the_fit_rows_is_caught(monkeypatch):
+    """The observed bmi of the ignored rows 14, 17, 22 and 24 (R's numbers) become fit rows."""
+    calls = []
+
+    def without_ignore(cx, observed, ignore):
+        calls.append(bool((cx & observed & ignore).any()))
+        return cx & observed
+
+    monkeypatch.setattr(MICE_MODULE, "_fit_rows", without_ignore)
+    case = CASES["spy_ignore"]
+    run = run_case(case)
+    assert any(calls), "mutant not applied: no ignored fit row"
+    with pytest.raises(AssertionError, match=r"spy_ignore, call 1 \(bmi, iteration 1, imputation 1\): ry"):
+        check_calls(case, run)
+    # norm draws its chi-square with sum(ry) - q degrees of freedom
+    case = CASES["norm_ignore"]
+    run = run_case(case)
+    with pytest.raises(AssertionError, match=r"norm_ignore: degrees of freedom \["):
+        check_draws(case, run)
+
+
+def test_ignore_applied_to_the_rows_to_impute_is_caught(monkeypatch):
+    """The missing bmi of the ignored rows 1 and 6 (R's numbers) is not imputed."""
+    reached = _edit_iterate(
+        monkeypatch,
+        "        wy = _rows_to_impute(cx, where)\n",
+        "        wy = _rows_to_impute(cx, where) & ~self.ignore\n"
+        + "        if (_rows_to_impute(cx, where) & self.ignore).any():\n"
+        + "            _reached()\n",
+    )
+    case = CASES["spy_ignore"]
+    run = run_case(case)
+    assert reached, "mutant not applied: no where-cell in an ignored row"
+    with pytest.raises(AssertionError, match=r"spy_ignore, call 1 \(bmi, iteration 1, imputation 1\): wy"):
+        check_calls(case, run)
+    case = CASES["ignore_norm_predict_mean"]
+    run = run_case(case)
+    with pytest.raises(AssertionError, match=r"ignore_norm_predict_mean, step 1, chain 1: imputations of 'bmi'"):
+        check_imputations(case, run)
+
+
+# The fit rows as they would be without ignore
+_FIT_ROWS_WITHOUT_IGNORE = "_fit_rows(cx, observed, np.zeros_like(cx))"
+
+
+def test_check_df_given_the_fit_rows_without_ignore_is_caught(monkeypatch):
+    """u has 5 observed values, 3 of them in rows that are not ignored: R logs "df set to 1" for 3."""
+    reached = _edit_iterate(
+        monkeypatch,
+        "            self._check_df(x_values.shape[1], int(ry.sum()), col, method_name, chain_idx)\n",
+        f"            n_rows = int({_FIT_ROWS_WITHOUT_IGNORE}.sum())\n"
+        + "            if n_rows != ry.sum():\n"
+        + "                _reached()\n"
+        + "            self._check_df(x_values.shape[1], n_rows, col, method_name, chain_idx)\n",
+    )
+    case = CASES["spy_ignore_few_fit_rows"]
+    run = run_case(case)
+    assert reached, "mutant not applied: no ignored fit row"
+    events = run.steps[0].logged_events
+    assert not events["out"].str.startswith("df set to 1").any()
+    with pytest.raises(AssertionError, match=r"spy_ignore_few_fit_rows, step 1: logged events"):
+        check_logged_events(case, run)
+    check_calls(case, run)  # it only logs
+
+
+def test_remove_lindep_given_the_fit_rows_without_ignore_is_caught(monkeypatch):
+    """p is 1 in every row but the ignored rows 14 and 17 (R's numbers): R drops it from the model of bmi."""
+    reached = _edit_iterate(
+        monkeypatch,
+        "        keep, event = _remove_lindep(x, working[col], ry)\n",
+        f"        keep, event = _remove_lindep(x, working[col], {_FIT_ROWS_WITHOUT_IGNORE})\n"
+        + f"        if ({_FIT_ROWS_WITHOUT_IGNORE} != ry).any():\n"
+        + "            _reached()\n",
+    )
+    case = CASES["spy_ignore_few_fit_rows"]
+    run = run_case(case)
+    assert reached, "mutant not applied: no ignored fit row"
+    with pytest.raises(
+        AssertionError,
+        match=r"spy_ignore_few_fit_rows, call 1 \(bmi, iteration 1, imputation 1\): the predictors "
+        r"\['age', 'hyp', 'chl', 'p'\], R's \['age', 'hyp', 'chl'\]",
+    ):
+        check_calls(case, run)
+    with pytest.raises(AssertionError, match=r"spy_ignore_few_fit_rows, step 1: logged events"):
+        check_logged_events(case, run)
+
+
+def test_ignored_rows_dropped_before_the_imputer_are_caught(monkeypatch):
+    """Rows in neither mask dropped, as in test_rows_in_neither_mask_dropped_are_caught, on the cases with
+    ignore: the spy receives 21 of 25 rows for bmi (rows 14, 17, 22 and 24 are ignored and observed). Under
+    logreg, with one cell to impute, the augmentation is skipped and a label changes. Where yes is held only by
+    ignored rows, without them g has one category, so MICE draws nothing and imputes no, where R draws and
+    imputes yes in the second iteration (no in the first, by the sign of the normal draw)."""
+    reached = _edit_iterate(
+        monkeypatch,
+        _TARGET,
+        _TARGET
+        + "        all_wy, used = wy, ry | wy\n"
+        + "        if (~used & self.ignore).any():\n"
+        + "            _reached()\n"
+        + "        y, x_values, ry, wy = y[used], x_values[used], ry[used], wy[used]\n",
+        _STORE,
+    )
+    case = CASES["spy_ignore"]
+    run = run_case(case)
+    assert reached, "mutant not applied: no ignored row in neither mask"
+    assert len(run.calls[0].y) == 21
+    with pytest.raises(AssertionError, match=r"spy_ignore, call 1 \(bmi, iteration 1, imputation 1\): ry"):
+        check_calls(case, run)
+
+    # one cell to impute: without the four ignored rows it is the only row outside the fit rows, so augment()
+    # is skipped, and the label of the first iteration changes; the draws are the same
+    case = CASES["logreg_one_cell_ignored"]
+    run = run_case(case)
+    with pytest.raises(
+        AssertionError,
+        match=r"logreg_one_cell_ignored, step 1, chain 1: imputations of 'g': labels \['no'\] differ from R's "
+        r"\['yes'\]",
+    ):
+        check_imputations(case, run)
+    check_draws(case, run)
+
+    case = CASES["logreg_category_only_ignored"]
+    run = run_case(case)
+    with pytest.raises(AssertionError, match=r"logreg_category_only_ignored, step 1: drawn so far"):
+        check_draws(case, run)
+    with pytest.raises(
+        AssertionError, match=r"logreg_category_only_ignored, step 2, chain 1: imputations of 'g': labels"
+    ):
+        check_imputations(case, run)
 
 
 # ---------------------------------------------------------------------------

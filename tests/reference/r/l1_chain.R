@@ -5,7 +5,9 @@
 #                   mice.mids() for a continued run) for the run: imp, the
 #                   completed data, chainMean, chainVar, method,
 #                   visitSequence, predictorMatrix, loggedEvents, iteration;
-#                   the draws or the imputer calls of the run
+#                   the draws or the imputer calls of the run. r_errors:
+#                   calls of mice() that stop in R, with the error and the
+#                   warnings before it
 #
 # Python target: MICE.impute(maxit=0), then MICE.continue_chains, with R's
 # start values written into the chain states and R's draws served by their
@@ -21,16 +23,16 @@
 # - deterministic: methods that draw nothing (norm.predict, mean), m = 2 with
 #   different start values per chain. The run must leave the generator where
 #   the start left it.
-# - scripted: methods that draw (norm, logreg), m = 1, so that R's order of
-#   the draws (iterations outside, imputations inside) is mice-py's (one
-#   chain after the other). replay_chain() goes through the chain as
+# - scripted: methods that draw (norm, logreg, polr), m = 1, so that R's
+#   order of the draws (iterations outside, imputations inside) is mice-py's
+#   (one chain after the other). replay_chain() goes through the chain as
 #   sampler() and sampler.univ() do, from start$lastSeedValue: before each
 #   imputer call it saves .Random.seed, calls the imputer, saves the state
 #   after, restores the state before and draws the expected numbers in the
 #   expected order (norm: rchisq(1, df), rnorm(q), rnorm(n0); logreg:
-#   rnorm(q), runif(n0)); the same state afterwards proves kind, number and
-#   order of the draws. After each step of the run (see below) the replay
-#   must have its data and its generator state.
+#   rnorm(q), runif(n0); polr: runif(n0)); the same state afterwards proves
+#   kind, number and order of the draws. After each step of the run (see
+#   below) the replay must have its data and its generator state.
 # - spy: the method "spy" (mice.impute.spy below) records at every call what
 #   sampler.univ() hands an imputer and imputes as norm.predict; m = 1. As in
 #   a deterministic case, nothing is drawn after the start.
@@ -46,6 +48,11 @@
 # after the start and after each step, the number of observed where-cells
 # of each that are NA in the completed data of some chain (mice-py warns
 # with these numbers). The other cases lose no observed value.
+#
+# The cases after the first 24 pass `ignore`. A case that expects a warning
+# of mice() other than "Number of logged events" names it (`warnings`); the
+# fixture holds it. r_errors holds calls of mice() that stop in R, for tests
+# of what mice-py does there (stop_case()).
 
 source(file.path("tests", "reference", "r", "_common.R"))
 
@@ -126,6 +133,103 @@ stopifnot(all(c("no", "yes") %in% syn$g))
 # nhanes with k, a constant column: the setup step removes its method
 nhanes_k <- cbind(nhanes, k = 1)
 
+# The rows of nhanes that the cases with ignore leave out of the fits: 1
+# (all missing), 6 (bmi and hyp missing, chl observed), 14, 17 and 22 (all
+# observed; chl 284 in row 17 is its largest value) and 24 (chl missing)
+ignored_nhanes <- seq_len(n_rows) %in% c(1L, 6L, 14L, 17L, 22L, 24L)
+
+# nhanes with u, observed in rows 2, 5, 9, 14 and 17 and predicted by age
+# and chl only: without the ignored rows 14 and 17, 3 fit rows for 3
+# coefficients, so check.df() logs "df set to 1" (with them it would not).
+# And p, complete, 1 in every row but the ignored rows 14 and 17: constant
+# in the fit rows, so remove.lindep() drops it from the models of bmi, hyp
+# and chl in every iteration, while the setup step, which uses all rows,
+# keeps it
+nhanes_up <- cbind(
+  nhanes,
+  u = replace(rep(NA_real_, n_rows), c(2L, 5L, 9L, 14L, 17L), c(3.1, 2.4, 4.0, 3.3, 5.2)),
+  p = replace(rep(1, n_rows), c(14L, 17L), c(2, 3))
+)
+stopifnot(length(mice:::find.collinear(nhanes_up)) == 0L)
+
+# The default predictor matrix, except that u is predicted by age and chl
+# only and predicts nothing
+predictors_of_u <- function(data) {
+  pred <- make.predictorMatrix(data)
+  pred[, "u"] <- 0
+  pred["u", ] <- 0
+  pred["u", c("age", "chl")] <- 1
+  pred
+}
+
+# Two-category targets g with ignored rows, imputed by logreg from x1, x2.
+# syn_one: one missing cell (where x1 is nearest 0) and four ignored rows
+# with observed labels (the largest |x1|): augment() is not skipped, because
+# sum(!ry) counts the ignored rows. 7441 is a seed under which the label of
+# the first iteration changes when the ignored rows are dropped before the
+# imputer.
+set.seed(7441)
+n_syn2 <- 20
+x1 <- rnorm(n_syn2)
+x2 <- runif(n_syn2)
+g <- ifelse(runif(n_syn2) < plogis(0.3 + 1.5 * x1 - x2), "yes", "no")
+g[which.min(abs(x1))] <- NA
+syn_one <- data.frame(x1 = round(x1, 4), x2 = round(x2, 4), g = factor(g, levels = c("no", "yes")))
+ignored_one <- seq_len(n_syn2) %in% order(abs(x1), decreasing = TRUE)[1:4]
+stopifnot(sum(is.na(syn_one$g)) == 1L, all(table(syn_one$g[!ignored_one]) >= 4))
+
+# syn_only: "yes" only in the three ignored rows (the largest x1), six
+# missing cells. g is constant in the fit rows, so remove.lindep() drops
+# every predictor (without logging it), augment() is skipped for want of a
+# predictor, and the intercept is fitted on one category: its estimate and
+# standard error grow until the fit stops, and every cell gets the label
+# that the sign of the normal draw gives (probabilities 0 or 1)
+set.seed(7450)
+x1 <- rnorm(n_syn2)
+x2 <- runif(n_syn2)
+g <- rep("no", n_syn2)
+g[order(x1, decreasing = TRUE)[1:3]] <- "yes"
+g[order(x1, decreasing = TRUE)[4:9]] <- NA
+syn_only <- data.frame(x1 = round(x1, 4), x2 = round(x2, 4), g = factor(g, levels = c("no", "yes")))
+ignored_only <- !is.na(syn_only$g) & syn_only$g == "yes"
+
+# syn_clamp: x2 is 1 in 19 of the 23 rows that are not ignored, so that
+# mean + sd / 2 lies above its maximum there and augment() would clamp the
+# added rows to it; the ignored row holds x2 = 2.5, which lifts the maximum
+# (and moves the mean and the standard deviation)
+set.seed(7460)
+n_clamp <- 24
+x1 <- rnorm(n_clamp)
+x2 <- rep(1, n_clamp)
+low <- sample(n_clamp, 4)
+x2[low] <- round(runif(4, -2, 0), 4)
+g <- ifelse(runif(n_clamp) < plogis(0.2 + 1.2 * x1 + 0.8 * x2), "yes", "no")
+ignored_clamp <- seq_len(n_clamp) == setdiff(seq_len(n_clamp), low)[1]
+x2[ignored_clamp] <- 2.5
+g[setdiff(order(abs(x1)), which(ignored_clamp))[1:5]] <- NA
+syn_clamp <- data.frame(x1 = round(x1, 4), x2 = x2, g = factor(g, levels = c("no", "yes")))
+kept_x2 <- syn_clamp$x2[!ignored_clamp]
+stopifnot(mean(kept_x2) + sd(kept_x2) / 2 > max(kept_x2), mean(x2) + sd(x2) / 2 < 2.5)
+
+# A factor g (a, b, c) and an ordered factor o (p < q < r < s) predicted by
+# x; c and s occur only in row 3, which is ignored. Where augment() is
+# skipped (no predictor, or row 3 the only row outside the fit rows),
+# polyreg's multinom() drops the empty level c and R stops (stop_case()),
+# while polr counts the empty level s and gives it a small probability
+set.seed(7470)
+n_lab <- 20
+x <- round(rnorm(n_lab), 4)
+g <- factor(ifelse(x + rnorm(n_lab) > 0, "b", "a"), levels = c("a", "b", "c"))
+g[3] <- "c"
+o <- cut(x + rnorm(n_lab, sd = 0.7), c(-Inf, -0.5, 0.5, Inf), labels = c("p", "q", "r"))
+o <- factor(as.character(o), levels = c("p", "q", "r", "s"), ordered = TRUE)
+o[3] <- "s"
+ignored_lab <- seq_len(n_lab) == 3L
+labels_g <- data.frame(x = x, g = g)
+labels_g_missing <- data.frame(x = x, g = replace(g, c(5L, 9L, 14L), NA))
+labels_o <- data.frame(x = x, o = o)
+no_predictor <- matrix(0, 2, 2, dimnames = list(c("x", "g"), c("x", "g")))
+
 # The missing cells of `data`, with the cells of `add` (variable = rows) put
 # in and those of `drop` left out
 where_cells <- function(data, add = list(), drop = list()) {
@@ -160,20 +264,32 @@ spy <- function(y, ry, x, wy = NULL, ...) {
 }
 
 # The probabilities of mice.impute.logreg() and the number of normals it
-# draws, from a trace() exit hook, so that the replay can require that no
-# label depends on the last digits of a probability
+# draws, and the probabilities of mice.impute.polr(), from trace() exit
+# hooks, so that the replay can require that no label depends on the last
+# digits of a probability
 logreg_capture <- new.env()
+polr_capture <- new.env()
 
 # ---------------------------------------------------------------------------
 # Running mice()
 # ---------------------------------------------------------------------------
 
+# The warnings other than "Number of logged events" that the running case
+# expects (chain_case(warnings = )), and those seen since `seen` was emptied
+warning_log <- new.env()
+warning_log$expected <- character(0)
+warning_log$seen <- character(0)
+
 # Evaluate `expr`; the warning "Number of logged events" is expected and
-# muffled, any other warning stops the script
+# muffled, and so are the warnings the case expects, which are recorded;
+# any other warning stops the script
 quietly <- function(expr) {
   withCallingHandlers(expr, warning = function(w) {
-    if (!startsWith(conditionMessage(w), "Number of logged events")) {
-      stop("unexpected warning: ", conditionMessage(w))
+    message <- conditionMessage(w)
+    if (message %in% warning_log$expected) {
+      warning_log$seen <- c(warning_log$seen, message)
+    } else if (!startsWith(message, "Number of logged events")) {
+      stop("unexpected warning: ", message)
     }
     invokeRestart("muffleWarning")
   })
@@ -301,6 +417,12 @@ replay_chain <- function(start, maxit) {
         u <- runif(sum(wy))
         stopifnot(min(abs(u - logreg_capture$last$p)) > 1e-4)
         draw("uniform", u)
+      } else if (meth == "polr") {
+        u <- runif(sum(wy))
+        # the cumulative probabilities of each cell but the last (1), one row per cell
+        cumulative <- t(apply(polr_capture$last$post, 1, cumsum))
+        stopifnot(min(abs(u - cumulative[, -ncol(cumulative), drop = FALSE])) > 1e-4)
+        draw("uniform", u)
       } else {
         stopifnot(meth %in% c("norm.predict", "mean"))
       }
@@ -341,11 +463,12 @@ logged_events <- function(obj) {
 
 # The arguments of mice() a case passes, for the Python side. `where` is
 # written only when given: a keyword, or the matrix with its column names
-# (values a list of rows)
+# (values a list of rows). `ignore` too, as given (one value per row, also
+# where it is not logical)
 encode_args <- function(args) {
   stopifnot(
     "encode_args() knows the arguments of mice() a case passes" =
-      all(names(args) %in% c("method", "predictorMatrix", "visitSequence", "where"))
+      all(names(args) %in% c("method", "predictorMatrix", "visitSequence", "where", "ignore"))
   )
   method <- args$method
   vis <- args$visitSequence
@@ -358,6 +481,9 @@ encode_args <- function(args) {
   where <- args$where
   if (!is.null(where)) {
     out$where <- if (is.character(where)) where else list(cols = I(colnames(where)), values = unname(where))
+  }
+  if (!is.null(args$ignore)) {
+    out$ignore <- I(args$ignore)
   }
   out
 }
@@ -414,12 +540,19 @@ encode_step <- function(obj, maxit, used) {
 # One case
 # ---------------------------------------------------------------------------
 
-chain_case <- function(name, kind, data, m, maxit, seed, ..., lost = NULL) {
+chain_case <- function(name, kind, data, m, maxit, seed, ..., lost = NULL, warnings = NULL) {
   args <- list(...)
   stopifnot(kind %in% c("deterministic", "scripted", "spy"), kind == "deterministic" || m == 1L)
+  # each call of mice() gives the expected warnings once; mice.mids() does
+  # not check its arguments again and gives none
+  warning_log$expected <- as.character(warnings)
+  warning_log$seen <- character(0)
   start <- run_mice(data, m, 0, seed, args)
+  stopifnot(identical(warning_log$seen, as.character(warnings)))
+  warning_log$seen <- character(0)
   spy_log$calls <- list()
   runs <- run_steps(data, m, maxit, seed, args)
+  stopifnot(identical(warning_log$seen, as.character(warnings)))
   calls <- spy_log$calls
   last <- runs[[length(runs)]]
   if (length(maxit) > 1L) {
@@ -475,7 +608,45 @@ chain_case <- function(name, kind, data, m, maxit, seed, ..., lost = NULL) {
   if (!is.null(lost)) {
     case$lost_observed <- list(start = lost_start, steps = lost_steps)
   }
+  if (!is.null(warnings)) {
+    case$warnings <- I(warnings)
+  }
+  warning_log$expected <- character(0)
   case
+}
+
+# A call of mice() that stops in R: its arguments, its error and the
+# warnings before it (other than "Number of logged events"), for a test of
+# what mice-py does instead
+stop_case <- function(name, data, m, maxit, seed, ...) {
+  args <- list(...)
+  warnings <- character(0)
+  error <- tryCatch(
+    withCallingHandlers(
+      {
+        do.call(mice, c(list(data, m = m, maxit = maxit, seed = seed, printFlag = FALSE), args))
+        NULL
+      },
+      warning = function(w) {
+        if (!startsWith(conditionMessage(w), "Number of logged events")) {
+          warnings <<- c(warnings, conditionMessage(w))
+        }
+        invokeRestart("muffleWarning")
+      }
+    ),
+    error = conditionMessage
+  )
+  stopifnot("the call stops in R" = !is.null(error))
+  list(
+    name = name,
+    data = encode_frame(data),
+    m = m,
+    maxit = maxit,
+    seed = seed,
+    args = encode_args(args),
+    error = error,
+    warnings = I(warnings)
+  )
 }
 
 # ---------------------------------------------------------------------------
@@ -496,7 +667,13 @@ invisible(suppressMessages(trace(
   where = asNamespace("mice"),
   print = FALSE
 )))
-# remove the spy and the trace also when a case fails
+invisible(suppressMessages(trace(
+  "mice.impute.polr",
+  exit = bquote(assign("last", list(post = post), envir = .(polr_capture))),
+  where = asNamespace("mice"),
+  print = FALSE
+)))
+# remove the spy and the traces also when a case fails
 cases <- tryCatch(
   list(
     chain_case("norm_nhanes", "scripted", nhanes, 1L, 3L, 7410L, method = "norm"),
@@ -604,12 +781,83 @@ cases <- tryCatch(
     # method, so all their cells are NA in the completed data
     chain_case("logreg_all", "scripted", syn, 1L, c(1L, 1L), 7433L,
       where = "all", method = empty_method(syn, g = "logreg"), lost = c("x1", "x2", "z", "g")
+    ),
+    # ignore: the missing cells of the ignored rows 1, 6 and 24 are imputed
+    # (in wy, not in ry); their observed cells and those of rows 14, 17 and
+    # 22 are in neither mask; the imputer gets them all
+    chain_case("spy_ignore", "spy", nhanes, 1L, 2L, 7434L, method = "spy", ignore = ignored_nhanes),
+    # mean imputes the mean of the rows that are not ignored
+    chain_case("ignore_norm_predict_mean", "deterministic", nhanes, 2L, 2L, 7435L,
+      method = c(age = "", bmi = "norm.predict", hyp = "mean", chl = "norm.predict"), ignore = ignored_nhanes
+    ),
+    # the degrees of freedom of the chi-square draw count the fit rows
+    chain_case("norm_ignore", "scripted", nhanes, 1L, 3L, 7436L, method = "norm", ignore = ignored_nhanes),
+    # check.df() counts the 3 fit rows of u; remove.lindep() drops p, constant
+    # in the fit rows, from the models of bmi, hyp and chl
+    chain_case("spy_ignore_few_fit_rows", "spy", nhanes_up, 1L, 2L, 7437L,
+      method = empty_method(nhanes_up, bmi = "spy", hyp = "spy", chl = "spy", u = "spy"),
+      predictorMatrix = predictors_of_u(nhanes_up), ignore = ignored_nhanes
+    ),
+    # ignore and where: observed where-cells in ignored rows (bmi in row 14,
+    # chl in row 17: in wy, not in ry) and in a row that is not ignored (bmi
+    # in row 2: in both); hyp left out in the ignored row 6, where bmi is
+    # missing: that where-cell of bmi has an incomplete predictor
+    chain_case("spy_ignore_where", "spy", nhanes, 1L, 2L, 7438L,
+      where = where_cells(nhanes, add = list(bmi = c(2, 14), chl = 17), drop = list(hyp = 6)),
+      method = "spy", ignore = ignored_nhanes
+    ),
+    chain_case("continue_ignore", "scripted", nhanes, 1L, c(2L, 3L), 7439L, method = "norm", ignore = ignored_nhanes),
+    # 9 rows left for the fits: R warns and goes on
+    chain_case("ignore_fewer_than_10_rows", "deterministic", nhanes, 2L, 2L, 7440L,
+      method = "norm.predict", ignore = !(seq_len(n_rows) %in% c(2L, 3L, 5L, 7L, 9L, 10L, 13L, 15L, 20L)),
+      warnings = "Fewer than 10 rows for fitting the imputation model. Are you sure?"
+    ),
+    # one step per iteration (g predicts nothing)
+    chain_case("logreg_one_cell_ignored", "scripted", syn_one, 1L, c(1L, 1L, 1L), 7441L,
+      method = empty_method(syn_one, g = "logreg"), ignore = ignored_one
+    ),
+    chain_case("logreg_category_only_ignored", "scripted", syn_only, 1L, c(1L, 1L), 7450L,
+      method = empty_method(syn_only, g = "logreg"), ignore = ignored_only
+    ),
+    chain_case("logreg_clamp_ignored", "scripted", syn_clamp, 1L, c(1L, 1L), 7460L,
+      method = empty_method(syn_clamp, g = "logreg"), ignore = ignored_clamp
+    ),
+    # augment() is skipped: o is complete, its where-cells are observed (in
+    # both masks), and the ignored row 3 is the only row outside the fit rows
+    chain_case("polr_one_row_outside", "scripted", labels_o, 1L, c(1L, 1L), 7473L,
+      where = where_cells(labels_o, add = list(o = c(2, 7, 11, 16, 19))),
+      method = c(x = "", o = "polr"), ignore = ignored_lab
     )
   ),
   finally = {
     rm("mice.impute.spy", envir = globalenv())
     invisible(suppressMessages(untrace("mice.impute.logreg", where = asNamespace("mice"))))
+    invisible(suppressMessages(untrace("mice.impute.polr", where = asNamespace("mice"))))
   }
+)
+
+# Calls that stop in R; what mice-py does there is tested in test_l1_chain
+r_errors <- list(
+  # polyreg without predictor (augment() skipped), c only in the ignored
+  # row 3: multinom() drops the empty level and polyreg then stops
+  stop_case("polyreg_no_predictor_label_only_ignored", labels_g_missing, 1L, 1L, 7471L,
+    method = c(x = "", g = "polyreg"), predictorMatrix = no_predictor, ignore = ignored_lab
+  ),
+  # the same with augment() skipped because row 3 is the only row outside
+  # the fit rows: g is complete, its where-cells are observed
+  stop_case("polyreg_one_row_outside_label_only_ignored", labels_g, 1L, 1L, 7472L,
+    where = where_cells(labels_g, add = list(g = c(2, 7, 11, 16))), method = c(x = "", g = "polyreg"),
+    ignore = ignored_lab
+  ),
+  # every observed value of u lies in an ignored row: u starts from rnorm()
+  # and its model stops in iteration 1
+  stop_case("all_observed_ignored", nhanes_up, 1L, 1L, 7475L,
+    method = empty_method(nhanes_up, bmi = "norm", hyp = "norm", chl = "norm", u = "norm"),
+    predictorMatrix = predictors_of_u(nhanes_up), ignore = !is.na(nhanes_up$u)
+  ),
+  stop_case("ignore_na", nhanes, 1L, 1L, 7476L, ignore = replace(ignored_nhanes, 3L, NA)),
+  stop_case("ignore_numeric", nhanes, 1L, 1L, 7477L, ignore = as.numeric(ignored_nhanes)),
+  stop_case("ignore_short", nhanes, 1L, 1L, 7478L, ignore = ignored_nhanes[-n_rows])
 )
 
 write_fixture("l1_chain", list(
@@ -622,14 +870,20 @@ write_fixture("l1_chain", list(
     "(m = 1; calls: what mice.impute.spy received at every call, x after",
     "remove.lindep). args: the arguments of mice() (method a string or one",
     "per column; predictor_matrix, visit_sequence null when not given; where",
-    "only when given, a keyword or cols and values, a list of rows).",
+    "only when given, a keyword or cols and values, a list of rows; ignore",
+    "only when given, one value per row).",
     "maxit: one value per step, the first for mice(), each further one for",
     "mice.mids(). steps: after each step imp, the completed data per chain,",
     "chain_mean and chain_var (numeric variables R imputes, iteration x",
     "chain), logged_events, iteration and the values drawn from each pool so",
     "far (scripted). lost_observed (only in cases that lose observed values):",
     "per variable the number of observed where-cells that are NA in the",
-    "completed data of some chain, after the start and after each step."
+    "completed data of some chain, after the start and after each step.",
+    "warnings (only in cases with such warnings): what each call of mice()",
+    "warned besides 'Number of logged events'; mice.mids() warns nothing.",
+    "r_errors: calls of mice(data, m, maxit, ..., seed) that stop in R, with",
+    "args as above, the error message and the warnings before it."
   ),
-  cases = cases
+  cases = cases,
+  r_errors = r_errors
 ))

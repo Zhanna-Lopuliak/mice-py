@@ -124,6 +124,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `MICE.iteration`, R's `imp$iteration`: the number of iterations the
   chains have run, the `maxit` of `impute()` plus that of every
   `continue_chains()` since.
+- `impute(ignore=)`, R's `ignore`: the rows that the imputation models leave
+  out, one boolean per row (a list, a tuple, a NumPy or pandas array, or a
+  Series with the index of the data). As in R, an ignored row is left out
+  of the fit rows of every column in every iteration and of the values the
+  chains start from (`initial="meanobs"` too), and its where-cells are
+  imputed like any other; the setup step, the methods and the visit
+  sequence use all rows, "df set to 1" and the predictors dropped in each
+  iteration count the fit rows only, and `logreg`, `polyreg` and `polr`
+  still take the ignored rows into their augmentation. `continue_chains()`
+  keeps the rows of the run. `imputation.validators.check_ignore` checks
+  the argument: another type or length, a Series with another index, values
+  that are not booleans (also 0 and 1) or missing values raise
+  `ValueError`; fewer than 10 rows left for the fits give R's warning
+  "Fewer than 10 rows for fitting the imputation model. Are you sure?" and
+  the imputation goes on. A column that is imputed and has no observed
+  value outside the ignored rows raises `ValueError` before the chains
+  start, naming the column (R starts it from random normal values and stops
+  in the first iteration).
+- `MICE.ignore`: the boolean array of the rows that the last `impute()`
+  left out of the fits, all `False` by default.
 
 ### Removed
 

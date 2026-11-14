@@ -29,6 +29,7 @@ from .pooling import _residual_df, pool_estimates
 from .utils import get_imputer_func, get_imputer_params, make_method, method_prefix, split_method_param
 from .validators import (
     check_default_method,
+    check_ignore,
     check_initial_method,
     check_maxit,
     check_method,
@@ -209,10 +210,10 @@ def _rows_to_impute(cx: np.ndarray, where: np.ndarray) -> np.ndarray:
 def _store_imputations(imp: pd.Series, imputable: np.ndarray, values) -> None:
     """Write the imputations of one visit of a column into its `imp`, in place.
 
-    `imputable` marks the where-cells whose predictors are complete (R's
-    ``cc``, one entry per where-cell); they get `values`, in row order. Every
-    other where-cell gets NaN, also over its start value, as R's
-    ``imputes[!cc] <- NA``.
+    `imputable` marks the where-cells that the imputer filled, those of
+    `_rows_to_impute` (R's ``cc <- wy[where]``, one entry per where-cell);
+    they get `values`, in row order. Every other where-cell gets NaN, also
+    over its start value, as R's ``imputes[!cc] <- NA``.
     """
     if not imputable.all():
         imp.iloc[np.flatnonzero(~imputable)] = np.nan
@@ -393,6 +394,12 @@ class MICE:
         this form; by default ``data.isna()``. ``~mice.where`` marks the
         cells that were not imputed, the frame of observed cells that the
         diagnostic plots of `plotting` take.
+    ignore : np.ndarray of bool
+        The rows that the last `impute` left out of the model fits and of
+        the start of the chains, R's ``ignore``: one entry per row of
+        `data`, True for a row left out (its where-cells were imputed all
+        the same). The `ignore` argument of `impute` in this form; by
+        default all False. `continue_chains` uses it too.
     iteration : int
         The number of iterations each chain has run, R's ``imp$iteration``:
         the `maxit` of the last `impute` plus that of every `continue_chains`
@@ -512,6 +519,7 @@ class MICE:
         seed: int | Sequence[int] | None = None,
         default_method: Sequence[str] = DEFAULT_METHODS,
         where: str | pd.DataFrame | np.ndarray | None = None,
+        ignore: Sequence[bool] | np.ndarray | pd.Series | None = None,
         **kwargs: Any,
     ) -> list[pd.DataFrame]:
         """
@@ -651,6 +659,18 @@ class MICE:
             R. A missing cell that `where` leaves out stays missing. See
             `imputation.validators.check_where` and Notes; the boolean frame
             used is the attribute ``MICE.where``.
+        ignore : sequence of bool, optional
+            The rows that the imputation models leave out, R's ``ignore``:
+            one entry per row, True for a row that is left out of the fit of
+            every column and of the values the chains start from, while its
+            where-cells are still imputed. None (the default) leaves out no
+            row. A list, a tuple, or a NumPy or pandas array in the order of
+            the rows, or a Series with the index of the data (the same
+            labels in the same order); booleans only (see
+            `imputation.validators.check_ignore`). For example, the rows of
+            a test set, imputed with models fitted on the training rows only
+            (what R's ``mice.mids(newdata=)`` does). See Notes; the array
+            used is the attribute ``MICE.ignore``.
 
         **kwargs
             Parameters of the imputation methods, as
@@ -674,7 +694,8 @@ class MICE:
             one, and a where-cell that could not be imputed is missing (see
             Notes); every other cell is as in the data. All have the same
             dtypes. They are also stored in `imputed_datasets`; `where` is
-            the frame of where-cells used, `iteration` is set to `maxit`,
+            the frame of where-cells used, `ignore` the rows left out of the
+            fits, `iteration` is set to `maxit`,
             `chain_mean` and `chain_var` get one row per iteration,
             `logged_events` holds the events of this call (see Notes), and
             the state of each chain is kept for `continue_chains`.
@@ -687,11 +708,17 @@ class MICE:
             predictor matrix, `where`: another keyword or type, another
             shape, other column labels or another index than the data,
             values that are not booleans or missing values, see
-            `imputation.validators.check_where`). A predictor matrix without
+            `imputation.validators.check_where`; `ignore`: another type or
+            number of entries, a Series with another index than the data,
+            values that are not booleans or missing values, see
+            `imputation.validators.check_ignore`). A predictor matrix without
             a row for a column that is imputed. Before the chains start,
-            after the setup step, for a method that cannot impute the type
-            of its column, with the column named
-            (`imputation.validators.check_method_types`):
+            after the setup step, for a column that is imputed and has no
+            observed value in the rows that `ignore` keeps, with the column
+            named (R starts such a column from random normal values and
+            stops in the first iteration with "0 (non-NA) cases"); and for a
+            method that cannot impute the type of its column, with the
+            column named (`imputation.validators.check_method_types`):
             ``"norm"``, ``"norm.nob"``, ``"norm.boot"``, ``"norm.predict"``
             or ``"mean"`` on a boolean, categorical or text column;
             ``"logreg"`` or ``"logreg.boot"`` on a column with more than two
@@ -730,30 +757,47 @@ class MICE:
             When observed where-cells are missing in the completed datasets
             (see Notes), once, with the number of observed values lost in
             each column and the reason: no method, or predictors incomplete
-            in these rows. R loses them silently.
+            in these rows. R loses them silently. When `ignore` is given
+            and leaves fewer than 10 rows for the fits, with R's text
+            "Fewer than 10 rows for fitting the imputation model. Are you
+            sure?"; the imputation goes on, as in R.
 
         Notes
         -----
         What is imputed, as in R: each column with where-cells and a method
         is visited in each iteration. Its model is fitted on the rows where
-        the column is observed and its predictors are complete in the data
-        the chains work on, and the imputer fills the where-cells whose
-        predictors are complete there. These data hold the imputations of
-        the missing where-cells only: an observed where-cell keeps its
-        observed value, and a missing cell that `where` leaves out stays
-        missing. So a where-cell becomes missing (in the completed data
-        too, also where it was observed) when its column has no method
-        (``""``, set by the user or by the setup step), or when one of its
-        predictors is missing in its row at the visit: a missing cell left
-        out of `where`, a where-cell that could not be imputed itself, or
-        the missing cell of a predictor without a method. Such missing
-        values spread to the columns that the column predicts. The chain
-        statistics are taken over all where-cells of a column. A NumPy
-        integer or boolean column with where-cells (possible only under
-        `where`, since it is complete) becomes ``Int64`` (the nullable
-        integer dtype of its width) or ``boolean`` in the completed
-        datasets, because a where-cell can end up missing; then the rule
-        for the norm methods and ``"mean"`` (see `method`) applies.
+        the column is observed, its predictors are complete in the data the
+        chains work on and `ignore` does not leave the row out, and the
+        imputer fills the where-cells whose predictors are complete there.
+        These data hold the imputations of the missing where-cells only: an
+        observed where-cell keeps its observed value, and a missing cell
+        that `where` leaves out stays missing. So a where-cell becomes
+        missing (in the completed data too, also where it was observed)
+        when its column has no method (``""``, set by the user or by the
+        setup step), or when one of its predictors is missing in its row at
+        the visit: a missing cell left out of `where`, a where-cell that
+        could not be imputed itself, or the missing cell of a predictor
+        without a method. Such missing values spread to the columns that
+        the column predicts. The chain statistics are taken over all
+        where-cells of a column. A NumPy integer or boolean column with
+        where-cells (possible only under `where`, since it is complete)
+        becomes ``Int64`` (the nullable integer dtype of its width) or
+        ``boolean`` in the completed datasets, because a where-cell can end
+        up missing; then the rule for the norm methods and ``"mean"`` (see
+        `method`) applies.
+
+        A row that `ignore` leaves out, as in R, is left out of the fit
+        rows of every column in every iteration, and its observed values
+        are not drawn as start values (``initial="meanobs"`` takes its
+        values from the other rows too); its where-cells are imputed like
+        any other. Everything decided before the chains start uses all
+        rows: the methods, the setup step, the visit sequence. The checks
+        of each univariate imputation ("df set to 1" and the dropped
+        predictors, see below) look at the fit rows, so without the ignored
+        rows. The imputer still receives the ignored rows, in neither of its
+        masks where their cell is observed: ``"logreg"``, ``"polyreg"`` and
+        ``"polr"`` take the categories of the target and the statistics of
+        the rows they add (R's ``augment``) over them too.
 
         As R's ``mice``, the imputation model is edited before the chains
         start and before every univariate imputation; each change is a row
@@ -770,11 +814,11 @@ class MICE:
           Object and string columns count as categorical variables here.
         - Each univariate imputation: the predictors are dummy-coded by
           `imputation.design.obtain_design`, and columns that are constant
-          or linearly dependent on the observed rows are dropped
+          or linearly dependent on the fit rows are dropped
           (`imputation.design.remove_lindep`); ``out`` names the dropped
           columns. In the first iteration (not again in `continue_chains`),
-          a model with fewer observed cases than parameters logs "df set to
-          1".
+          a model with fewer fit rows (R's "observed cases") than
+          parameters logs "df set to 1".
         - An imputer may log events itself: with ``polr_log_fallback=True``
           each fallback of ``"polr"`` to the multinomial model logs
           "polr falls back to multinom" (``meth`` "polr"), as R's
@@ -803,14 +847,17 @@ class MICE:
         chain_streams = seed_sequence.spawn(n_imputations)
 
         _check_method_params(kwargs)
-        # The cells that get an imputation, R's where
+        # The cells that get an imputation, R's where, and the rows the
+        # models leave out, R's ignore
         where_cells = check_where(where, self.data)
+        ignored_rows = check_ignore(ignore, self.data)
         columns = list(self.data.columns)
 
         # The settings of the last run change from here on: its chains cannot
         # be continued any more, also if this call stops with an error
         self._chain_states = []
         self.where: pd.DataFrame = where_cells
+        self.ignore: np.ndarray = ignored_rows
 
         # The default method of each column's type (R's make.method), for
         # method=None and for the columns a method dict leaves out
@@ -863,14 +910,13 @@ class MICE:
         self.maxit = maxit
         self.initial = initial
 
-        # The rows the models leave out, R's ignore: no row
-        self._ignore = np.zeros(len(self.data), dtype=bool)
-
         # Edit the model before the chains start, as R's mice.edit.setup
         self._log = []
         self.predictor_matrix = self._edit_setup(predictor_matrix)
         # Each method must suit the type of the column it imputes (R's check.method)
         check_method_types(self.data, {col: meth for col, meth in self.method.items() if meth != ""})
+        # Each column that is imputed needs a row to fit on and start from
+        self._check_rows_not_ignored()
 
         self._set_visit_sequence(visit_sequence, np.random.default_rng(visit_stream))
         logger.debug(f"Visit sequence set to: {self.visit_sequence}")
@@ -942,10 +988,11 @@ class MICE:
         Each chain goes on from where it stopped: from its current
         imputations, with its own generator in the state it reached. Nothing
         is decided again: the start, the visit sequence (also a ``"random"``
-        one), the methods, the predictor matrix and the setup step are those
-        of the last `impute`, and the check of the first iteration ("df set
-        to 1", see `impute`) does not run again. The chains run one after the
-        other, as in `impute`.
+        one), the methods, the predictor matrix, the setup step, the
+        where-cells and the rows left out by `ignore` are those of the last
+        `impute`, and the check of the first iteration ("df set to 1", see
+        `impute`) does not run again. The chains run one after the other, as
+        in `impute`.
 
         Parameters
         ----------
@@ -1178,6 +1225,33 @@ class MICE:
         if self._not_imputed:
             logger.info("Not imputed because constant or collinear: %s", self._not_imputed)
         return pd.DataFrame(pred, index=predictor_matrix.index, columns=predictor_matrix.columns)
+
+    def _check_rows_not_ignored(self) -> None:
+        """Raise ValueError if a column that is imputed has no observed value in the rows that `ignore` keeps.
+
+        Its model would have no row to be fitted on, and its start no value
+        to draw. R starts such a column from random normal values and stops
+        in the first iteration ("0 (non-NA) cases"); here the run stops
+        before the chains start. Called after the setup step: a column
+        without a method needs no such row, also one whose method the setup
+        step removed (a column observed in fewer than two rows is constant).
+        """
+        without = [
+            col
+            for col in self.data.columns
+            if self.method[col] != "" and not (self.id_obs[col].to_numpy() & ~self.ignore).any()
+        ]
+        if not without:
+            return
+        if len(without) == 1:
+            columns, its = f"the column {without[0]!r}", "its"
+        else:
+            columns, its = f"the columns {without}", "their"
+        raise ValueError(
+            f"Every observed value of {columns} lies in a row that ignore leaves out: {its} imputation model has no "
+            f"row to be fitted on and {its} start no value to draw (R stops in the first iteration with "
+            "'0 (non-NA) cases'). Leave out fewer rows, or give the method '' to these columns."
+        )
 
     def fit(
         self,
@@ -1595,11 +1669,11 @@ class MICE:
             x = obtain_design(working, predictor_cols)
             x_values = x.to_numpy()
             cx = ~np.isnan(x_values).any(axis=1)
-            ry = _fit_rows(cx, observed, self._ignore)
+            ry = _fit_rows(cx, observed, self.ignore)
             wy = _rows_to_impute(cx, where)
             if not wy.any():
                 # No where-cell has complete predictors: all are missing
-                _store_imputations(imp, cx[where], None)
+                _store_imputations(imp, wy[where], None)
                 _refresh_working_column(working, col, imp, where, observed)
                 continue
 
@@ -1638,7 +1712,7 @@ class MICE:
             # New floats take the float dtype of the column
             if method_name in _FLOAT_METHODS:
                 imputed_values = _in_float_dtype(imputed_values, working[col].dtype)
-            _store_imputations(imp, cx[where], imputed_values)
+            _store_imputations(imp, wy[where], imputed_values)
             _refresh_working_column(working, col, imp, where, observed)
 
         self._record_chain_statistics(state.imp, iter_idx, chain_idx)
@@ -1706,7 +1780,7 @@ class MICE:
             start = data[col][where].copy()
             observed = self.id_obs[col].to_numpy()
             # R's ry at the start: observed and not ignored, whatever the predictors
-            donors = observed & ~self._ignore
+            donors = observed & ~self.ignore
             if self.method[col] == "":
                 if observed[where].any():
                     start.iloc[np.flatnonzero(observed[where])] = np.nan

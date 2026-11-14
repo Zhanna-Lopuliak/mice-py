@@ -11,11 +11,10 @@ where-cell outside ``cx`` becomes NaN in ``imp``. A completed dataset is a
 copy of the data with every where-cell replaced by ``imp``, and the chain
 statistics are computed from ``imp`` at the end of each iteration.
 
-``impute`` has no ``ignore`` argument yet (version 0.4 adds it): it leaves
-out no row. The tests with an ignored row set ``MICE.where`` (the frame
-``impute(where=...)`` keeps) and the private mask ``MICE._ignore`` after a
-run, and call the loop's methods directly; test_where tests ``where``
-through ``impute``.
+The tests with an observed where-cell and an ignored row set ``MICE.where``
+and ``MICE.ignore`` (the forms in which ``impute`` keeps its arguments
+``where`` and ``ignore``) after a run, and call the loop's methods directly;
+test_where and test_ignore test the arguments through ``impute``.
 """
 
 import warnings
@@ -175,7 +174,7 @@ def _mice_with_masks(spy):
     where["y"] = WHERE
     where["z"] = df["z"].isna()
     mice.where = where
-    mice._ignore = IGNORE.copy()
+    mice.ignore = IGNORE.copy()
     mice._log = []
     return mice
 

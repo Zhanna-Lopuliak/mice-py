@@ -51,6 +51,12 @@ _WHERE_FORMS = (
     f"None, one of {', '.join(repr(keyword) for keyword in _WHERE_KEYWORDS)}, a boolean DataFrame with the index "
     "and the columns of the data, or a boolean NumPy array of the shape of the data"
 )
+_IGNORE_FORMS = (
+    "None or a sequence of booleans with one entry per row of the data: a list, a tuple, a NumPy or pandas array, "
+    "or a Series with the index of the data"
+)
+# R's warning of check.ignore when ignore leaves fewer than 10 rows
+_FEW_FIT_ROWS = "Fewer than 10 rows for fitting the imputation model. Are you sure?"
 
 
 def _is_integer(value: Any) -> bool:
@@ -116,6 +122,18 @@ def check_maxit(maxit: int) -> None:
         warnings.warn("maxit is greater than 50, imputations will take a lot of time", UserWarning, stacklevel=3)
 
 
+def _holds_booleans(values: Any, dtype: Any) -> bool:
+    """True if `values` (without missing values, of dtype `dtype`) are booleans.
+
+    A NumPy or pandas boolean dtype, or the object dtype with every value a
+    Python or NumPy bool; not numbers, also not 0 and 1.
+    """
+    return pd.api.types.is_bool_dtype(dtype) or (
+        pd.api.types.is_object_dtype(dtype)
+        and all(isinstance(value, (bool, np.bool_)) for value in np.asarray(values, dtype=object).ravel())
+    )
+
+
 def _boolean_values(values: Any, dtype: Any, place: str) -> np.ndarray:
     """The values of one column of `where` (or of the whole array) as a bool array.
 
@@ -127,10 +145,7 @@ def _boolean_values(values: Any, dtype: Any, place: str) -> np.ndarray:
         return np.array(values, dtype=bool)
     if pd.isna(values).any():
         raise ValueError(f"where contains missing values ({place}): every cell must be True or False.")
-    if pd.api.types.is_bool_dtype(dtype) or (
-        pd.api.types.is_object_dtype(dtype)
-        and all(isinstance(value, (bool, np.bool_)) for value in np.asarray(values, dtype=object).ravel())
-    ):
+    if _holds_booleans(values, dtype):
         return np.array(values, dtype=bool)
     raise ValueError(
         f"where must hold booleans, True or False; {place} has dtype {dtype}. Numbers, also 0 and 1, are not "
@@ -236,6 +251,100 @@ def check_where(where: Any, data: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(_boolean_values(where, where.dtype, "the array"), index=data.index, columns=data.columns)
 
     raise ValueError(f"where must be {_WHERE_FORMS}; got {type(where).__name__}.")
+
+
+def check_ignore(ignore: Any, data: pd.DataFrame) -> np.ndarray:
+    """
+    Check the rows that the imputation models leave out, as R's ``check.ignore``, and return them as a bool array.
+
+    An ignored row is left out of every model fit and of the values the
+    chains start from, and its where-cells are still imputed (see
+    `MICE.impute`).
+
+    Parameters
+    ----------
+    ignore : None or sequence of bool
+        One entry per row of `data`, True for a row that the models leave
+        out:
+
+        - None: no row (R's default);
+        - a list or tuple of booleans, a NumPy array of booleans or a
+          pandas array of dtype ``"boolean"``, in the order of the rows of
+          `data`;
+        - a Series of booleans with the index of `data` (the same labels in
+          the same order).
+    data : pd.DataFrame
+        The data.
+
+    Returns
+    -------
+    np.ndarray
+        A new array of dtype bool with one entry per row of `data`.
+
+    Raises
+    ------
+    ValueError
+        For another type (a string, a DataFrame, a single value, ...); for
+        another number of entries than rows (also a two-dimensional array);
+        for a Series with another index; for missing values; for values that
+        are not booleans, also the numbers 0 and 1 (R accepts no numbers
+        either). The message says what is expected.
+
+    Warns
+    -----
+    UserWarning
+        When `ignore` is given and leaves fewer than 10 rows for the model
+        fits, with R's text "Fewer than 10 rows for fitting the imputation
+        model. Are you sure?". As in R, the imputation goes on.
+
+    Examples
+    --------
+    >>> import numpy as np, pandas as pd
+    >>> df = pd.DataFrame({"x": [1.0, np.nan, 3.0] * 5})
+    >>> check_ignore(None, df).tolist() == [False] * 15
+    True
+    >>> check_ignore([False] * 13 + [True] * 2, df).nonzero()[0].tolist()
+    [13, 14]
+    >>> check_ignore(df["x"].isna(), df).nonzero()[0].tolist()
+    [1, 4, 7, 10, 13]
+    """
+    n_rows = len(data)
+    if ignore is None:
+        return np.zeros(n_rows, dtype=bool)
+    if isinstance(ignore, pd.Series):
+        values = ignore.array if isinstance(ignore.dtype, pd.api.extensions.ExtensionDtype) else ignore.to_numpy()
+    elif isinstance(ignore, (np.ndarray, pd.api.extensions.ExtensionArray)):
+        values = ignore
+    elif isinstance(ignore, (list, tuple)):
+        try:
+            values = np.asarray(ignore)
+        except ValueError:  # entries of different lengths
+            values = np.asarray(ignore, dtype=object)
+    else:
+        raise ValueError(f"ignore must be {_IGNORE_FORMS}; got {type(ignore).__name__}.")
+
+    if values.ndim != 1 or len(values) != n_rows:
+        size = f"{len(values)} entries" if values.ndim == 1 else f"the shape {values.shape}"
+        raise ValueError(
+            f"ignore has {size}, the data has {n_rows} rows: ignore must have one entry per row of the data."
+        )
+    if isinstance(ignore, pd.Series) and not ignore.index.equals(data.index):
+        raise ValueError(
+            "ignore has another index than the data: a Series must have the index of the data, the same labels "
+            "in the same order."
+        )
+    if not (isinstance(values.dtype, np.dtype) and values.dtype == np.bool_):
+        if pd.isna(values).any():
+            raise ValueError("ignore contains missing values: every entry must be True or False.")
+        if not _holds_booleans(values, values.dtype):
+            raise ValueError(
+                f"ignore must hold booleans, True or False; it has dtype {values.dtype}. Numbers, also 0 and 1, "
+                "are not accepted, as in R: convert them to booleans first."
+            )
+    rows = np.array(values, dtype=bool)
+    if (~rows).sum() < 10:
+        warnings.warn(_FEW_FIT_ROWS, UserWarning, stacklevel=3)
+    return rows
 
 
 def check_method(
