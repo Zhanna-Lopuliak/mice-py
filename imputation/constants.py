@@ -189,12 +189,15 @@ class VisitSequence(Enum):
 
     The keywords of R's ``mice``, plus ``random``. Only the columns that are
     imputed are visited: those with where-cells (by default the incomplete
-    columns) and a method other than ``""``.
+    columns) and a method other than ``""``, passive columns included. A
+    keyword orders all of them, passive columns where the keyword puts
+    them. Without a keyword (``visit_sequence=None``, R's default) the
+    columns are visited in data order with the passive columns last.
 
     Attributes
     ----------
     ROMAN
-        Columns in data order (R's default).
+        Columns in data order.
     ARABIC
         Columns in reverse data order.
     MONOTONE
@@ -242,16 +245,18 @@ class VisitSequence(Enum):
         return sequence in cls.get_all_sequences()
 
     @classmethod
-    def get_default_sequence(cls) -> str:
+    def get_default_sequence(cls) -> None:
         """
         Get the default visit sequence.
 
         Returns
         -------
-        str
-            Default visit sequence name (``"roman"``, as in R)
+        None
+            No keyword, as R's ``visitSequence = NULL``: the columns in data
+            order with the passive columns last. Without passive columns
+            this is the order of ``"roman"``.
         """
-        return cls.ROMAN.value
+        return None
 
 
 #: The names of the supported imputation methods.
@@ -267,5 +272,11 @@ SUPPORTED_INITIAL_METHODS = InitialMethod.get_all_methods()
 DEFAULT_INITIAL_METHOD = InitialMethod.get_default_method()
 #: The keywords of the supported visit sequences.
 SUPPORTED_VISIT_SEQUENCES = VisitSequence.get_all_sequences()
-#: The default visit sequence, ``"roman"``.
+#: The default visit sequence, None: data order with the passive columns
+#: last, as R's ``visitSequence = NULL`` (the order of ``"roman"`` when no
+#: column is passive).
 DEFAULT_VISIT_SEQUENCE = VisitSequence.get_default_sequence()
+#: The entry of a passive column in ``MICE.method`` (see the argument
+#: ``passive`` of ``MICE.impute``). A reserved name, not an imputation
+#: method: ``method`` does not take it.
+PASSIVE_METHOD = "passive"

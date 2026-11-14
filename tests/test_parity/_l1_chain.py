@@ -68,7 +68,9 @@ _POOLS = ("chisq", "normal", "uniform")
 
 # MICE's warning about observed where-cells that are missing in the completed data, and its count per column
 _LOST_WARNING = "Observed values replaced by missing values in the completed data"
-_LOST_COUNT = re.compile(r"'([^']*)': (\d+) \((no method|predictors incomplete in these rows)\)")
+_LOST_COUNT = re.compile(
+    r"'([^']*)': (\d+) \((no method|predictors incomplete in these rows|passive function missing in these rows)\)"
+)
 
 # Warnings that MICE gives with R's text; `run_case` records them for `check_warnings`
 R_WARNINGS = ("Fewer than 10 rows for fitting the imputation model. Are you sure?",)

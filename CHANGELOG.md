@@ -72,6 +72,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values, which moved the others to its place, and the median points of
   `bwplot` were drawn beside the wrong boxes; a group of missing values
   (cells that could not be imputed) made pandas and NumPy warn.
+- The default of `impute(visit_sequence=)` is `None`, R's
+  `visitSequence = NULL`: data order with the passive columns (see
+  `impute(passive=)`) last. Without passive columns this is the order of
+  `"roman"`, the default before, so every call without `passive` gives the
+  same results. `imputation.constants.DEFAULT_VISIT_SEQUENCE` and
+  `VisitSequence.get_default_sequence()` are `None`;
+  `imputation.validators.check_visit_sequence` accepts `None`. The keywords
+  place a passive column like any other column, as in R.
 
 ### Added
 
@@ -144,6 +152,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the first iteration).
 - `MICE.ignore`: the boolean array of the rows that the last `impute()`
   left out of the fits, all `False` by default.
+- `impute(post=)`, R's `post`: a mapping from a column to a function
+  `f(imp, data)`, for example bounds `{"tv": lambda imp, data:
+  imp.clip(1, 25)}` (R's `squeeze`). After each univariate imputation of
+  the column, in every iteration and chain, `f` gets copies of the
+  imputations of all its where-cells (a Series indexed by their row labels)
+  and of the working data in the same rows, and returns the values to keep:
+  a Series with the index of `imp` or a sequence of its length. They
+  replace the imputations, and the next columns are imputed from them; the
+  chain statistics are taken after them, as in R. As in R, `f` is not
+  called for a column that is not imputed, also one removed by the setup
+  step, and it is called also when no where-cell of the column could be
+  imputed. `imputation.validators.check_post` checks the argument (a
+  mapping of columns to callables); a `post` entry for a passive column
+  raises (R ignores it). A function that raises, returns another number of
+  values, a Series with another index, or values the column cannot hold
+  (a number that is not whole in an integer column, a label that is not a
+  category, ...) raises `ValueError` naming the column, the iteration and
+  the imputation.
+- `impute(passive=)`, R's passive imputation (a method `"~ I(...)"`): a
+  mapping from a column to a function `f(data)`, for example
+  `{"bmi": lambda d: d["wgt"] / (d["hgt"] / 100) ** 2}`. At each visit of
+  the column, `f` gets a copy of the working data (all rows; R evaluates
+  the formula on the rows being imputed) and returns one value per row;
+  the where-cells of the column take the values of their rows (in the
+  working data the missing ones only), nothing is drawn or logged.
+  `MICE.method` shows `"passive"` for the column; the name is reserved and
+  `method` does not take it, nor a `method` dict another method for a
+  passive column. As in R, a passive column starts from sampled observed
+  values (from standard normal draws when it has none in the rows that
+  `ignore` keeps), is visited after the imputed columns under the default
+  visit sequence, gets `""` without where-cells, is skipped by the constant
+  check of the setup step and takes part in the collinearity check, and
+  counts for the chain statistics; it needs no row in the predictor
+  matrix. Each function is called once on the data before the chains
+  start (`imputation.validators.check_passive`), so a function that fails
+  or does not return one value per row raises `ValueError` naming the
+  column before any imputation; the dtype of the column is fixed from that
+  call (an integer column whose function returns floats becomes
+  `Float64`; an entirely missing column takes the dtype of the result).
+  A column that has no observed value to start from and whose function
+  does not return numbers raises `ValueError`.
+- `MICE.post` and `MICE.passive`: the functions of the last `impute()` in
+  effect, without the columns that are not imputed or that the setup step
+  removed. `continue_chains()` uses them, and `impute(maxit=a + b)` equals
+  `impute(maxit=a)` plus `continue_chains(b)` with them too.
+- A list `visit_sequence` may name a column more than once, as in R; the
+  column is then visited each time (a passive column after each of its
+  inputs, for example), and its chain statistics are those at the end of
+  the iteration. It raised `ValueError` before. `MICE.visit_sequence` is
+  the order used, repeats included.
+- The warning about observed values lost in the completed data gives the
+  reason "passive function missing in these rows" for a passive column.
 
 ### Removed
 

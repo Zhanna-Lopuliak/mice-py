@@ -14,7 +14,8 @@ see each of them.
 The grid has two cases with ``where``: every cell, and the missing cells
 with some left out and some observed cells added; one with ``ignore``; and
 one with both. A further case has observed where-cells that cannot be
-imputed and ignored rows.
+imputed and ignored rows. Four cases have ``post`` (bounds and a shift),
+a passive column, both, and both together with ``where`` and ``ignore``.
 """
 
 import functools
@@ -146,6 +147,29 @@ def _partial_where():
     return df, where, left_out, added
 
 
+# Bounds on a and a shift of c, deterministic as the equality requires
+POST = {"a": lambda imp, data: imp.clip(-1, 1), "c": lambda imp, data: imp + 0.5}
+PRODUCT = {"p": lambda data: data["a"] * data["b"]}
+
+
+def _with_passive(**kwargs):
+    """``numeric_frame`` with the passive column ``p = a * b``, missing where a or b is."""
+    df = numeric_frame(n=40, seed=11)
+    df["p"] = df["a"] * df["b"]
+    return df, {"method": "norm", "passive": PRODUCT, **kwargs}
+
+
+def _post_passive_where_ignore():
+    """`_with_passive` under pmm with post, where (some missing cells of a left out, observed cells of b and p
+    added) and ignore."""
+    df, kwargs = _with_passive(method="pmm", post=POST, ignore=IGNORE_EVERY_FIFTH)
+    where = df.isna()
+    where.loc[list(df.index[where["a"]][:2]), "a"] = False
+    where.loc[list(df.index[df["b"].notna()][:3]), "b"] = True
+    where.loc[list(df.index[df["p"].notna()][:3]), "p"] = True
+    return df, {**kwargs, "where": where}
+
+
 CASES = {
     **{method: functools.partial(_numeric, method) for method in ("pmm", "midas", "cart", "rf", "sample")},
     "norm": functools.partial(_numeric, "norm"),
@@ -172,6 +196,10 @@ CASES = {
         _partial_where()[0],
         {"method": "pmm", "where": _partial_where()[1], "ignore": IGNORE_EVERY_FIFTH},
     ),
+    "post": functools.partial(_numeric, "norm", post=POST),
+    "passive": _with_passive,
+    "post_passive": functools.partial(_with_passive, post=POST),
+    "post_passive_where_ignore": _post_passive_where_ignore,
 }
 N_ITER = 5
 SPLITS = [(0, 5), (1, 4), (2, 3), (2, 1, 2)]
@@ -245,6 +273,19 @@ def test_the_cases_have_what_they_are_named_after():
             completed.isna().equals(other.isna()) and not completed.equals(other)
             for completed, other in zip(record["datasets"], reference["datasets"])
         ), case
+    # post: a within its bounds, c shifted; passive: p is the product in its missing cells
+    data = numeric_frame(n=40, seed=11)
+    for case in ("post", "post_passive", "post_passive_where_ignore"):
+        for completed in _reference(case, SEED)["datasets"]:
+            assert completed.loc[data["a"].isna() & completed["a"].notna(), "a"].between(-1, 1).all(), case
+    for case in ("passive", "post_passive", "post_passive_where_ignore"):
+        assert _reference(case, SEED)["method"]["p"] == "passive"
+    for case in ("passive", "post_passive"):
+        for completed in _reference(case, SEED)["datasets"]:
+            missing = (data["a"] * data["b"]).isna()
+            np.testing.assert_allclose(
+                completed.loc[missing, "p"], completed.loc[missing, "a"] * completed.loc[missing, "b"]
+            )
     for case in CASES:
         assert all(statistics.shape == (N_ITER, N_IMP) for statistics in _reference(case, SEED)["chain_mean"].values())
 

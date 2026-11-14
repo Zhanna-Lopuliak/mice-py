@@ -7,7 +7,7 @@ import inspect
 import logging
 import time
 import warnings
-from collections.abc import Hashable, Sequence
+from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -19,6 +19,7 @@ from .constants import (
     DEFAULT_INITIAL_METHOD,
     DEFAULT_METHODS,
     DEFAULT_VISIT_SEQUENCE,
+    PASSIVE_METHOD,
     ImputationMethod,
     InitialMethod,
     VisitSequence,
@@ -28,6 +29,10 @@ from .mice_result import MICEresult
 from .pooling import _residual_df, pool_estimates
 from .utils import get_imputer_func, get_imputer_params, make_method, method_prefix, split_method_param
 from .validators import (
+    _PASSIVE_RESULT,
+    _POST_RESULT,
+    _holds_booleans,
+    _values_per_entry,
     check_default_method,
     check_ignore,
     check_initial_method,
@@ -35,6 +40,8 @@ from .validators import (
     check_method,
     check_method_types,
     check_n_imputations,
+    check_passive,
+    check_post,
     check_visit_sequence,
     check_where,
     validate_columns,
@@ -167,6 +174,113 @@ def _in_float_dtype(values, dtype):
     return np.asarray(values, dtype=getattr(dtype, "numpy_dtype", dtype))
 
 
+def _is_number_dtype(dtype) -> bool:
+    """True for a dtype of real numbers: integer or float, NumPy or nullable; not boolean or complex."""
+    return (
+        pd.api.types.is_numeric_dtype(dtype)
+        and not pd.api.types.is_bool_dtype(dtype)
+        and not pd.api.types.is_complex_dtype(dtype)
+    )
+
+
+def _shown(values: pd.Series) -> str:
+    """The first three distinct values of `values`, for a message."""
+    distinct = list(pd.unique(values.to_numpy(dtype=object)))
+    return ", ".join(repr(value) for value in distinct[:3]) + (", ..." if len(distinct) > 3 else "")
+
+
+def _in_column_dtype(values: pd.Series, dtype, context: str):
+    """`values`, which a function of `post` or `passive` returned, as an array of `dtype`, the dtype of their column.
+
+    A float column holds numbers; an integer column whole numbers within
+    the range of its dtype; a boolean column booleans; a categorical column
+    its categories; a string column strings; an object column anything.
+    Missing values are written as missing (a NumPy integer or boolean
+    column, which cannot hold them, does not occur among the columns with
+    where-cells). pandas would change the dtype of the column, or truncate,
+    where the column cannot hold a value; here that raises ValueError,
+    starting with `context` and naming the dtype.
+
+    Parameters
+    ----------
+    values : pd.Series
+        One value per entry, in the order in which they are written.
+    dtype : dtype
+        The dtype of the column in the chains.
+    context : str
+        The start of the message ("Column 'bmi', passive (iteration 1,
+        imputation 1)").
+
+    Returns
+    -------
+    np.ndarray or pandas array
+        The values in `dtype`, without index.
+    """
+    present = values.notna().to_numpy()
+    given = values[present]
+
+    def cannot_hold(what: str):
+        shown = "" if what == "missing values" else f": {_shown(given)}"
+        return ValueError(
+            f"{context}: the function returned {what}, which the column (dtype {dtype}) cannot hold{shown}."
+        )
+
+    if isinstance(dtype, pd.CategoricalDtype):
+        unknown = given[dtype.categories.get_indexer(given.to_numpy(dtype=object)) < 0]
+        if len(unknown):
+            raise ValueError(
+                f"{context}: the function returned values that are not categories of the column (dtype {dtype}): "
+                f"{_shown(unknown)}."
+            )
+        return pd.Categorical(values.to_numpy(dtype=object), dtype=dtype)
+    if pd.api.types.is_bool_dtype(dtype):
+        if len(given) and not _holds_booleans(given.to_numpy(), given.dtype):
+            raise cannot_hold("values that are not booleans")
+        if isinstance(dtype, np.dtype):
+            if not present.all():
+                raise cannot_hold("missing values")
+            return values.to_numpy(dtype=bool)
+        return pd.array(values.to_numpy(dtype=object), dtype=dtype)
+    if pd.api.types.is_numeric_dtype(dtype):
+        numbers = given
+        if numbers.dtype == object:
+            # Python or NumPy integers and floats; not booleans, not text that looks like a number
+            if not all(
+                isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(value, (bool, np.bool_))
+                for value in numbers
+            ):
+                raise cannot_hold("values that are not numbers")
+            numbers = pd.to_numeric(numbers)
+        if not _is_number_dtype(numbers.dtype):
+            raise cannot_hold("values that are not numbers")
+        numpy_dtype = getattr(dtype, "numpy_dtype", dtype)
+        if pd.api.types.is_float_dtype(dtype):
+            floats = np.full(len(values), np.nan, dtype=numpy_dtype)
+            floats[present] = numbers.to_numpy(dtype=float)
+            return floats if isinstance(dtype, np.dtype) else pd.array(floats, dtype=dtype)
+        if pd.api.types.is_integer_dtype(numbers.dtype):
+            whole = numbers.to_numpy(dtype=getattr(numbers.dtype, "numpy_dtype", numbers.dtype))
+        else:
+            whole = numbers.to_numpy(dtype=float)
+            if not (np.isfinite(whole) & (whole == np.round(whole))).all():
+                raise cannot_hold("numbers that are not whole")
+        limits = np.iinfo(numpy_dtype)
+        if whole.size and (whole.min() < limits.min or whole.max() > limits.max):
+            raise cannot_hold(f"numbers outside the range of {numpy_dtype}")
+        integers = np.zeros(len(values), dtype=numpy_dtype)
+        integers[present] = whole.astype(numpy_dtype)
+        if isinstance(dtype, np.dtype):
+            if not present.all():
+                raise cannot_hold("missing values")
+            return integers
+        return pd.arrays.IntegerArray(integers, ~present)
+    if isinstance(dtype, pd.StringDtype):
+        if not all(isinstance(value, str) for value in given):
+            raise cannot_hold("values that are not strings")
+        return pd.array(values.to_numpy(dtype=object), dtype=dtype)
+    return values.to_numpy(dtype=object)
+
+
 @dataclass
 class _ChainState:
     """One chain between two iterations, as R keeps it in ``imp`` and ``.Random.seed``.
@@ -244,6 +358,77 @@ def _refresh_working_column(
     missing = ~observed[where]
     if missing.any():
         working.loc[where & ~observed, column] = _values(imp)[missing]
+
+
+def _replace_imputations(imp: pd.Series, values) -> None:
+    """Every where-cell of `imp` gets its value from `values` (one per where-cell, in row order), in place.
+
+    For the values of a ``post`` function and of a passive column, which
+    cover all where-cells of the column.
+    """
+    imp.iloc[:] = values
+
+
+def _post_values(function: Callable, imp: pd.Series, data: pd.DataFrame, context: str):
+    """What the ``post`` function of a column returns for its imputations `imp`, in the dtype of `imp`.
+
+    `function` is called as ``function(imp, data)`` with a copy of `imp`
+    and `data` (the working data in the rows of the where-cells, a copy).
+    It must return one value per where-cell: a Series with the index of
+    `imp`, or a sequence of its length, of values the column can hold
+    (`_in_column_dtype`). Raises ValueError, starting with `context`,
+    otherwise, and for an exception inside `function` (the original is the
+    cause).
+    """
+    try:
+        result = function(imp.copy(), data)
+    except Exception as err:
+        raise ValueError(f"{context}: the function raised {type(err).__name__}: {err}") from err
+    values = _values_per_entry(result, imp.index, context, _POST_RESULT, "where-cells of the column")
+    return _in_column_dtype(values, imp.dtype, context)
+
+
+def _passive_last(columns: list, method: Mapping[Hashable, str]) -> list:
+    """`columns` with the passive ones moved to the end, each part in the order given.
+
+    R's order without a visit sequence (``mice.edit.setup``: the active
+    columns, then the passive ones), so that a passive column is computed
+    from the imputations of its inputs in the same iteration.
+    """
+    return [col for col in columns if method[col] != PASSIVE_METHOD] + [
+        col for col in columns if method[col] == PASSIVE_METHOD
+    ]
+
+
+def _passive_dtype(column: pd.Series, result: pd.Series, starts_from_draws: bool):
+    """The dtype of a passive column in the chains where it differs from its dtype in the data, else None.
+
+    Parameters
+    ----------
+    column : pd.Series
+        The passive column, after a NumPy integer or boolean column with
+        where-cells became nullable.
+    result : pd.Series
+        What its function returned on the data (`check_passive`).
+    starts_from_draws : bool
+        True if the column has no observed value in the rows that are not
+        ignored, so that it starts from standard normal draws (its function
+        returns numbers, see `MICE._check_passive_start`).
+
+    Returns
+    -------
+    dtype or None
+        For a column without any observed value, the dtype of `result` if
+        it holds floats, ``Float64`` if it holds integers (the start values
+        are floats); for an integer column whose function returns floats,
+        or that starts from draws, ``Float64``, as for the norm methods;
+        otherwise None: the column keeps its dtype.
+    """
+    if column.isna().all():
+        return result.dtype if pd.api.types.is_float_dtype(result.dtype) else pd.Float64Dtype()
+    if _is_nullable_integer(column.dtype) and (pd.api.types.is_float_dtype(result.dtype) or starts_from_draws):
+        return pd.Float64Dtype()
+    return None
 
 
 def _complete(data: pd.DataFrame, imp: dict[Hashable, pd.Series], where: pd.DataFrame) -> pd.DataFrame:
@@ -400,6 +585,16 @@ class MICE:
         `data`, True for a row left out (its where-cells were imputed all
         the same). The `ignore` argument of `impute` in this form; by
         default all False. `continue_chains` uses it too.
+    post : dict of column label to callable
+        The functions of the argument `post` of the last `impute` that are
+        in effect, R's ``imp$post``: those of the columns that are imputed.
+        As in R, the entry of a column that has no method, or whose method
+        the setup step removed, is dropped. `continue_chains` uses them.
+    passive : dict of column label to callable
+        The functions of the passive columns of the last `impute` that are
+        in effect (the argument `passive`): those of the passive columns
+        with where-cells that the setup step kept, whose entry in `method`
+        is ``"passive"``. `continue_chains` uses them.
     iteration : int
         The number of iterations each chain has run, R's ``imp$iteration``:
         the `maxit` of the last `impute` plus that of every `continue_chains`
@@ -407,19 +602,22 @@ class MICE:
     method : dict of str to str
         The imputation method of each column used by the last `impute`
         (``""`` for a column that is not imputed, such as a column without
-        where-cells), as R's ``imp$method``: after the setup step, which
-        removes the method of a constant or collinear column.
+        where-cells; ``"passive"`` for a passive column), as R's
+        ``imp$method``: after the setup step, which removes the method of
+        a constant or collinear column.
     predictor_matrix : pd.DataFrame
         The predictor matrix used by the last `impute`, after the setup step
         and, for ``visit_sequence="monotone"`` with ``maxit=1``, after R's
         edit for a monotone pattern (see `impute`); square, in data order;
         rows are targets, columns predictors.
     visit_sequence : list of str
-        The order in which the last `impute` visited the columns.
+        The order in which the last `impute` visited the columns, a column
+        named twice included twice.
     chain_mean, chain_var : dict of str to np.ndarray
-        For each imputed numeric column, the mean and variance of the
-        imputations of all its where-cells (observed ones included; missing
-        imputations skipped) at the end of each iteration, shape
+        For each imputed numeric column (passive ones included), the mean
+        and variance of the imputations of all its where-cells (observed
+        ones included; missing imputations skipped) at the end of each
+        iteration, after `post`, shape
         ``(iteration, n_imputations)``: one row per iteration, one column
         per chain.
         `continue_chains` appends rows; after ``impute(maxit=0)`` they have
@@ -451,6 +649,27 @@ class MICE:
     (5, 0)
     >>> _ = mice.fit("y ~ x")
     >>> table = mice.pool()["table"]  # estimate, df, fmi, intervals, ... per term
+
+    A passive column, kept equal to a function of the others, and bounds on
+    the imputations of a column (R's ``post``):
+
+    >>> df["y2"] = df["y"] ** 2
+    >>> df["z"] = (df["x"] + rng.normal(size=50)).clip(-1.5, 1.5)
+    >>> df.loc[1::5, "z"] = np.nan
+    >>> predictors = 1 - pd.DataFrame(np.eye(4, dtype=int), index=df.columns, columns=df.columns)
+    >>> predictors.loc["y", "y2"] = 0  # y2 is computed from y and does not predict it
+    >>> mice = MICE(df)
+    >>> datasets = mice.impute(
+    ...     n_imputations=2,
+    ...     seed=1,
+    ...     predictor_matrix=predictors,
+    ...     passive={"y2": lambda d: d["y"] ** 2},
+    ...     post={"z": lambda imp, data: imp.clip(-1.5, 1.5)},
+    ... )
+    >>> mice.method["y2"], mice.visit_sequence
+    ('passive', ['y', 'z', 'y2'])
+    >>> all((d["y2"] == d["y"] ** 2).all() and d["z"].between(-1.5, 1.5).all() for d in datasets)
+    True
     """
 
     def __init__(self, data: pd.DataFrame) -> None:
@@ -515,11 +734,13 @@ class MICE:
         predictor_matrix: pd.DataFrame | None = None,
         initial: str = DEFAULT_INITIAL_METHOD,
         method: str | dict[str, str] | None = None,
-        visit_sequence: str | list[str] = DEFAULT_VISIT_SEQUENCE,
+        visit_sequence: str | list[str] | None = DEFAULT_VISIT_SEQUENCE,
         seed: int | Sequence[int] | None = None,
         default_method: Sequence[str] = DEFAULT_METHODS,
         where: str | pd.DataFrame | np.ndarray | None = None,
         ignore: Sequence[bool] | np.ndarray | pd.Series | None = None,
+        post: Mapping[Hashable, Callable[[pd.Series, pd.DataFrame], Any]] | None = None,
+        passive: Mapping[Hashable, Callable[[pd.DataFrame], Any]] | None = None,
         **kwargs: Any,
     ) -> list[pd.DataFrame]:
         """
@@ -585,11 +806,17 @@ class MICE:
               ``"polyreg"``, as in R;
             - ``""`` for a column that is not imputed.
 
+            A passive column (R's method ``"~ ..."``) is not given here but
+            with `passive`; ``"passive"``, its entry in `MICE.method`, is
+            not a method name that `method` takes.
+
             The argument is:
 
-            - str: the same method for all columns;
+            - str: the same method for all columns (the passive ones
+              excepted);
             - dict: the method of each listed column; the columns not in it
-              get the default method of their type (see None);
+              get the default method of their type (see None). It must not
+              list a passive column;
             - None: the default method of each column's type, as R's
               ``make.method`` chooses it (`imputation.make_method`):
               ``"pmm"`` for a numeric column, ``"logreg"`` for a boolean
@@ -609,12 +836,17 @@ class MICE:
             categories of the target and for the rows they add to the data
             (R's ``augment``). Before the chains start, each method is
             checked against the type of its column (see Raises and Warns).
-        visit_sequence : str or list of str, default="roman"
+        visit_sequence : str, list of str or None, default None
             Order in which the columns are visited in each iteration. Only
             the columns that are imputed are visited: with where-cells (by
-            default the incomplete columns) and a method other than ``""``.
+            default the incomplete columns) and a method other than ``""``,
+            passive columns included.
 
-            - "roman": data order (R's default);
+            - None: data order with the passive columns last, as R's default
+              (``visitSequence = NULL``), so that a passive column is
+              computed from the imputations of its inputs in the same
+              iteration. Without passive columns this is "roman";
+            - "roman": data order;
             - "arabic": reverse data order;
             - "monotone": increasing number of where-cells (by default of
               missing values), ties in data order; with ``maxit=1`` it also
@@ -622,7 +854,16 @@ class MICE:
             - "revmonotone": the reverse of "monotone";
             - "random": a random order, drawn once per call from `seed`;
             - a list of column labels: that order. It must contain every
-              column that is imputed; other columns in it are skipped.
+              column that is imputed, passive ones included; other columns
+              in it are skipped. A column may appear more than once and is
+              then visited each time, as in R: ``["hgt", "bmi", "wgt",
+              "bmi"]`` computes the passive ``bmi`` after each of its
+              inputs.
+
+            A keyword or a list places the passive columns where it puts
+            them, as in R: under "roman" a passive column before its inputs
+            is computed from their values of the previous iteration.
+            `MICE.visit_sequence` is the order used, repeats included.
         seed : int, sequence of int, or None, default=None
             Seed for the random number generators. It seeds one
             ``np.random.SeedSequence``, from which independent streams are
@@ -671,6 +912,63 @@ class MICE:
             a test set, imputed with models fitted on the training rows only
             (what R's ``mice.mids(newdata=)`` does). See Notes; the array
             used is the attribute ``MICE.ignore``.
+        post : mapping of column label to callable, optional
+            Functions that change the imputations of a column right after
+            they are drawn, R's ``post``: ``{column: f}``. After each
+            univariate imputation of the column, in every iteration and
+            chain, ``f(imp, data)`` is called with
+
+            - `imp`: the current imputations of the where-cells of the
+              column, a Series whose index holds their row labels in row
+              order, missing where a cell could not be imputed;
+            - `data`: the data the chains work on, in the same rows, all
+              columns; in the column itself the missing where-cells hold the
+              new imputations and the observed where-cells their observed
+              values.
+
+            Both are copies. `f` returns the values to keep, one per entry
+            of `imp`: a Series with the index of `imp`, or a sequence of its
+            length, of values the column can hold. They replace the
+            imputations, and the next columns are imputed from them. For
+            example bounds ``{"tv": lambda imp, data: imp.clip(1, 25)}``
+            (R's ``squeeze``), a shift for a sensitivity analysis
+            ``{"y": lambda imp, data: imp + 2}``, or a rule that reads
+            another column ``{"g": lambda imp, data: imp.where(data["age"]
+            >= 8, "G1")}``. `f` is not called for a column that is not
+            imputed (no where-cells, method ``""``, or removed by the setup
+            step), as in R, and must not be given for a passive column.
+            `f` gets no random generator: a function that draws random
+            numbers must own a seeded one, and the results then depend on
+            how the iterations are split between `impute` and
+            `continue_chains` unless it draws the same numbers each time.
+            The mapping in effect is the attribute ``MICE.post``.
+        passive : mapping of column label to callable, optional
+            Passive columns, R's passive imputation (a method such as
+            ``"~ I(wgt / (hgt / 100)^2)"``): ``{column: f}``, for a column
+            that is a function of other columns, such as ``{"bmi": lambda
+            d: d["wgt"] / (d["hgt"] / 100) ** 2}``. At each visit of the
+            column, ``f(data)`` gets a copy of the data the chains work on
+            (all rows, with the current imputations) and returns one value
+            per row: a Series with the index of the data, or a sequence of
+            its length. Its values go to the where-cells of the column
+            (all of them in the completed data; in the data the chains work
+            on, as for any column, only the missing ones); nothing is
+            drawn and nothing is logged. ``MICE.method`` shows
+            ``"passive"`` for the column. As in R, a passive column starts
+            from sampled observed values, not from its function; is visited
+            after the imputed columns unless `visit_sequence` says
+            otherwise; gets ``""`` when it has no where-cells; is not
+            checked for being constant but is checked for being collinear
+            (see Notes); and counts for the chain statistics. Whether it
+            predicts its inputs is set in `predictor_matrix` (R's
+            practice: set those entries to 0); it needs no row there.
+            Unlike R, which evaluates the formula on the rows being
+            imputed, `f` gets all rows: a function that is not row-wise,
+            such as ``lambda d: d["x"] - d["x"].mean()``, sees the mean of
+            the whole column. Each function is called once on the data
+            before the chains start (see Raises), and the dtype of the
+            column is fixed from what it returns (see Notes). The mapping in
+            effect is the attribute ``MICE.passive``.
 
         **kwargs
             Parameters of the imputation methods, as
@@ -695,7 +993,8 @@ class MICE:
             Notes); every other cell is as in the data. All have the same
             dtypes. They are also stored in `imputed_datasets`; `where` is
             the frame of where-cells used, `ignore` the rows left out of the
-            fits, `iteration` is set to `maxit`,
+            fits, `post` and `passive` the functions in effect, `iteration`
+            is set to `maxit`,
             `chain_mean` and `chain_var` get one row per iteration,
             `logged_events` holds the events of this call (see Notes), and
             the state of each chain is kept for `continue_chains`.
@@ -711,14 +1010,27 @@ class MICE:
             `imputation.validators.check_where`; `ignore`: another type or
             number of entries, a Series with another index than the data,
             values that are not booleans or missing values, see
-            `imputation.validators.check_ignore`). A predictor matrix without
-            a row for a column that is imputed. Before the chains start,
-            after the setup step, for a column that is imputed and has no
-            observed value in the rows that `ignore` keeps, with the column
-            named (R starts such a column from random normal values and
-            stops in the first iteration with "0 (non-NA) cases"); and for a
-            method that cannot impute the type of its column, with the
-            column named (`imputation.validators.check_method_types`):
+            `imputation.validators.check_ignore`; `post` or `passive`:
+            not a mapping, a key that is not a column, a value that cannot
+            be called, see `imputation.validators.check_post` and
+            `imputation.validators.check_passive`). A `post` entry for a
+            passive column (R ignores it). The name ``"passive"`` in
+            `method`, and a `method` dict that names a passive column. A
+            predictor matrix without a row for a column that is imputed (a
+            passive column needs none). Before the chains start, when a
+            passive function, called once on the data, raises (the original
+            exception is the cause) or does not return one value per row
+            of values its column can hold (R finds such a formula in the
+            first iteration; with two terms it warns and uses the first).
+            Before the chains start, after the setup step, for a column
+            that is imputed and has no observed value in the rows that
+            `ignore` keeps, with the column named (R starts such a column
+            from random normal values and stops in the first iteration with
+            "0 (non-NA) cases"); for a passive column without observed value
+            there whose function does not return numbers (R starts it from
+            random normal values); and for a method that cannot impute the
+            type of its column, with the column named
+            (`imputation.validators.check_method_types`):
             ``"norm"``, ``"norm.nob"``, ``"norm.boot"``, ``"norm.predict"``
             or ``"mean"`` on a boolean, categorical or text column;
             ``"logreg"`` or ``"logreg.boot"`` on a column with more than two
@@ -736,7 +1048,16 @@ class MICE:
             few observed values for its predictors, or a column without
             observed value in the rows usable for its model); the message
             starts with the column, the method, the iteration and the
-            imputation, followed by the imputer's message.
+            imputation, followed by the imputer's message. Inside a chain,
+            when a `post` or `passive` function raises (the message names
+            the column, ``post`` or ``passive``, the iteration and the
+            imputation, and the original exception is the cause), or
+            returns something else than one value per where-cell (`post`)
+            or per row (`passive`): a scalar, a DataFrame, a sequence of
+            another length, a Series with another index, or values that the
+            column cannot hold (a number that is not whole in an integer
+            column, a label that is not a category, text in a numeric
+            column, ...).
         TypeError
             For an unknown keyword argument. For one of the arguments
             removed in version 0.4 (`min_cor`, `min_puc`, `include`,
@@ -756,8 +1077,9 @@ class MICE:
             <column>\\nImputation method <method> is for categorical data."
             When observed where-cells are missing in the completed datasets
             (see Notes), once, with the number of observed values lost in
-            each column and the reason: no method, or predictors incomplete
-            in these rows. R loses them silently. When `ignore` is given
+            each column and the reason: no method, predictors incomplete
+            in these rows, or (for a passive column) the function missing in
+            these rows. R loses them silently. When `ignore` is given
             and leaves fewer than 10 rows for the fits, with R's text
             "Fewer than 10 rows for fitting the imputation model. Are you
             sure?"; the imputation goes on, as in R.
@@ -779,12 +1101,38 @@ class MICE:
         could not be imputed itself, or the missing cell of a predictor
         without a method. Such missing values spread to the columns that
         the column predicts. The chain statistics are taken over all
-        where-cells of a column. A NumPy integer or boolean column with
+        where-cells of a column at the end of each iteration, so after
+        `post`, and for a column visited twice in an iteration after its
+        last visit. A NumPy integer or boolean column with
         where-cells (possible only under `where`, since it is complete)
         becomes ``Int64`` (the nullable integer dtype of its width) or
         ``boolean`` in the completed datasets, because a where-cell can end
         up missing; then the rule for the norm methods and ``"mean"`` (see
         `method`) applies.
+
+        A passive column (`passive`) is computed, not imputed: at each
+        visit its where-cells get the value its function gives for their
+        row, from the data the chains work on, so a passive value is
+        missing where the function returns a missing value (for example
+        where an input keeps a missing value), and that spreads to the
+        columns it predicts. Under the default `where` every completed
+        dataset holds the function of its own row in the missing cells of
+        the column, as long as the passive column is visited after its
+        inputs (the default `visit_sequence`). An observed where-cell of a
+        passive column gets the function value in the completed data and
+        keeps its observed value in the data the chains work on, as for any
+        column. Its dtype is fixed before the chains start from what the
+        function returned on the data: an integer column (``Int64`` and
+        the like, or a NumPy integer column with where-cells) whose
+        function returns floats becomes ``Float64``; an entirely missing
+        column takes the dtype of the result (``Float64`` for integers,
+        since it starts from standard normal draws, as does an integer
+        column without observed value in the rows that `ignore` keeps);
+        any other column keeps its dtype, and a value it cannot hold raises
+        ``ValueError``. The setup step (below) does not check a passive
+        column for being constant, so an entirely missing one is kept, but
+        checks it for being collinear: a passive copy of another column
+        gets ``""``, keeps its missing values and is logged.
 
         A row that `ignore` leaves out, as in R, is left out of the fit
         rows of every column in every iteration, and its observed values
@@ -812,6 +1160,9 @@ class MICE:
           variable that (nearly) duplicates another one
           (`imputation.design.find_collinear`, ``meth`` "collinear").
           Object and string columns count as categorical variables here.
+          As in R, a passive column is checked for being collinear only,
+          and the `post` function of a column removed here is not applied
+          (it is not in ``MICE.post``).
         - Each univariate imputation: the predictors are dummy-coded by
           `imputation.design.obtain_design`, and columns that are constant
           or linearly dependent on the fit rows are dropped
@@ -851,6 +1202,16 @@ class MICE:
         # models leave out, R's ignore
         where_cells = check_where(where, self.data)
         ignored_rows = check_ignore(ignore, self.data)
+        # The functions of post, and those of the passive columns with what
+        # each returns on the data (it fixes their dtypes below)
+        post_functions = check_post(post, self.data)
+        passive_values = check_passive(passive, self.data)
+        both = [col for col in post_functions if col in passive_values]
+        if both:
+            raise ValueError(
+                f"post names the passive columns {both}: post is not applied to a passive column (R ignores it "
+                "silently). Remove them from post, or put the change into their function in passive."
+            )
         columns = list(self.data.columns)
 
         # The settings of the last run change from here on: its chains cannot
@@ -865,9 +1226,12 @@ class MICE:
             self.method = make_method(self.data, default_method, where=where_cells)
         elif isinstance(method, dict):
             defaults = make_method(self.data, default_method, where=where_cells)
-            self.method = check_method(method, columns, defaults=defaults)
+            self.method = check_method(method, columns, defaults=defaults, passive=passive_values)
         else:
-            self.method = check_method(method, columns)
+            self.method = check_method(method, columns, passive=passive_values)
+        # A passive column is computed by its function, R's passive method
+        for col in passive_values:
+            self.method[col] = PASSIVE_METHOD
         # As in R, a column without where-cells has no imputation method
         for col in columns:
             if not where_cells[col].any():
@@ -877,7 +1241,8 @@ class MICE:
         if predictor_matrix is None:
             predictor_matrix = _full_predictor_matrix(columns)
         else:
-            imputed_columns = [col for col in columns if self.method[col] != ""]
+            # A passive column has no predictors: it needs no row
+            imputed_columns = [col for col in columns if self.method[col] not in ("", PASSIVE_METHOD)]
             predictor_matrix = validate_predictor_matrix(predictor_matrix, columns, self.data, imputed_columns)
             logger.debug("Predictor matrix validated successfully")
         # Square over all columns, in data order; absent entries are 0
@@ -914,40 +1279,30 @@ class MICE:
         self._log = []
         self.predictor_matrix = self._edit_setup(predictor_matrix)
         # Each method must suit the type of the column it imputes (R's check.method)
-        check_method_types(self.data, {col: meth for col, meth in self.method.items() if meth != ""})
+        check_method_types(
+            self.data, {col: meth for col, meth in self.method.items() if meth not in ("", PASSIVE_METHOD)}
+        )
         # Each column that is imputed needs a row to fit on and start from
         self._check_rows_not_ignored()
+        # A passive column without any needs a function that returns numbers
+        self._check_passive_start(passive_values)
+        # The functions in effect: as in R, none for a column without a
+        # method, also one whose method the setup step removed
+        self.post = {col: function for col, function in post_functions.items() if self.method[col] != ""}
+        self.passive = {
+            col: function for col, function in (passive or {}).items() if self.method[col] == PASSIVE_METHOD
+        }
 
         self._set_visit_sequence(visit_sequence, np.random.default_rng(visit_stream))
         logger.debug(f"Visit sequence set to: {self.visit_sequence}")
-
-        # Chain statistics of the numeric columns that are imputed: one row
-        # per iteration, appended as the chains run
-        numeric_cols = self.data.select_dtypes(include=[np.number]).columns
-        numeric_cols_to_impute = [col for col in self.visit_sequence if col in numeric_cols]
-        self.chain_mean = {col: np.empty((0, self.n_imputations), dtype=float) for col in numeric_cols_to_impute}
-        self.chain_var = {col: np.empty((0, self.n_imputations), dtype=float) for col in numeric_cols_to_impute}
-
-        # Fixed for the whole run: the predictors of each target, in data
-        # order, and the parameters of each method
-        self._predictors = {
-            col: [c for c in columns if c != col and self.predictor_matrix.at[col, c] != 0]
-            for col in self.visit_sequence
-        }
-        self._method_params: dict[str, dict[str, Any]] = {
-            method_name: {} for method_name in set(self.method[col] for col in self.visit_sequence)
-        }
-        for key, value in self.imputation_params.items():
-            match = split_method_param(key, param_names)
-            if match is not None and match[0] in self._method_params:
-                self._method_params[match[0]][match[1]] = value
 
         # The data the chains start from, with the dtypes of every completed
         # dataset. A NumPy integer or boolean column with where-cells (it is
         # complete, so only under where) becomes nullable, because a
         # where-cell can end up missing. The norm methods and mean impute
         # floats: a nullable integer column they impute becomes Float64, as R
-        # turns an integer column into double
+        # turns an integer column into double. A passive column gets its
+        # dtype from what its function returned on the data (_passive_dtype)
         self._chain_data = self.data.copy(deep=True)
         for col in columns:
             nullable = _nullable_dtype(self._chain_data[col].dtype)
@@ -956,6 +1311,43 @@ class MICE:
         for col in self.visit_sequence:
             if self.method[col] in _FLOAT_METHODS and _is_nullable_integer(self._chain_data[col].dtype):
                 self._chain_data[col] = self._chain_data[col].astype("Float64")
+        for col in self.passive:
+            starts_from_draws = not (self.id_obs[col].to_numpy() & ~self.ignore).any()
+            dtype = _passive_dtype(self._chain_data[col], passive_values[col], starts_from_draws)
+            if dtype is not None:
+                self._chain_data[col] = self._chain_data[col].astype(dtype)
+            # What the function returned on the data must fit the column
+            _in_column_dtype(
+                passive_values[col],
+                self._chain_data[col].dtype,
+                f"Column {col!r}, passive (called once on the data before the chains start)",
+            )
+
+        # Chain statistics of the numeric columns that are imputed (each
+        # once, also if visited twice): one row per iteration, appended as
+        # the chains run
+        numeric_cols = self._chain_data.select_dtypes(include=[np.number]).columns
+        numeric_cols_to_impute = list(dict.fromkeys(col for col in self.visit_sequence if col in numeric_cols))
+        self.chain_mean = {col: np.empty((0, self.n_imputations), dtype=float) for col in numeric_cols_to_impute}
+        self.chain_var = {col: np.empty((0, self.n_imputations), dtype=float) for col in numeric_cols_to_impute}
+
+        # Fixed for the whole run: the predictors of each target, in data
+        # order, and the parameters of each method (a passive column has
+        # neither)
+        self._predictors = {
+            col: [c for c in columns if c != col and self.predictor_matrix.at[col, c] != 0]
+            for col in self.visit_sequence
+            if self.method[col] != PASSIVE_METHOD
+        }
+        self._method_params: dict[str, dict[str, Any]] = {
+            method_name: {}
+            for method_name in set(self.method[col] for col in self.visit_sequence)
+            if method_name != PASSIVE_METHOD
+        }
+        for key, value in self.imputation_params.items():
+            match = split_method_param(key, param_names)
+            if match is not None and match[0] in self._method_params:
+                self._method_params[match[0]][match[1]] = value
 
         self.imputed_datasets: list[pd.DataFrame] = []
 
@@ -989,10 +1381,11 @@ class MICE:
         imputations, with its own generator in the state it reached. Nothing
         is decided again: the start, the visit sequence (also a ``"random"``
         one), the methods, the predictor matrix, the setup step, the
-        where-cells and the rows left out by `ignore` are those of the last
-        `impute`, and the check of the first iteration ("df set to 1", see
-        `impute`) does not run again. The chains run one after the other, as
-        in `impute`.
+        where-cells, the rows left out by `ignore` and the functions of
+        `post` and `passive` (`MICE.post`, `MICE.passive`) are those of the
+        last `impute`, and the check of the first iteration ("df set to 1",
+        see `impute`) does not run again. The chains run one after the
+        other, as in `impute`.
 
         Parameters
         ----------
@@ -1012,7 +1405,7 @@ class MICE:
             If `impute` was not called first, or if the last call of `impute`
             or `continue_chains` stopped with an error (its chains cannot be
             continued); for an invalid `maxit`; inside a chain, as in
-            `impute`.
+            `impute`, also for a `post` or `passive` function.
 
         Warns
         -----
@@ -1034,7 +1427,9 @@ class MICE:
         followed by ``continue_chains(b)`` give identical results: the
         completed datasets, `chain_mean`, `chain_var`, `logged_events` and
         `iteration`. This holds for ``a = 0`` and for a continuation split
-        into several calls.
+        into several calls, also with `post` and `passive`, as long as their
+        functions give the same values for the same input (a `post`
+        function that draws from a generator of its own does not).
 
         Examples
         --------
@@ -1153,8 +1548,9 @@ class MICE:
 
         R's ``complete`` writes every where-cell, also one without an
         imputation, silently: a cell whose column has no method (set by the
-        user, or by the setup step), or whose predictors are incomplete in
-        its row when its column is visited. The warning gives, per column,
+        user, or by the setup step), whose predictors are incomplete in its
+        row when its column is visited, or, in a passive column, where its
+        function returned a missing value. The warning gives, per column,
         the number of observed values replaced by missing values and why.
         Without where-cells on observed cells nothing is lost.
         """
@@ -1166,7 +1562,12 @@ class MICE:
             for dataset in self.imputed_datasets:
                 missing |= dataset[col].isna().to_numpy()[cells]
             if missing.any():
-                reason = "no method" if self.method[col] == "" else "predictors incomplete in these rows"
+                if self.method[col] == "":
+                    reason = "no method"
+                elif self.method[col] == PASSIVE_METHOD:
+                    reason = "passive function missing in these rows"
+                else:
+                    reason = "predictors incomplete in these rows"
                 lost[col] = f"{col!r}: {int(missing.sum())} ({reason})"
         if not lost:
             return
@@ -1186,6 +1587,9 @@ class MICE:
         missing values (its observed where-cells, under `where`, become
         missing in the completed data) and leaves the visit sequence. Each
         variable affected is logged once (``meth`` "constant" or "collinear").
+        As in R, a passive column is not checked for being constant (so an
+        entirely missing one stays), but is checked for being collinear: a
+        passive copy of another column loses its method too.
         Updates `self.method`; returns the edited predictor matrix.
 
         Notes
@@ -1213,6 +1617,9 @@ class MICE:
                 self._not_imputed.append(col)
 
         for j, col in enumerate(columns):
+            if self.method[col] == PASSIVE_METHOD:
+                # As in R: a passive column is not checked for being constant
+                continue
             variance = _variance(self.data[col])
             if not variance >= _CONSTANT_VARIANCE:  # NaN: fewer than two observed values
                 remove(j, "constant")
@@ -1235,11 +1642,13 @@ class MICE:
         before the chains start. Called after the setup step: a column
         without a method needs no such row, also one whose method the setup
         step removed (a column observed in fewer than two rows is constant).
+        A passive column has no model; `_check_passive_start` checks its
+        start.
         """
         without = [
             col
             for col in self.data.columns
-            if self.method[col] != "" and not (self.id_obs[col].to_numpy() & ~self.ignore).any()
+            if self.method[col] not in ("", PASSIVE_METHOD) and not (self.id_obs[col].to_numpy() & ~self.ignore).any()
         ]
         if not without:
             return
@@ -1252,6 +1661,28 @@ class MICE:
             f"row to be fitted on and {its} start no value to draw (R stops in the first iteration with "
             "'0 (non-NA) cases'). Leave out fewer rows, or give the method '' to these columns."
         )
+
+    def _check_passive_start(self, passive_values: dict[Hashable, pd.Series]) -> None:
+        """Raise ValueError for a passive column that cannot start: no observed value, and a function without numbers.
+
+        As in R, a passive column starts from its observed values in the
+        rows that `ignore` keeps, and from standard normal draws when it has
+        none there. Such draws suit a column whose function returns numbers
+        (what it returned on the data, `passive_values`); for another one
+        (booleans, categories, text) the run stops before the chains start.
+        Called after the setup step, for the passive columns in effect.
+        """
+        for col, values in passive_values.items():
+            if self.method[col] != PASSIVE_METHOD or (self.id_obs[col].to_numpy() & ~self.ignore).any():
+                continue
+            if not _is_number_dtype(values.dtype):
+                rows = "in the rows that ignore keeps" if self.ignore.any() else "at all"
+                raise ValueError(
+                    f"The passive column {col!r} has no observed value {rows} to start from, and its function "
+                    f"returns values of dtype {values.dtype}, not numbers: R starts such a column from standard "
+                    "normal draws, which only a numeric column can take. Give it observed values to start from, or "
+                    "impute it with a method instead."
+                )
 
     def fit(
         self,
@@ -1622,7 +2053,7 @@ class MICE:
         values.
         """
         working = self._chain_data.copy(deep=True)
-        for col in self.visit_sequence:
+        for col in dict.fromkeys(self.visit_sequence):
             _refresh_working_column(working, col, imp[col], self.where[col].to_numpy(), self.id_obs[col].to_numpy())
         return working
 
@@ -1637,8 +2068,11 @@ class MICE:
         NaN in the predictors outside ``cx``. Its values go to
         ``state.imp`` (`_store_imputations`: NaN for a where-cell outside
         ``cx``) and from there to the working data
-        (`_refresh_working_column`). After the last column, the chain
-        statistics are computed from ``state.imp``.
+        (`_refresh_working_column`); then the column's ``post`` function,
+        if any, replaces them (`_apply_post`). A passive column is computed
+        from the working data instead (`_visit_passive`). A column that the
+        visit sequence names twice is visited twice. After the last column,
+        the chain statistics are computed from ``state.imp``.
 
         Parameters
         ----------
@@ -1659,6 +2093,10 @@ class MICE:
         for col in self.visit_sequence:
             logger.debug(f"Processing column '{col}' (iteration {iter_idx + 1}, chain {chain_idx})")
             method_name = self.method[col]
+            if method_name == PASSIVE_METHOD:
+                # Computed from the working data, as R's passive branch of sampler
+                self._visit_passive(working, state.imp[col], col, iter_idx, chain_idx)
+                continue
             predictor_cols = self._predictors[col]
             logger.debug(f"Using {len(predictor_cols)} predictors for column '{col}'")
             observed = self.id_obs[col].to_numpy()
@@ -1672,9 +2110,11 @@ class MICE:
             ry = _fit_rows(cx, observed, self.ignore)
             wy = _rows_to_impute(cx, where)
             if not wy.any():
-                # No where-cell has complete predictors: all are missing
+                # No where-cell has complete predictors: all are missing; as
+                # in R, post is applied all the same
                 _store_imputations(imp, wy[where], None)
                 _refresh_working_column(working, col, imp, where, observed)
+                self._apply_post(working, imp, col, iter_idx, chain_idx)
                 continue
 
             # In the first iteration of the run only, also when it is continued
@@ -1714,10 +2154,95 @@ class MICE:
                 imputed_values = _in_float_dtype(imputed_values, working[col].dtype)
             _store_imputations(imp, wy[where], imputed_values)
             _refresh_working_column(working, col, imp, where, observed)
+            # R's post, right after the univariate imputation
+            self._apply_post(working, imp, col, iter_idx, chain_idx)
 
         self._record_chain_statistics(state.imp, iter_idx, chain_idx)
         iteration_time = time.time() - iteration_start_time
         logger.debug(f"Iteration {iter_idx + 1} completed in {iteration_time:.2f} seconds")
+
+    def _apply_post(self, working: pd.DataFrame, imp: pd.Series, col: Hashable, iter_idx: int, chain_idx: int) -> None:
+        """R's ``post``: the function of `col` in `post` replaces the imputations of its visit, in place.
+
+        Called right after each univariate imputation of `col`, also when
+        none of its where-cells could be imputed (as R evaluates ``post``
+        then too); a column without a ``post`` function is left as it is.
+        The function gets copies of `imp` (the imputations of all
+        where-cells of the column) and of the working data in the rows of
+        those cells (`_post_values`); its values replace `imp`, and the
+        missing where-cells of the working data are refreshed from them
+        (`_refresh_working_column`), as R refreshes ``data`` after
+        evaluating ``post``.
+
+        Parameters
+        ----------
+        working : pd.DataFrame
+            The working data of the chain; updated in place.
+        imp : pd.Series
+            The imputations of the where-cells of `col` (``state.imp[col]``);
+            updated in place.
+        col : label
+            The column just imputed.
+        iter_idx, chain_idx : int
+            The iteration and the chain, for the messages.
+        """
+        function = self.post.get(col)
+        if function is None:
+            return
+        where = self.where[col].to_numpy()
+        context = f"Column {col!r}, post (iteration {iter_idx + 1}, imputation {chain_idx + 1})"
+        values = _post_values(function, imp, working.take(np.flatnonzero(where)), context)
+        _replace_imputations(imp, values)
+        _refresh_working_column(working, col, imp, where, self.id_obs[col].to_numpy())
+
+    def _visit_passive(
+        self, working: pd.DataFrame, imp: pd.Series, col: Hashable, iter_idx: int, chain_idx: int
+    ) -> None:
+        """A visit of the passive column `col`, as R's passive branch of ``sampler``; in place.
+
+        Every where-cell of `imp` gets the value of its row from the
+        column's function on the working data (`_passive_values`), and the
+        missing where-cells of the working data are refreshed from `imp`
+        (`_refresh_working_column`): an observed where-cell keeps its
+        observed value there, as for an imputed column. Nothing is drawn and
+        nothing is logged; ``post`` does not apply.
+
+        Parameters
+        ----------
+        working : pd.DataFrame
+            The working data of the chain; updated in place.
+        imp : pd.Series
+            The values of the where-cells of `col` (``state.imp[col]``);
+            updated in place.
+        col : label
+            The passive column.
+        iter_idx, chain_idx : int
+            The iteration and the chain, for the messages.
+        """
+        where = self.where[col].to_numpy()
+        values = self._passive_values(col, working, f"iteration {iter_idx + 1}, imputation {chain_idx + 1}")
+        _replace_imputations(imp, values[where])
+        _refresh_working_column(working, col, imp, where, self.id_obs[col].to_numpy())
+
+    def _passive_values(self, col: Hashable, working: pd.DataFrame, when: str):
+        """The value of the passive column `col` in every row: its function on a copy of the working data.
+
+        The function gets all rows (R evaluates the formula on the rows of
+        the where-cells only, which matters for a function that is not
+        row-wise, such as one that subtracts the column mean) and must return
+        one value per row of values the column can hold. Returns them in the
+        dtype of the column in the chains, without index; raises ValueError,
+        naming the column and `when` ("iteration 1, imputation 2"),
+        otherwise and for an exception inside the function (the original is
+        the cause).
+        """
+        context = f"Column {col!r}, passive ({when})"
+        try:
+            result = self.passive[col](working.copy(deep=True))
+        except Exception as err:
+            raise ValueError(f"{context}: the function raised {type(err).__name__}: {err}") from err
+        values = _values_per_entry(result, working.index, context, _PASSIVE_RESULT, "rows of the data")
+        return _in_column_dtype(values, working[col].dtype, context)
 
     def _record_chain_statistics(self, imp: dict[Hashable, pd.Series], iter_idx: int, chain_idx: int) -> None:
         """Store the mean and variance of the imputations of each numeric visited column, as R's ``sampler``.
@@ -1757,8 +2282,12 @@ class MICE:
         "sample" draws them, as R does, column by column in data order.
         "meanobs" (not in R) gives a numeric column the observed value
         closest to its mean and any other column its most frequent observed
-        value. A column without a method is not started: its where-cells are
-        missing.
+        value. A passive column starts in the same way, not from its
+        function, as in R; one without any observed value in those rows
+        starts from standard normal draws, as R's ``rnorm``, whatever
+        `initial` says (its function returns numbers, see
+        `_check_passive_start`). A column without a method is not started:
+        its where-cells are missing.
 
         Parameters
         ----------
@@ -1784,6 +2313,10 @@ class MICE:
             if self.method[col] == "":
                 if observed[where].any():
                     start.iloc[np.flatnonzero(observed[where])] = np.nan
+            elif not donors.any():
+                # A passive column without observed value (any other column
+                # with a method has one): R's rnorm
+                start.iloc[:] = _in_float_dtype(rng.standard_normal(int(where.sum())), start.dtype)
             elif self.initial == InitialMethod.SAMPLE.value:
                 observed_values = data.loc[donors, col].values
                 start.iloc[:] = _sample_start(observed_values, int(where.sum()), rng)
@@ -1807,21 +2340,26 @@ class MICE:
 
         Parameters
         ----------
-        visit_sequence : str or list of str
+        visit_sequence : str, list of str or None
             Visit sequence specification. Can be:
 
+            - None: data order with the passive columns last (R's default)
             - str: "roman", "arabic", "monotone", "revmonotone" or "random"
             - list of str: column names specifying the order to visit variables
                         Must include all columns that are imputed. Columns that are not
                         imputed (without where-cells, or with method "") are dropped from it.
+                        A column named more than once is visited each time.
         rng : np.random.Generator, optional
             Draws the "random" sequence. If None, a fresh generator is used.
 
         Only columns that are imputed are visited: those with where-cells
-        (`where`) and a method other than "". The keywords follow R's
-        ``mice``: "roman" is data order, "arabic" its reverse, "monotone"
-        sorts by the number of where-cells with a stable sort (ties keep
-        data order) and "revmonotone" is the reverse of "monotone".
+        (`where`) and a method other than "", passive columns included. The
+        keywords follow R's ``mice``: "roman" is data order, "arabic" its
+        reverse, "monotone" sorts by the number of where-cells with a stable
+        sort (ties keep data order) and "revmonotone" is the reverse of
+        "monotone"; they place the passive columns like the others. Only
+        None moves the passive columns to the end (`_passive_last`), as R
+        does without a visit sequence.
         """
         imputed_columns = [col for col in self.data.columns if self.where[col].any() and self.method[col] != ""]
 
@@ -1838,6 +2376,9 @@ class MICE:
                     f"{cols_not_imputed}. They are skipped."
                 )
             self.visit_sequence = validated_sequence
+        elif visit_sequence is None:
+            # R's visitSequence = NULL: the imputed columns, then the passive ones
+            self.visit_sequence = _passive_last(imputed_columns, self.method)
         else:
             # For string sequences, generate based on type
             monotone = _monotone(self.where, imputed_columns)
