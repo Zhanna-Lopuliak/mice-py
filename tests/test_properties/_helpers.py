@@ -376,6 +376,72 @@ def assert_chain_stats(mice, original, n_imputations, maxit):
             assert np.isfinite(var).all(), col
 
 
+def predictors_of(mice, column):
+    """The predictors of `column` in ``mice.predictor_matrix`` (after the setup step), in data order."""
+    row = mice.predictor_matrix.loc[column]
+    return [col for col in mice.predictor_matrix.columns if col != column and row[col] != 0]
+
+
+def nan_cascade(data, where, method, visit_sequence, predictors, maxit):
+    """Which cells of a completed dataset are missing, from the masks alone: the specification of the NaN cascade.
+
+    Nothing is imputed; a where-cell holds a value or NaN. At the start each
+    where-cell of a column with a method holds a value, each where-cell of a
+    column without one NaN. The data the chains work on are missing in a
+    missing cell that is not a where-cell, and in a missing where-cell that
+    holds NaN; an observed cell is present there, also an observed where-cell
+    that holds NaN. In each of `maxit` iterations, each column of
+    `visit_sequence` in turn: ``cx`` marks the rows in which all its
+    predictors are present in those data; its where-cells outside ``cx``
+    hold NaN, those inside a value. A completed dataset is missing in a
+    where-cell that holds NaN and in a missing cell that is not a where-cell.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        The data.
+    where : pd.DataFrame of bool
+        The where-cells (``MICE.where``).
+    method : dict
+        The method of each column (``MICE.method``); ``""`` for none.
+    visit_sequence : list
+        The visited columns, in order (``MICE.visit_sequence``).
+    predictors : dict
+        For each visited column, its predictors (see `predictors_of`).
+    maxit : int
+        The number of iterations.
+
+    Returns
+    -------
+    pd.DataFrame of bool
+        True for a cell that is missing in every completed dataset.
+    """
+    columns = list(data.columns)
+    missing = data.isna().to_numpy()
+    cells = where.loc[:, columns].to_numpy()
+    holds_nan = np.zeros_like(cells)
+    for j, col in enumerate(columns):
+        if method[col] == "":
+            holds_nan[:, j] = cells[:, j]
+    for _ in range(maxit):
+        for col in visit_sequence:
+            absent = missing & (~cells | holds_nan)
+            used = [columns.index(p) for p in predictors[col]]
+            cx = ~absent[:, used].any(axis=1)
+            j = columns.index(col)
+            holds_nan[:, j] = cells[:, j] & ~cx
+    return pd.DataFrame((missing & ~cells) | holds_nan, index=data.index, columns=data.columns)
+
+
+def assert_cells_outside_where_unchanged(original, where, completed):
+    """Every cell that is not a where-cell holds its value of `original` (missing stays missing)."""
+    for col in original.columns:
+        kept = ~where[col].to_numpy()
+        expected = [label_key(v) if not pd.isna(v) else "missing" for v in original[col][kept].tolist()]
+        got = [label_key(v) if not pd.isna(v) else "missing" for v in completed[col][kept].tolist()]
+        assert got == expected, f"cells outside where changed in column {col!r}"
+
+
 def constant_columns(df):
     """Incomplete columns whose observed values are all equal.
 

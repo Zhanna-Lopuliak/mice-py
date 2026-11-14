@@ -2,6 +2,8 @@
 Tests for diagnostic plotting functions.
 """
 
+import warnings
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -507,3 +509,100 @@ class TestPlotChainStats:
         fig = plot_chain_stats(chain_mean, chain_var)
         assert [len(ax.get_lines()) for ax in fig.axes] == [2, 2, 5, 5]
         plt.close("all")
+
+
+def _finite_points_in_colour(ax, colour):
+    """Number of points drawn on ``ax`` in ``colour`` at finite coordinates (a NaN point is not drawn)."""
+    rgb = np.array(to_rgb(colour))
+    n = 0
+    for c in ax.collections:
+        offsets = np.ma.filled(np.ma.asarray(c.get_offsets(), dtype=float), np.nan)
+        if not len(offsets):
+            continue
+        faces = np.broadcast_to(c.get_facecolors()[:, :3], (len(offsets), 3))
+        n += int((np.isclose(faces, rgb).all(axis=1) & np.isfinite(offsets).all(axis=1)).sum())
+    return n
+
+
+def _imputed_with_where(where):
+    """Three completed datasets of an nhanes-like frame under ``where``, and ``~mice.where``."""
+    from imputation import MICE
+
+    from ..test_properties.test_where import _nhanes_like
+
+    df = _nhanes_like()
+    mice = MICE(df)
+    datasets = mice.impute(n_imputations=N_IMPUTATIONS, maxit=1, seed=1, where=where(df) if callable(where) else where)
+    return df, mice, datasets
+
+
+def _left_out(df):
+    """The missing cells, except those of bmi in the rows where hyp or chl is missing too: the where-cells of
+    hyp and chl in these rows cannot be imputed and stay missing too."""
+    where = df.isna()
+    where.loc[where["bmi"] & (where["hyp"] | where["chl"]), "bmi"] = False
+    return where
+
+
+class TestWhere:
+    """The plots of an imputation with ``where``, given ``~mice.where`` as the frame of cells not imputed."""
+
+    @pytest.mark.parametrize("where", ["all", _left_out], ids=["all", "left-out"])
+    @pytest.mark.parametrize("merge", [False, True])
+    def test_stripplot_groups_cells_by_where(self, where, merge):
+        df, mice, datasets = _imputed_with_where(where)
+        pattern = ~mice.where
+        fig = stripplot(datasets, pattern, merge_imputations=merge)
+        titles = [ax.get_title() for ax in fig.axes]
+        assert titles == (["age", "bmi", "hyp", "chl"] if where == "all" else ["bmi", "hyp", "chl"])
+        for ax, col in zip(fig.axes, titles):
+            # every strip keeps its place, also the empty one of the observed values under where="all"
+            assert _tick_labels(ax) == (
+                ["Observed Only", "Observed + Imputed"] if merge else ["Observed", "Imp 1", "Imp 2", "Imp 3"]
+            )
+            not_imputed = int(datasets[0].loc[pattern[col], col].notna().sum())
+            imputed = sum(int(d.loc[~pattern[col], col].notna().sum()) for d in datasets)
+            assert _points_in_colour(ax, "blue") == (2 if merge else 1 + N_IMPUTATIONS) * not_imputed
+            assert _points_in_colour(ax, "red") == imputed
+        if where != "all":
+            # the where-cells of hyp and chl in the two rows are missing and not drawn
+            assert sum(int(d.loc[~pattern["hyp"], "hyp"].isna().sum()) for d in datasets) > 0
+
+    @pytest.mark.parametrize("where", ["all", _left_out], ids=["all", "left-out"])
+    def test_bwplot_keeps_the_boxes_in_place(self, where):
+        df, mice, datasets = _imputed_with_where(where)
+        fig = bwplot(datasets, ~mice.where)
+        for ax in fig.axes:
+            assert _tick_labels(ax) == ["Observed", "Imp 1", "Imp 2", "Imp 3"]
+            # the medians, drawn by bwplot itself above the boxes (seaborn's outliers are lines with marker o too)
+            medians = sorted(line.get_xdata()[0] for line in ax.get_lines() if line.get_zorder() == 3)
+            assert medians == ([1, 2, 3] if where == "all" else [0, 1, 2, 3])
+
+    @pytest.mark.parametrize("where", ["all", _left_out], ids=["all", "left-out"])
+    def test_densityplot_and_split(self, where):
+        df, mice, datasets = _imputed_with_where(where)
+        pattern = ~mice.where
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            fig = densityplot(datasets, pattern)
+            split = densityplot_split(datasets, pattern, "chl")
+        assert len(fig.axes) == (4 if where == "all" else 3)
+        # one density per imputation, and one of the observed values where there are any
+        assert len(fig.axes[-1].get_lines()) == N_IMPUTATIONS + (0 if where == "all" else 1)
+        assert len(split.axes) == N_IMPUTATIONS + 1
+
+    def test_xyplot_colours_rows_by_whether_y_was_imputed(self):
+        df, mice, datasets = _imputed_with_where(_left_out)
+        pattern = ~mice.where
+        fig = xyplot(datasets, pattern, "bmi", "chl")
+        for i, (ax, completed) in enumerate(zip(fig.axes[1:], datasets), start=1):
+            drawn = completed[["bmi", "chl"]].notna().all(axis=1)
+            assert _finite_points_in_colour(ax, "red") == int((~pattern["chl"] & drawn).sum()), i
+            assert _finite_points_in_colour(ax, "blue") == int((pattern["chl"] & drawn).sum()), i
+        # the two rows with bmi left out: chl is missing there, drawn nowhere
+        assert int((~pattern["chl"] & datasets[0]["chl"].isna()).sum()) > 0
+
+    def test_plot_chain_stats_with_where(self):
+        df, mice, datasets = _imputed_with_where("all")
+        fig = plot_chain_stats(mice.chain_mean, mice.chain_var)
+        assert [ax.get_title() for ax in fig.axes][::2] == [f"{col} – Mean" for col in ["age", "bmi", "hyp", "chl"]]

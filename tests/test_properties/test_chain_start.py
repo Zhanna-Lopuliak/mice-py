@@ -77,7 +77,7 @@ def test_maxit_zero_returns_the_start_and_keeps_the_chains():
         assert statistics.shape == (0, N_CHAINS)
     assert len(mice._chain_states) == N_CHAINS
     for state, completed in zip(mice._chain_states, out):
-        pd.testing.assert_frame_equal(_complete(mice._chain_data, state.imp, mice._where), completed)
+        pd.testing.assert_frame_equal(_complete(mice._chain_data, state.imp, mice.where), completed)
     pd.testing.assert_frame_equal(df, before)
 
 

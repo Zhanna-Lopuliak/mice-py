@@ -194,9 +194,10 @@ def stripplot(
 
     # Plot each column
     for ax, col in zip(axes, columns):
-        # Get observed values (where missing_pattern is 1)
+        # Get observed values (where missing_pattern is 1); a cell that is
+        # missing in a dataset (not imputed, or not imputable) is not drawn
         observed_mask = missing_pattern[col] == 1
-        observed = imputed_datasets[0].loc[observed_mask, col]
+        observed = imputed_datasets[0].loc[observed_mask, col].dropna()
 
         # Create data for stripplot
         plot_data = []
@@ -227,7 +228,7 @@ def stripplot(
             # Combine all imputed values
             all_imp_values = []
             for df in imputed_datasets:
-                imp_values = df.loc[~observed_mask, col]
+                imp_values = df.loc[~observed_mask, col].dropna()
                 all_imp_values.extend(imp_values.values)
 
             # Add all imputed values to the second column
@@ -255,7 +256,7 @@ def stripplot(
             # Add each imputation
             for i, df in enumerate(imputed_datasets, 1):
                 # Get imputed values for this imputation
-                imp_values = df.loc[~observed_mask, col]
+                imp_values = df.loc[~observed_mask, col].dropna()
 
                 # Add observed and imputed values
                 imp_data = pd.DataFrame(
@@ -269,6 +270,11 @@ def stripplot(
 
         # Combine all data
         plot_data = pd.concat(plot_data, ignore_index=True)
+        # Every strip keeps its place, also one without values to draw
+        if merge_imputations:
+            order = ["Observed Only", "Observed + Imputed"]
+        else:
+            order = ["Observed"] + [f"Imp {i}" for i in range(1, len(imputed_datasets) + 1)]
 
         # Create stripplot
         sns.stripplot(
@@ -276,6 +282,7 @@ def stripplot(
             x="imputation",
             y="value",
             hue="type",
+            order=order,
             ax=ax,
             jitter=True,
             palette={"Observed": observed_color, "Imputed": imputed_color},
@@ -356,9 +363,10 @@ def bwplot(
 
     # Plot each column
     for ax, col in zip(axes, columns):
-        # Get observed values (where missing_pattern is 1)
+        # Get observed values (where missing_pattern is 1); a cell that is
+        # missing in a dataset (not imputed, or not imputable) is not drawn
         observed_mask = missing_pattern[col] == 1
-        observed = imputed_datasets[0].loc[observed_mask, col]
+        observed = imputed_datasets[0].loc[observed_mask, col].dropna()
 
         # Create data for boxplot
         plot_data = []
@@ -378,7 +386,7 @@ def bwplot(
             # Combine all imputed values
             all_imp_values = []
             for df in imputed_datasets:
-                imp_values = df.loc[~observed_mask, col]
+                imp_values = df.loc[~observed_mask, col].dropna()
                 all_imp_values.extend(imp_values.values)
 
             # Add all imputed values together
@@ -406,7 +414,7 @@ def bwplot(
             # Add each imputation
             for i, df in enumerate(imputed_datasets, 1):
                 # Get only imputed values for this imputation
-                imp_values = df.loc[~observed_mask, col]
+                imp_values = df.loc[~observed_mask, col].dropna()
 
                 # Add only imputed values
                 imp_data = pd.DataFrame(
@@ -420,6 +428,12 @@ def bwplot(
 
         # Combine all data
         plot_data = pd.concat(plot_data, ignore_index=True)
+        # Every box keeps its place, also one without values (the medians
+        # below are drawn at these positions)
+        if merge_imputations:
+            order = ["Observed", "Imputed"]
+        else:
+            order = ["Observed"] + [f"Imp {i}" for i in range(1, len(imputed_datasets) + 1)]
 
         # Create boxplot: dashed whiskers, outliers shown, no legend (the
         # x-axis labels already say which box is observed and which imputed)
@@ -428,6 +442,7 @@ def bwplot(
             x="imputation",
             y="value",
             hue="type",
+            order=order,
             ax=ax,
             palette={"Observed": observed_color, "Imputed": imputed_color},
             width=0.8,

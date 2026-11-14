@@ -45,6 +45,12 @@ _TWO_CATEGORY_METHODS = frozenset((ImputationMethod.LOGREG.value, ImputationMeth
 _CATEGORICAL_METHODS = _TWO_CATEGORY_METHODS | {ImputationMethod.POLYREG.value, ImputationMethod.POLR.value}
 # Donor methods that impute a column of any type
 _DONORS = "a donor method (pmm, cart, rf, sample)"
+# R's keywords for `where` (make.where): the cells they mark
+_WHERE_KEYWORDS = ("missing", "all", "observed", "none")
+_WHERE_FORMS = (
+    f"None, one of {', '.join(repr(keyword) for keyword in _WHERE_KEYWORDS)}, a boolean DataFrame with the index "
+    "and the columns of the data, or a boolean NumPy array of the shape of the data"
+)
 
 
 def _is_integer(value: Any) -> bool:
@@ -108,6 +114,128 @@ def check_maxit(maxit: int) -> None:
 
     if maxit > 50:
         warnings.warn("maxit is greater than 50, imputations will take a lot of time", UserWarning, stacklevel=3)
+
+
+def _boolean_values(values: Any, dtype: Any, place: str) -> np.ndarray:
+    """The values of one column of `where` (or of the whole array) as a bool array.
+
+    `place` names them in a message ("column 'x'", "the array"). Returns a
+    new array. Raises ValueError for a missing value, and for a value that
+    is not a boolean.
+    """
+    if isinstance(dtype, np.dtype) and dtype == np.bool_:
+        return np.array(values, dtype=bool)
+    if pd.isna(values).any():
+        raise ValueError(f"where contains missing values ({place}): every cell must be True or False.")
+    if pd.api.types.is_bool_dtype(dtype) or (
+        pd.api.types.is_object_dtype(dtype)
+        and all(isinstance(value, (bool, np.bool_)) for value in np.asarray(values, dtype=object).ravel())
+    ):
+        return np.array(values, dtype=bool)
+    raise ValueError(
+        f"where must hold booleans, True or False; {place} has dtype {dtype}. Numbers, also 0 and 1, are not "
+        "accepted: convert them with .astype(bool)."
+    )
+
+
+def check_where(where: Any, data: pd.DataFrame) -> pd.DataFrame:
+    """
+    Check the cells that get an imputation, as R's ``check.where``, and return them as a boolean DataFrame.
+
+    A cell that `where` marks (a where-cell) gets an imputation, also where
+    it is observed; a missing cell that it leaves out stays missing.
+
+    Parameters
+    ----------
+    where : None, str, pd.DataFrame or np.ndarray
+        The where-cells:
+
+        - None or ``"missing"``: the missing cells (R's default);
+        - ``"all"``: every cell; ``"observed"``: the observed cells;
+          ``"none"``: no cell (R's keywords of ``make.where``);
+        - a DataFrame of booleans with the index of `data` (the same
+          labels in the same order) and the column labels of `data` in any
+          order. Its columns are aligned with those of `data` by label (R
+          takes a data frame by position);
+        - a NumPy array of booleans of the shape of `data`, its columns in
+          the order of the columns of `data`.
+    data : pd.DataFrame
+        The data.
+
+    Returns
+    -------
+    pd.DataFrame
+        A new frame of dtype bool with the index and the columns of `data`,
+        in data order.
+
+    Raises
+    ------
+    ValueError
+        For another keyword or another type; for a DataFrame or an array of
+        another shape than `data`; for a DataFrame with other column labels
+        or another index; for values that are not booleans (also the
+        numbers 0 and 1, which R accepts) or missing values. The message
+        says what is expected.
+
+    Examples
+    --------
+    >>> import numpy as np, pandas as pd
+    >>> df = pd.DataFrame({"x": [1.0, np.nan, 3.0], "y": [np.nan, 2.0, 5.0]})
+    >>> check_where(None, df)
+           x      y
+    0  False   True
+    1   True  False
+    2  False  False
+    >>> check_where("all", df).sum().tolist()
+    [3, 3]
+    >>> where = pd.DataFrame({"y": [True, False, False], "x": [False, True, True]})
+    >>> check_where(where, df)["x"].tolist()
+    [False, True, True]
+    """
+    if where is None:
+        where = "missing"
+    if isinstance(where, str):
+        if where == "missing":
+            return data.isna()
+        if where == "observed":
+            return data.notna()
+        if where in ("all", "none"):
+            return pd.DataFrame(where == "all", index=data.index, columns=data.columns)
+        raise ValueError(f"where must be {_WHERE_FORMS}; got the string {where!r}.")
+
+    if isinstance(where, pd.DataFrame):
+        if where.shape != data.shape:
+            raise ValueError(
+                f"where has the shape {where.shape}, the data {data.shape}: where must have one entry per cell "
+                "of the data."
+            )
+        if set(where.columns) != set(data.columns):
+            unknown = [col for col in where.columns if col not in data.columns]
+            absent = [col for col in data.columns if col not in where.columns]
+            raise ValueError(
+                f"where must have the column labels of the data, in any order; it has the columns {unknown}, "
+                f"which are not in the data, and not the columns {absent}."
+            )
+        if not where.index.equals(data.index):
+            raise ValueError(
+                "where has another index than the data: it must have the index of the data, the same labels "
+                "in the same order."
+            )
+        values = np.zeros(data.shape, dtype=bool)
+        for j, col in enumerate(data.columns):
+            column = where[col]
+            values[:, j] = _boolean_values(column.to_numpy(), column.dtype, f"column {col!r}")
+        return pd.DataFrame(values, index=data.index, columns=data.columns)
+
+    if isinstance(where, np.ndarray):
+        if where.shape != data.shape:
+            raise ValueError(
+                f"where has the shape {where.shape}, the data {data.shape}: the array must have one entry per "
+                "cell of the data."
+            )
+        return pd.DataFrame(_boolean_values(where, where.dtype, "the array"), index=data.index, columns=data.columns)
+
+    raise ValueError(f"where must be {_WHERE_FORMS}; got {type(where).__name__}.")
 
 
 def check_method(
@@ -353,7 +481,7 @@ def check_initial_method(initial_method: str) -> None:
 
 
 def check_visit_sequence(
-    visit_sequence: str | list[str], columns: list[str], columns_with_missing: list[str] | None = None
+    visit_sequence: str | list[str], columns: list[str], imputed_columns: list[str] | None = None
 ) -> tuple[list[str] | None, list[str]]:
     """
     Check and process the visit sequence parameter for MICE imputation.
@@ -368,22 +496,25 @@ def check_visit_sequence(
         - list of str: column names specifying the order to visit variables.
     columns : list of str
         List of all column names in the data
-    columns_with_missing : list of str, optional
-        List of columns that have missing values. If provided, will validate
-        that all these columns are included in a custom visit sequence.
+    imputed_columns : list of str, optional
+        The columns that are imputed: those with where-cells (see
+        `check_where`; by default the incomplete columns) and a method
+        other than ``""``. If provided, a list `visit_sequence` must
+        contain each of them, and the other columns are dropped from it.
 
     Returns
     -------
     tuple
-        (validated_sequence, columns_without_missing) where:
+        (validated_sequence, columns_not_imputed) where:
 
         - validated_sequence: the processed visit sequence (only for list input, None for string)
-        - columns_without_missing: list of columns in sequence that don't have missing values
+        - columns_not_imputed: the columns of a list `visit_sequence` that are not in `imputed_columns`
 
     Raises
     ------
     ValueError
-        If visit_sequence is invalid or references non-existent columns
+        If visit_sequence is invalid, references non-existent columns, or
+        leaves out a column that is imputed
 
     Notes
     -----
@@ -394,7 +525,7 @@ def check_visit_sequence(
 
     1. All columns exist in the data
     2. No duplicate columns
-    3. All columns with missing values are included (if columns_with_missing provided)
+    3. All columns that are imputed are included (if imputed_columns provided)
     """
 
     if isinstance(visit_sequence, str):
@@ -414,20 +545,21 @@ def check_visit_sequence(
             duplicates = [col for col in visit_sequence if visit_sequence.count(col) > 1]
             raise ValueError(f"Visit sequence contains duplicate columns: {set(duplicates)}")
 
-        if columns_with_missing is not None:
-            missing_from_sequence = [col for col in columns_with_missing if col not in visit_sequence]
+        if imputed_columns is not None:
+            missing_from_sequence = [col for col in imputed_columns if col not in visit_sequence]
             if missing_from_sequence:
                 raise ValueError(
-                    f"Visit sequence is missing columns with missing values: {missing_from_sequence}. "
-                    f"All columns with missing values must be included in the visit sequence. "
-                    f"Columns with missing values: {columns_with_missing}"
+                    f"Visit sequence is missing columns that are imputed: {missing_from_sequence}. "
+                    "Every column that is imputed (a column with where-cells, by default an incomplete column, "
+                    f"and a method other than '') must be in the visit sequence. Columns that are imputed: "
+                    f"{imputed_columns}"
                 )
 
-            cols_without_missing = [col for col in visit_sequence if col not in columns_with_missing]
+            cols_not_imputed = [col for col in visit_sequence if col not in imputed_columns]
 
-            validated_sequence = [col for col in visit_sequence if col in columns_with_missing]
+            validated_sequence = [col for col in visit_sequence if col in imputed_columns]
 
-            return validated_sequence, cols_without_missing
+            return validated_sequence, cols_not_imputed
 
         return visit_sequence, []
 
@@ -435,7 +567,10 @@ def check_visit_sequence(
 
 
 def validate_predictor_matrix(
-    predictor_matrix: pd.DataFrame, data_columns: list[str], data: pd.DataFrame
+    predictor_matrix: pd.DataFrame,
+    data_columns: list[str],
+    data: pd.DataFrame,
+    imputed_columns: list[Hashable] | None = None,
 ) -> pd.DataFrame:
     """
     Validate predictor matrix for MICE imputation.
@@ -447,11 +582,20 @@ def validate_predictor_matrix(
         for each target variable. Rows represent target variables, columns represent predictors.
         A 1 indicates that the column variable is used as predictor for the index variable.
         It may cover a subset of the columns; absent entries count as 0. Every
-        incomplete column needs a row; rows of complete columns are unused.
+        column that is imputed needs a row; the rows of other columns are
+        unused. A column that is not imputed may be a predictor without a
+        row, also if it is incomplete: its missing cells stay missing, and
+        the rows in which it is missing are not used to fit or impute the
+        columns it predicts.
     data_columns : list of str
         List of column names in the data to validate against
     data : pd.DataFrame
         The data to check for missing values
+    imputed_columns : list of column labels, optional
+        The columns that are imputed: those with where-cells (see
+        `check_where`) and a method other than ``""``, as
+        :meth:`imputation.MICE.impute` passes them. If None, the incomplete
+        columns of `data`.
 
     Returns
     -------
@@ -462,8 +606,7 @@ def validate_predictor_matrix(
     ------
     ValueError
         If predictor_matrix has invalid structure, column names don't match
-        data, an incomplete column is a predictor without being a target, or
-        an incomplete column has no row
+        data, or a column that is imputed has no row
     """
     if not isinstance(predictor_matrix, pd.DataFrame):
         raise ValueError("predictor_matrix must be a pandas DataFrame")
@@ -484,23 +627,15 @@ def validate_predictor_matrix(
     if not predictor_matrix.isin([0, 1]).all().all():
         raise ValueError("predictor_matrix must contain only 0s and 1s")
 
-    # Rows of complete variables are allowed and unused, as in R: a complete
-    # variable is never imputed.
+    # Rows of columns that are not imputed are allowed and unused, as in R
 
-    # Check for columns with missing data that are used as predictors but not imputed (error)
-    predictor_only_vars = [col for col in predictor_cols if col not in target_vars]
-    incomplete_predictors = [var for var in predictor_only_vars if data[var].isna().any()]
-    if incomplete_predictors:
-        raise ValueError(
-            f"Predictor variables with missing data are not being imputed: {incomplete_predictors}. "
-            "All predictors must be complete or included as targets."
-        )
-
-    # Every incomplete column needs a row: it says which predictors impute it
-    without_row = [col for col in data_columns if col not in target_vars and data[col].isna().any()]
+    # Every column that is imputed needs a row: it says which predictors impute it
+    if imputed_columns is None:
+        imputed_columns = [col for col in data_columns if data[col].isna().any()]
+    without_row = [col for col in imputed_columns if col not in target_vars]
     if without_row:
         raise ValueError(
-            f"predictor_matrix has no row for the incomplete columns {without_row}. "
+            f"predictor_matrix has no row for the columns that are imputed {without_row}. "
             "Add a row for each (all zeros to impute it without predictors)."
         )
 

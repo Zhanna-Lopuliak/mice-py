@@ -32,7 +32,7 @@ from .polr import polr
 from .polyreg import polyreg
 from .rf import rf
 from .sample import sample
-from .validators import check_default_method
+from .validators import check_default_method, check_where
 
 # ---------------------------------------------------------------------------
 # Public helpers
@@ -191,11 +191,15 @@ def split_method_param(key: str, method_params: Mapping[str, Collection[str]]) -
     return matches[0], key[len(method_prefix(matches[0])) + 1 :]
 
 
-def make_method(data: pd.DataFrame, default_method: Sequence[str] = DEFAULT_METHODS) -> dict[Any, str]:
+def make_method(
+    data: pd.DataFrame, default_method: Sequence[str] = DEFAULT_METHODS, where: Any = None
+) -> dict[Any, str]:
     """The default imputation method of each column, as R's ``make.method``.
 
-    Each incomplete column gets one of the four entries of `default_method`
-    by its type, with the rule of R's ``assign.method``:
+    Each column with where-cells (cells that get an imputation; by default
+    the missing cells, so the incomplete columns) gets one of the four
+    entries of `default_method` by its type, with the rule of R's
+    ``assign.method``:
 
     1. a numeric column: the first (``"pmm"``);
     2. a boolean column, or a column with exactly two categories: the second
@@ -207,10 +211,13 @@ def make_method(data: pd.DataFrame, default_method: Sequence[str] = DEFAULT_METH
     5. anything else (a categorical column with a single category, a text
        column without any observed value): the first.
 
-    A complete column gets ``""``: it is not imputed. The categories of a
-    ``category`` column are its declared categories, unused ones included,
-    as R's ``nlevels`` counts the levels of a factor; those of an object or
-    string column are its distinct observed values.
+    A column without where-cells gets ``""``: it is not imputed. Under the
+    default `where` that is a complete column; with ``where="all"`` a
+    complete column gets the method of its type, and an incomplete column
+    that `where` leaves out gets ``""``. The categories of a ``category``
+    column are its declared categories, unused ones included, as R's
+    ``nlevels`` counts the levels of a factor; those of an object or string
+    column are its distinct observed values.
 
     Parameters
     ----------
@@ -219,6 +226,12 @@ def make_method(data: pd.DataFrame, default_method: Sequence[str] = DEFAULT_METH
     default_method : list or tuple of str, default ("pmm", "logreg", "polyreg", "polr")
         The methods of the four column types above, in that order (R's
         ``defaultMethod``); four supported method names.
+    where : None, str, pd.DataFrame or np.ndarray, default None
+        The cells that get an imputation, in any form that
+        :meth:`imputation.MICE.impute` takes (see
+        `imputation.validators.check_where`): None or ``"missing"`` for the
+        missing cells, ``"all"``, ``"observed"``, ``"none"``, a boolean
+        DataFrame or a boolean array.
 
     Returns
     -------
@@ -231,7 +244,8 @@ def make_method(data: pd.DataFrame, default_method: Sequence[str] = DEFAULT_METH
     Raises
     ------
     ValueError
-        If `default_method` is not four supported method names.
+        If `default_method` is not four supported method names, or `where`
+        is not valid (see `imputation.validators.check_where`).
     TypeError
         If a column has a dtype that cannot be imputed (datetime, complex,
         ...).
@@ -263,14 +277,17 @@ def make_method(data: pd.DataFrame, default_method: Sequence[str] = DEFAULT_METH
     {'age': 'pmm', 'smoker': 'logreg', 'region': 'polyreg', 'grade': 'polr', 'id': ''}
     >>> make_method(df, default_method=("norm", "logreg.boot", "polyreg", "polyreg"))["grade"]
     'polyreg'
+    >>> make_method(df, where="all")["id"]
+    'pmm'
     """
     defaults = check_default_method(default_method)
     if not isinstance(data, pd.DataFrame):
         data = pd.DataFrame(data)
+    has_where_cells = check_where(where, data).any().to_numpy()
     methods: dict[Any, str] = {}
     for j, col in enumerate(data.columns):
         series = data.iloc[:, j]
-        methods[col] = defaults[_default_position(series)] if series.isna().any() else ""
+        methods[col] = defaults[_default_position(series)] if has_where_cells[j] else ""
     return methods
 
 

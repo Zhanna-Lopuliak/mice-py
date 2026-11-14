@@ -11,10 +11,11 @@ chain carries from one iteration to the next. The mutants at the end
 introduce the defects a continuation can have and check which comparisons
 see each of them.
 
-``impute`` has no ``where`` or ``ignore`` argument yet (version 0.4 adds
-them). The case with observed where-cells sets the private masks
-``MICE._where`` and ``MICE._ignore`` after ``impute(maxit=0)`` and starts the
-chains again by hand.
+The grid has two cases with ``where``: every cell, and the missing cells
+with some left out and some observed cells added. ``impute`` has no
+``ignore`` argument yet (version 0.4 adds it). The case with observed
+where-cells and ignored rows passes ``where`` to ``impute(maxit=0)``, sets
+the private mask ``MICE._ignore`` and starts the chains again by hand.
 """
 
 import functools
@@ -130,6 +131,19 @@ def _int64_frame():
     return df
 
 
+def _partial_where():
+    """``numeric_frame`` with the first three missing cells of ``a`` left out of ``where`` (they stay missing,
+    and so do the where-cells of the other columns in their rows) and four observed cells of ``b`` added, in
+    rows where ``a`` is observed. Returns (data, where, the rows left out, the rows added)."""
+    df = numeric_frame(n=40, seed=11)
+    where = df.isna()
+    left_out = list(df.index[where["a"]][:3])
+    where.loc[left_out, "a"] = False
+    added = list(df.index[df["a"].notna() & df["b"].notna()][:4])
+    where.loc[added, "b"] = True
+    return df, where, left_out, added
+
+
 CASES = {
     **{method: functools.partial(_numeric, method) for method in ("pmm", "midas", "cart", "rf", "sample")},
     "norm": functools.partial(_numeric, "norm"),
@@ -146,6 +160,10 @@ CASES = {
         {"method": {"y": "norm", "z": "", "w": "norm", "v": "pmm"}},
     ),
     "int64_norm": lambda: (_int64_frame(), {"method": method_spec("norm", _int64_frame())}),
+    # every cell imputed: the complete d and k too, k (int64) as Float64
+    "where_all": functools.partial(_numeric, "norm", where="all"),
+    # missing cells left out of where, observed cells added
+    "where_partial": lambda: (_partial_where()[0], {"method": "pmm", "where": _partial_where()[1]}),
 }
 N_ITER = 5
 SPLITS = [(0, 5), (1, 4), (2, 3), (2, 1, 2)]
@@ -199,6 +217,16 @@ def test_the_cases_have_what_they_are_named_after():
     assert all(
         completed["count"].dtype == pd.Float64Dtype() for completed in _reference("int64_norm", SEED)["datasets"]
     )
+    data = numeric_frame(n=40, seed=11)
+    assert _reference("where_all", SEED)["method"] == dict.fromkeys(data.columns, "norm")
+    for completed in _reference("where_all", SEED)["datasets"]:
+        assert completed.notna().all().all() and completed["k"].dtype == pd.Float64Dtype()
+        assert (completed["d"] != data["d"]).all()
+    data, where, left_out, added = _partial_where()
+    for completed in _reference("where_partial", SEED)["datasets"]:
+        missing = completed.isna()
+        assert missing.loc[left_out].any(axis=1).all() and not missing.drop(index=left_out).any().any()
+        assert (completed.loc[added, "b"] != data.loc[added, "b"]).any()
     for case in CASES:
         assert all(statistics.shape == (N_ITER, N_IMP) for statistics in _reference(case, SEED)["chain_mean"].values())
 
@@ -225,19 +253,20 @@ def _masked_frame():
 
 
 def _masked_run(splits, seed=SEED):
-    """``impute(maxit=0)`` for the setup; then the masks, a new start of each chain, and ``continue_chains``
-    with each entry of `splits`; the record of the run."""
+    """``impute(maxit=0)`` with ``where`` for the setup; then the ignored rows, a new start of each chain, and
+    ``continue_chains`` with each entry of `splits`; the record of the run."""
     df = _masked_frame()
     mice = MICE(df)
-    mice.impute(n_imputations=N_IMP, maxit=0, method={"y": "norm", "z": "", "w": "norm"}, seed=seed)
     where = df.isna()
     where.loc[OBSERVED_WHERE_ROWS, "y"] = True
-    mice._where = where
+    mice.impute(n_imputations=N_IMP, maxit=0, method={"y": "norm", "z": "", "w": "norm"}, seed=seed, where=where)
     mice._ignore = np.isin(np.arange(len(df)), IGNORED_ROWS)
     rngs = [np.random.default_rng([seed, chain]) for chain in range(N_IMP)]
     mice._chain_states = [_ChainState(imp=mice._initial_imputation(rng), rng=rng) for rng in rngs]
     for maxit in splits:
-        out = continue_checking_log_warning(mice, maxit=maxit)
+        # the observed where-cells of y in rows 1 and 2 cannot be imputed
+        with pytest.warns(UserWarning, match=r"per column: 'y': 2 \(predictors incomplete in these rows\)"):
+            out = continue_checking_log_warning(mice, maxit=maxit)
     return _record(mice, out)
 
 
@@ -392,10 +421,9 @@ def test_a_run_that_stops_with_an_error_cannot_be_continued(monkeypatch):
 #   "df set to 1" logged again; the datasets do not change;
 # * the working data rebuilt from the completed datasets instead of the
 #   state. It shows only with observed where-cells, which the completed data
-#   replace and the working data keep, here through the private masks. Under
-#   the masks of impute (the missing cells) the two frames are equal, also
-#   where a where-cell is NaN in the state (a predictor with method ""): the
-#   defect cannot be seen before impute has a where argument;
+#   replace and the working data keep. Under the default where (the missing
+#   cells) the two frames are equal, also where a where-cell is NaN in the
+#   state (a predictor with method "");
 # * the chain statistics of the earlier iterations overwritten instead of
 #   kept.
 
@@ -483,7 +511,7 @@ def _working_frame_from_completed_data(monkeypatch):
     def from_completed_data(self, imp):
         if self.iteration == 0:
             return original(self, imp)
-        completed = _complete(self._chain_data, imp, self._where)
+        completed = _complete(self._chain_data, imp, self.where)
         calls.append(not completed.equals(original(self, imp)))
         return completed
 
@@ -499,9 +527,9 @@ def test_continuing_from_the_completed_data_is_caught(monkeypatch):
     assert _differences(reference, mutant) == ["datasets", "chain_mean", "chain_var"]
 
 
-def test_continuing_from_the_completed_data_is_invisible_under_the_masks_of_impute(monkeypatch):
+def test_continuing_from_the_completed_data_is_invisible_under_the_default_where(monkeypatch):
     """The completed data equal the working data while impute imputes the missing cells only, also where a
-    where-cell is NaN in the state: the case above needs the private masks."""
+    where-cell is NaN in the state: the case above needs observed where-cells."""
     reference = _reference("empty_method_predictor", SEED)
     calls = _working_frame_from_completed_data(monkeypatch)
     mutant = _run("empty_method_predictor", (2, 3), SEED)

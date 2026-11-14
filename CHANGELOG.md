@@ -46,8 +46,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `impute()` empties `model_results` and removes `pooled_result`, so that
   `pool()` cannot combine the fits of earlier datasets: call `fit()` again
   after `impute()`. Before, `pool()` combined the fits of the last `fit()`.
+- `impute(visit_sequence="monotone", maxit=1)` edits the predictor matrix
+  as R's `mice.edit.predictorMatrix` does: in the order of all columns by
+  their number of where-cells (the missing cells by default; columns without
+  any first), each column keeps as predictors only the columns before it,
+  so that one iteration imputes a monotone pattern without using start
+  values. `MICE.predictor_matrix` shows the edited matrix. This call gives
+  other results than in 0.3; every other `maxit` and visit sequence gives
+  the same.
+- A `predictor_matrix` given to `impute()` needs a row for every column
+  that is imputed (with where-cells and a method other than `""`), not for
+  every incomplete column: an incomplete column with method `""` may be a
+  predictor without a row, its missing cells stay missing as before. The
+  errors say "the columns that are imputed": "predictor_matrix has no row
+  for the columns that are imputed [...]" and, for a list `visit_sequence`
+  that leaves one out, "Visit sequence is missing columns that are imputed:
+  [...]". `imputation.validators.validate_predictor_matrix` takes
+  `imputed_columns=`, and the third parameter of
+  `imputation.validators.check_visit_sequence` is now `imputed_columns`
+  (was `columns_with_missing`).
+- `plotting.stripplot` and `plotting.bwplot` keep every strip and box in
+  its place, also one without values to draw, and leave out missing
+  values. Before, a column without any cell that was not imputed (every
+  cell imputed, as with `where="all"`) had no strip or box of observed
+  values, which moved the others to its place, and the median points of
+  `bwplot` were drawn beside the wrong boxes; a group of missing values
+  (cells that could not be imputed) made pandas and NumPy warn.
 
 ### Added
+
+- `impute(where=)`, R's `where`: the cells that get an imputation
+  (where-cells). `None` or `"missing"` (the missing cells, the default),
+  `"all"`, `"observed"`, `"none"`, a boolean DataFrame with the index and
+  the column labels of the data (columns aligned by label; R takes them by
+  position), or a boolean NumPy array of the shape of the data. As in R, an
+  observed where-cell gets an imputation in the completed data but keeps
+  its observed value in the data the chains work on, a missing cell left
+  out stays missing, a column without where-cells gets method `""` and a
+  complete column with where-cells the default method of its type, the
+  visit sequence lists the columns with where-cells and a method, and the
+  chain statistics are taken over all where-cells. A where-cell that cannot
+  be imputed (its column has no method, or its predictors are incomplete in
+  its row) is missing in the completed data, also where it was observed, as
+  in R; `impute()` and `continue_chains()` then warn with the number of
+  observed values lost per column and the reason (R is silent). A NumPy
+  integer or boolean column with where-cells becomes `Int64` (the nullable
+  integer dtype of its width) or `boolean` in the completed datasets, since
+  a where-cell can end up missing; under a norm method or `mean` the
+  integer column becomes `Float64`, as an incomplete `Int64` column does.
+  `imputation.validators.check_where` checks the argument: another shape,
+  other column labels, another index, values that are not booleans (also
+  0 and 1, which R accepts) or missing values raise `ValueError`.
+- `MICE.where`: the boolean DataFrame of where-cells of the last
+  `impute()`, with the index and the columns of the data. `~mice.where` is
+  the frame of cells that were not imputed, to pass to the diagnostic plots
+  of `plotting`.
+- `imputation.make_method(data, default_method=..., where=None)`: with
+  `where`, as R's `make.method(where = )`, a column without where-cells
+  gets `""` and every other column the default method of its type.
 
 - `MICE.continue_chains(maxit=1)`, as R's `mice.mids`: runs `maxit` more
   iterations of the chains of the last `impute()`, each from its current

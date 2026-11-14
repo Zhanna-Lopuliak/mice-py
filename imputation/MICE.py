@@ -35,6 +35,7 @@ from .validators import (
     check_method_types,
     check_n_imputations,
     check_visit_sequence,
+    check_where,
     validate_columns,
     validate_dataframe,
     validate_formula,
@@ -135,6 +136,21 @@ def _target_values(series: pd.Series):
 def _is_nullable_integer(dtype) -> bool:
     """True for pandas' integer extension dtypes (``Int64``, ``UInt8``, ...), which hold missing values."""
     return isinstance(dtype, pd.api.extensions.ExtensionDtype) and pd.api.types.is_integer_dtype(dtype)
+
+
+def _nullable_dtype(dtype):
+    """The pandas dtype that holds missing values for a NumPy integer or boolean dtype, else None.
+
+    ``int64`` gives ``Int64`` (each integer dtype the nullable one of its
+    width and sign, ``uint8`` gives ``UInt8``), ``bool`` gives ``boolean``.
+    """
+    if not isinstance(dtype, np.dtype):
+        return None
+    if dtype.kind == "b":
+        return pd.BooleanDtype()
+    if dtype.kind in "iu":
+        return pd.api.types.pandas_dtype(f"{'UInt' if dtype.kind == 'u' else 'Int'}{8 * dtype.itemsize}")
+    return None
 
 
 def _in_float_dtype(values, dtype):
@@ -241,6 +257,35 @@ def _complete(data: pd.DataFrame, imp: dict[Hashable, pd.Series], where: pd.Data
     return completed
 
 
+def _monotone(where: pd.DataFrame, columns: list) -> list:
+    """`columns` by increasing number of where-cells, ties in the order given, as R's ``order(nimp)``."""
+    counts = where[columns].sum().to_numpy()
+    return [columns[i] for i in np.argsort(counts, kind="stable")]
+
+
+def _monotone_predictor_matrix(predictor_matrix: pd.DataFrame, where: pd.DataFrame) -> pd.DataFrame:
+    """The predictor matrix as R's ``mice.edit.predictorMatrix`` edits it for a monotone pattern.
+
+    R's ``"monotone"`` visit sequence holds every column, by increasing
+    number of where-cells (`_monotone`), also the columns without any. Each
+    column keeps as predictors only the columns before it in that order:
+    R sets ``predictorMatrix[vis[i], vis[i:length(vis)]]`` to 0 for each
+    position ``i``. Returns a new frame.
+
+    Parameters
+    ----------
+    predictor_matrix : pd.DataFrame
+        Square, rows and columns in data order.
+    where : pd.DataFrame
+        The where-cells (see `MICE.where`).
+    """
+    order = _monotone(where, list(where.columns))
+    edited = predictor_matrix.copy()
+    for i, col in enumerate(order):
+        edited.loc[col, order[i:]] = 0
+    return edited
+
+
 def _sample_start(observed_values: np.ndarray, size: int, rng: np.random.Generator) -> np.ndarray:
     """`size` start values drawn with replacement from `observed_values`.
 
@@ -337,25 +382,39 @@ class MICE:
         Per column, a boolean Series that is True where the value is missing.
     imputed_datasets : list of pd.DataFrame
         The completed datasets of the last call of `impute` or
-        `continue_chains`.
+        `continue_chains`: copies of the data with every where-cell (see
+        `where`) replaced by its imputation, as R's ``complete``. A
+        where-cell that could not be imputed is missing, also where it was
+        observed (see `impute`).
+    where : pd.DataFrame
+        The cells that the last `impute` imputed (where-cells), R's
+        ``where``: a boolean frame with the index and the columns of
+        `data`, True for a where-cell. The `where` argument of `impute` in
+        this form; by default ``data.isna()``. ``~mice.where`` marks the
+        cells that were not imputed, the frame of observed cells that the
+        diagnostic plots of `plotting` take.
     iteration : int
         The number of iterations each chain has run, R's ``imp$iteration``:
         the `maxit` of the last `impute` plus that of every `continue_chains`
         since.
     method : dict of str to str
         The imputation method of each column used by the last `impute`
-        (``""`` for a column that is not imputed), as R's ``imp$method``:
-        after the setup step, which removes the method of a constant or
-        collinear column.
+        (``""`` for a column that is not imputed, such as a column without
+        where-cells), as R's ``imp$method``: after the setup step, which
+        removes the method of a constant or collinear column.
     predictor_matrix : pd.DataFrame
         The predictor matrix used by the last `impute`, after the setup step
-        (square, in data order; rows are targets, columns predictors).
+        and, for ``visit_sequence="monotone"`` with ``maxit=1``, after R's
+        edit for a monotone pattern (see `impute`); square, in data order;
+        rows are targets, columns predictors.
     visit_sequence : list of str
         The order in which the last `impute` visited the columns.
     chain_mean, chain_var : dict of str to np.ndarray
-        For each imputed numeric column, the mean and variance of its imputed
-        values at the end of each iteration, shape ``(iteration,
-        n_imputations)``: one row per iteration, one column per chain.
+        For each imputed numeric column, the mean and variance of the
+        imputations of all its where-cells (observed ones included; missing
+        imputations skipped) at the end of each iteration, shape
+        ``(iteration, n_imputations)``: one row per iteration, one column
+        per chain.
         `continue_chains` appends rows; after ``impute(maxit=0)`` they have
         none.
     logged_events : pd.DataFrame
@@ -452,6 +511,7 @@ class MICE:
         visit_sequence: str | list[str] = DEFAULT_VISIT_SEQUENCE,
         seed: int | Sequence[int] | None = None,
         default_method: Sequence[str] = DEFAULT_METHODS,
+        where: str | pd.DataFrame | np.ndarray | None = None,
         **kwargs: Any,
     ) -> list[pd.DataFrame]:
         """
@@ -472,10 +532,17 @@ class MICE:
             0/1 matrix with column labels as index (targets) and columns
             (predictors); a 1 means that the column is used as a predictor of
             the row. It may cover only some columns (missing entries count as
-            0), but every incomplete column needs a row. If None, every other
-            column predicts every incomplete column (all ones with a zero
-            diagonal), as in R. The setup step described in the Notes then
-            removes constant and collinear predictors.
+            0), but every column that is imputed (with where-cells, see
+            `where`, and a method other than ``""``) needs a row; a column
+            that is not imputed may be a predictor without a row. If None,
+            every other column predicts every column (all ones with a zero
+            diagonal), as in R. With ``visit_sequence="monotone"`` and
+            ``maxit=1``, as in R, each column then keeps only the predictors
+            that come before it in the monotone order of all columns (by
+            number of where-cells, the columns without any first), so that
+            one iteration imputes a monotone pattern without using start
+            values. The setup step described in the Notes then removes
+            constant and collinear predictors.
         initial : {"sample", "meanobs"}, default="sample"
             Initial imputation: random draws from the observed values (as in
             R), or the observed value closest to the mean of a numeric column
@@ -523,22 +590,27 @@ class MICE:
               categories, ``"polr"`` for an ordered categorical column with
               more categories. `default_method` changes these four.
 
-            As in R, a complete column always gets ``""``. A column with
-            method ``""`` keeps its missing values; where it is used as a
-            predictor, the rows in which it is missing are not used to fit
-            the imputation model and are not imputed. As in R, the imputer
-            still receives these rows; only ``"logreg"``, ``"polyreg"`` and
-            ``"polr"`` use them, for the categories of the target and for
-            the rows they add to the data (R's ``augment``). Before the
-            chains start, each method is checked against the type of its
-            column (see Raises and Warns).
+            As in R, a column without where-cells (see `where`; by default a
+            complete column) always gets ``""``, whatever `method` says, and
+            a column with where-cells gets a method, also a complete one
+            under `where`. A column with method ``""`` keeps its missing
+            values; where it is used as a predictor, the rows in which it is
+            missing are not used to fit the imputation model and are not
+            imputed. As in R, the imputer still receives these rows; only
+            ``"logreg"``, ``"polyreg"`` and ``"polr"`` use them, for the
+            categories of the target and for the rows they add to the data
+            (R's ``augment``). Before the chains start, each method is
+            checked against the type of its column (see Raises and Warns).
         visit_sequence : str or list of str, default="roman"
             Order in which the columns are visited in each iteration. Only
-            incomplete columns that are imputed are visited.
+            the columns that are imputed are visited: with where-cells (by
+            default the incomplete columns) and a method other than ``""``.
 
             - "roman": data order (R's default);
             - "arabic": reverse data order;
-            - "monotone": increasing number of missing values, ties in data order;
+            - "monotone": increasing number of where-cells (by default of
+              missing values), ties in data order; with ``maxit=1`` it also
+              edits the predictor matrix, as in R (see `predictor_matrix`);
             - "revmonotone": the reverse of "monotone";
             - "random": a random order, drawn once per call from `seed`;
             - a list of column labels: that order. It must contain every
@@ -560,6 +632,25 @@ class MICE:
             used ``"pmm"`` for every column; ``method="pmm"`` restores that
             for a call without `method`, ``default_method=("pmm",) * 4`` for
             a call with a partial `method` dict.
+        where : str, pd.DataFrame or np.ndarray, optional
+            The cells that get an imputation (where-cells), R's ``where``:
+
+            - None or ``"missing"``: the missing cells (the default, as in R);
+            - ``"all"``: every cell; ``"observed"``: the observed cells;
+              ``"none"``: no cell, so nothing is imputed and the completed
+              datasets are copies of the data (R's keywords);
+            - a DataFrame of booleans with the index of the data (the same
+              labels in the same order) and its column labels in any order,
+              aligned by label (R takes a data frame by position);
+            - a NumPy array of booleans of the shape of the data, its columns
+              in data order.
+
+            An observed where-cell gets an imputation in the completed
+            datasets, but keeps its observed value in the data the chains
+            work on, so that the other columns are predicted from it, as in
+            R. A missing cell that `where` leaves out stays missing. See
+            `imputation.validators.check_where` and Notes; the boolean frame
+            used is the attribute ``MICE.where``.
 
         **kwargs
             Parameters of the imputation methods, as
@@ -578,20 +669,29 @@ class MICE:
         Returns
         -------
         list of pd.DataFrame
-            The `n_imputations` completed datasets. They are also stored in
-            `imputed_datasets`; `iteration` is set to `maxit`, `chain_mean`
-            and `chain_var` get one row per iteration, `logged_events` holds
-            the events of this call (see Notes), and the state of each chain
-            is kept for `continue_chains`.
+            The `n_imputations` completed datasets: copies of the data in
+            which every where-cell holds its imputation, also an observed
+            one, and a where-cell that could not be imputed is missing (see
+            Notes); every other cell is as in the data. All have the same
+            dtypes. They are also stored in `imputed_datasets`; `where` is
+            the frame of where-cells used, `iteration` is set to `maxit`,
+            `chain_mean` and `chain_var` get one row per iteration,
+            `logged_events` holds the events of this call (see Notes), and
+            the state of each chain is kept for `continue_chains`.
 
         Raises
         ------
         ValueError
             For an invalid argument (number of imputations or iterations,
             method, default method, initial method, visit sequence,
-            predictor matrix). Before the chains start, after the setup
-            step, for a method that cannot impute the type of its column,
-            with the column named (`imputation.validators.check_method_types`):
+            predictor matrix, `where`: another keyword or type, another
+            shape, other column labels or another index than the data,
+            values that are not booleans or missing values, see
+            `imputation.validators.check_where`). A predictor matrix without
+            a row for a column that is imputed. Before the chains start,
+            after the setup step, for a method that cannot impute the type
+            of its column, with the column named
+            (`imputation.validators.check_method_types`):
             ``"norm"``, ``"norm.nob"``, ``"norm.boot"``, ``"norm.predict"``
             or ``"mean"`` on a boolean, categorical or text column;
             ``"logreg"`` or ``"logreg.boot"`` on a column with more than two
@@ -627,9 +727,34 @@ class MICE:
             ``"logreg"``, ``"logreg.boot"``, ``"polyreg"`` or ``"polr"`` on a
             numeric column, with R's text "Type mismatch for variable(s):
             <column>\\nImputation method <method> is for categorical data."
+            When observed where-cells are missing in the completed datasets
+            (see Notes), once, with the number of observed values lost in
+            each column and the reason: no method, or predictors incomplete
+            in these rows. R loses them silently.
 
         Notes
         -----
+        What is imputed, as in R: each column with where-cells and a method
+        is visited in each iteration. Its model is fitted on the rows where
+        the column is observed and its predictors are complete in the data
+        the chains work on, and the imputer fills the where-cells whose
+        predictors are complete there. These data hold the imputations of
+        the missing where-cells only: an observed where-cell keeps its
+        observed value, and a missing cell that `where` leaves out stays
+        missing. So a where-cell becomes missing (in the completed data
+        too, also where it was observed) when its column has no method
+        (``""``, set by the user or by the setup step), or when one of its
+        predictors is missing in its row at the visit: a missing cell left
+        out of `where`, a where-cell that could not be imputed itself, or
+        the missing cell of a predictor without a method. Such missing
+        values spread to the columns that the column predicts. The chain
+        statistics are taken over all where-cells of a column. A NumPy
+        integer or boolean column with where-cells (possible only under
+        `where`, since it is complete) becomes ``Int64`` (the nullable
+        integer dtype of its width) or ``boolean`` in the completed
+        datasets, because a where-cell can end up missing; then the rule
+        for the norm methods and ``"mean"`` (see `method`) applies.
+
         As R's ``mice``, the imputation model is edited before the chains
         start and before every univariate imputation; each change is a row
         of `logged_events`:
@@ -637,8 +762,9 @@ class MICE:
         - Setup (``it`` 0): a variable that is constant (variance below
           ``1000 * eps``; also when fewer than two values are observed, so
           also an entirely missing variable) is no longer used as a
-          predictor (``meth`` "constant"); if it is incomplete, it is not
-          imputed and keeps its missing values. The same holds for a
+          predictor (``meth`` "constant"); if it has where-cells, it is not
+          imputed: its missing values are kept, and its observed
+          where-cells become missing too. The same holds for a
           variable that (nearly) duplicates another one
           (`imputation.design.find_collinear`, ``meth`` "collinear").
           Object and string columns count as categorical variables here.
@@ -677,33 +803,42 @@ class MICE:
         chain_streams = seed_sequence.spawn(n_imputations)
 
         _check_method_params(kwargs)
-
-        if predictor_matrix is None:
-            predictor_matrix = _full_predictor_matrix(list(self.data.columns))
-        else:
-            predictor_matrix = validate_predictor_matrix(predictor_matrix, list(self.data.columns), self.data)
-            logger.debug("Predictor matrix validated successfully")
-        # Square over all columns, in data order; absent entries are 0
+        # The cells that get an imputation, R's where
+        where_cells = check_where(where, self.data)
         columns = list(self.data.columns)
-        predictor_matrix = predictor_matrix.reindex(index=columns, columns=columns, fill_value=0).astype(int)
 
         # The settings of the last run change from here on: its chains cannot
         # be continued any more, also if this call stops with an error
         self._chain_states = []
+        self.where: pd.DataFrame = where_cells
 
         # The default method of each column's type (R's make.method), for
         # method=None and for the columns a method dict leaves out
         if method is None:
-            self.method = make_method(self.data, default_method)
+            self.method = make_method(self.data, default_method, where=where_cells)
         elif isinstance(method, dict):
-            self.method = check_method(method, columns, defaults=make_method(self.data, default_method))
+            defaults = make_method(self.data, default_method, where=where_cells)
+            self.method = check_method(method, columns, defaults=defaults)
         else:
             self.method = check_method(method, columns)
-        # As in R, a complete column has no imputation method
+        # As in R, a column without where-cells has no imputation method
         for col in columns:
-            if not self.id_mis[col].any():
+            if not where_cells[col].any():
                 self.method[col] = ""
         logger.debug(f"Using imputation methods: {self.method}")
+
+        if predictor_matrix is None:
+            predictor_matrix = _full_predictor_matrix(columns)
+        else:
+            imputed_columns = [col for col in columns if self.method[col] != ""]
+            predictor_matrix = validate_predictor_matrix(predictor_matrix, columns, self.data, imputed_columns)
+            logger.debug("Predictor matrix validated successfully")
+        # Square over all columns, in data order; absent entries are 0
+        predictor_matrix = predictor_matrix.reindex(index=columns, columns=columns, fill_value=0).astype(int)
+        # One iteration of a monotone sequence: each column is predicted only
+        # by the columns visited before it, as R's mice.edit.predictorMatrix
+        if maxit == 1 and isinstance(visit_sequence, str) and visit_sequence == VisitSequence.MONOTONE.value:
+            predictor_matrix = _monotone_predictor_matrix(predictor_matrix, where_cells)
 
         self.imputation_params = kwargs
         param_names = _method_param_names()
@@ -728,9 +863,7 @@ class MICE:
         self.maxit = maxit
         self.initial = initial
 
-        # The cells that get an imputation and the rows the models leave
-        # out, R's where and ignore: the missing cells, and no row
-        self._where = self.data.isna()
+        # The rows the models leave out, R's ignore: no row
         self._ignore = np.zeros(len(self.data), dtype=bool)
 
         # Edit the model before the chains start, as R's mice.edit.setup
@@ -763,10 +896,17 @@ class MICE:
             if match is not None and match[0] in self._method_params:
                 self._method_params[match[0]][match[1]] = value
 
-        # The data the chains start from. The norm methods and mean impute
+        # The data the chains start from, with the dtypes of every completed
+        # dataset. A NumPy integer or boolean column with where-cells (it is
+        # complete, so only under where) becomes nullable, because a
+        # where-cell can end up missing. The norm methods and mean impute
         # floats: a nullable integer column they impute becomes Float64, as R
         # turns an integer column into double
         self._chain_data = self.data.copy(deep=True)
+        for col in columns:
+            nullable = _nullable_dtype(self._chain_data[col].dtype)
+            if nullable is not None and where_cells[col].any():
+                self._chain_data[col] = self._chain_data[col].astype(nullable)
         for col in self.visit_sequence:
             if self.method[col] in _FLOAT_METHODS and _is_nullable_integer(self._chain_data[col].dtype):
                 self._chain_data[col] = self._chain_data[col].astype("Float64")
@@ -791,6 +931,7 @@ class MICE:
         logger.debug(f"  - Visit sequence: {self.visit_sequence}")
 
         self._report_logged_events(warn=True)
+        self._warn_lost_observed_values()
 
         return self.imputed_datasets
 
@@ -831,7 +972,8 @@ class MICE:
         UserWarning
             When the new iterations logged an event, with the number of all
             logged events, as `impute` warns (R's ``mice.mids`` prints
-            nothing); for more than 50 iterations.
+            nothing); for more than 50 iterations; when observed where-cells
+            are missing in the completed datasets, as `impute` warns.
 
         Notes
         -----
@@ -880,6 +1022,7 @@ class MICE:
         logger.info(f"continue_chains completed in {time.time() - start_time:.2f} seconds")
         # As impute, but only when the new iterations logged an event
         self._report_logged_events(warn=len(self._log) > n_logged)
+        self._warn_lost_observed_values()
         return self.imputed_datasets
 
     def _run_chains(self, iterations: range) -> None:
@@ -948,10 +1091,42 @@ class MICE:
             return
         message = f"Number of logged events: {len(events)}."
         if self._not_imputed:
-            message += (
-                f" Not imputed because constant or collinear, their missing values are kept: {self._not_imputed}."
-            )
+            # Under where, observed where-cells of such a column become missing too
+            if any((self.where[col] & self.id_obs[col]).any() for col in self._not_imputed):
+                kept = "their where-cells are missing in the completed data, the observed ones too"
+            else:
+                kept = "their missing values are kept"
+            message += f" Not imputed because constant or collinear, {kept}: {self._not_imputed}."
         message += " See MICE.logged_events."
+        logger.info(message)
+        warnings.warn(message, UserWarning, stacklevel=3)
+
+    def _warn_lost_observed_values(self) -> None:
+        """Warn once when observed where-cells are missing in the completed datasets.
+
+        R's ``complete`` writes every where-cell, also one without an
+        imputation, silently: a cell whose column has no method (set by the
+        user, or by the setup step), or whose predictors are incomplete in
+        its row when its column is visited. The warning gives, per column,
+        the number of observed values replaced by missing values and why.
+        Without where-cells on observed cells nothing is lost.
+        """
+        observed_where = self.where & self.data.notna()
+        lost = {}
+        for col in self.where.columns[observed_where.any().to_numpy()]:
+            cells = observed_where[col].to_numpy()
+            missing = np.zeros(int(cells.sum()), dtype=bool)
+            for dataset in self.imputed_datasets:
+                missing |= dataset[col].isna().to_numpy()[cells]
+            if missing.any():
+                reason = "no method" if self.method[col] == "" else "predictors incomplete in these rows"
+                lost[col] = f"{col!r}: {int(missing.sum())} ({reason})"
+        if not lost:
+            return
+        message = (
+            "Observed values replaced by missing values in the completed data, because where marks them and they "
+            f"could not be imputed (as in R); per column: {', '.join(lost.values())}. See MICE.where."
+        )
         logger.info(message)
         warnings.warn(message, UserWarning, stacklevel=3)
 
@@ -961,8 +1136,9 @@ class MICE:
         A variable that is constant, or (nearly) collinear with another
         variable that is used as a predictor, stops being a predictor. If it
         has a method, the method becomes ``""``: it is not imputed, keeps its
-        missing values and leaves the visit sequence. Each variable
-        affected is logged once (``meth`` "constant" or "collinear").
+        missing values (its observed where-cells, under `where`, become
+        missing in the completed data) and leaves the visit sequence. Each
+        variable affected is logged once (``meth`` "constant" or "collinear").
         Updates `self.method`; returns the edited predictor matrix.
 
         Notes
@@ -1362,7 +1538,7 @@ class MICE:
                 logger.debug(f"Completed iteration {iter_idx + 1}")
 
         logger.debug(f"Completed imputation cycle for chain {chain_idx}")
-        return _complete(self._chain_data, state.imp, self._where)
+        return _complete(self._chain_data, state.imp, self.where)
 
     def _working_frame(self, imp: dict[Hashable, pd.Series]) -> pd.DataFrame:
         """The working data of a chain, R's ``data`` inside ``sampler``.
@@ -1373,7 +1549,7 @@ class MICE:
         """
         working = self._chain_data.copy(deep=True)
         for col in self.visit_sequence:
-            _refresh_working_column(working, col, imp[col], self._where[col].to_numpy(), self.id_obs[col].to_numpy())
+            _refresh_working_column(working, col, imp[col], self.where[col].to_numpy(), self.id_obs[col].to_numpy())
         return working
 
     def _iterate(self, working: pd.DataFrame, state: _ChainState, iter_idx: int, chain_idx: int) -> None:
@@ -1412,7 +1588,7 @@ class MICE:
             predictor_cols = self._predictors[col]
             logger.debug(f"Using {len(predictor_cols)} predictors for column '{col}'")
             observed = self.id_obs[col].to_numpy()
-            where = self._where[col].to_numpy()
+            where = self.where[col].to_numpy()
             imp = state.imp[col]
 
             # Design matrix of all rows of the working data, as R's sampler.univ
@@ -1524,7 +1700,7 @@ class MICE:
         data = self._chain_data
         imp = {}
         for col in data.columns:
-            where = self._where[col].to_numpy()
+            where = self.where[col].to_numpy()
             if not where.any():
                 continue
             start = data[col][where].copy()
@@ -1563,43 +1739,42 @@ class MICE:
             - str: "roman", "arabic", "monotone", "revmonotone" or "random"
             - list of str: column names specifying the order to visit variables
                         Must include all columns that are imputed. Columns that are not
-                        imputed (complete, or with method "") are dropped from it.
+                        imputed (without where-cells, or with method "") are dropped from it.
         rng : np.random.Generator, optional
             Draws the "random" sequence. If None, a fresh generator is used.
 
-        Only incomplete columns with a method other than "" are visited. The
-        keywords follow R's ``mice``: "roman" is data order, "arabic" its
-        reverse, "monotone" sorts by the number of missing values with a
-        stable sort (ties keep data order) and "revmonotone" is the reverse
-        of "monotone".
+        Only columns that are imputed are visited: those with where-cells
+        (`where`) and a method other than "". The keywords follow R's
+        ``mice``: "roman" is data order, "arabic" its reverse, "monotone"
+        sorts by the number of where-cells with a stable sort (ties keep
+        data order) and "revmonotone" is the reverse of "monotone".
         """
-        columns_with_missing = [col for col in self.data.columns if self.id_mis[col].any() and self.method[col] != ""]
+        imputed_columns = [col for col in self.data.columns if self.where[col].any() and self.method[col] != ""]
 
         # Validate using centralized validator
-        validated_sequence, cols_without_missing = check_visit_sequence(
-            visit_sequence, list(self.data.columns), columns_with_missing
+        validated_sequence, cols_not_imputed = check_visit_sequence(
+            visit_sequence, list(self.data.columns), imputed_columns
         )
 
         if isinstance(visit_sequence, list):
             # Report columns that are not imputed if any were filtered out
-            if cols_without_missing:
+            if cols_not_imputed:
                 logger.warning(
-                    f"Visit sequence includes columns that are not imputed (complete, or method ''): "
-                    f"{cols_without_missing}. They are skipped."
+                    f"Visit sequence includes columns that are not imputed (without where-cells, or method ''): "
+                    f"{cols_not_imputed}. They are skipped."
                 )
             self.visit_sequence = validated_sequence
         else:
             # For string sequences, generate based on type
-            nmis = np.array([self.id_mis[col].sum() for col in columns_with_missing], dtype=int)
-            monotone = [columns_with_missing[i] for i in np.argsort(nmis, kind="stable")]
+            monotone = _monotone(self.where, imputed_columns)
             if visit_sequence == VisitSequence.RANDOM.value:
                 if rng is None:
                     rng = np.random.default_rng()
-                self.visit_sequence = [columns_with_missing[i] for i in rng.permutation(len(columns_with_missing))]
+                self.visit_sequence = [imputed_columns[i] for i in rng.permutation(len(imputed_columns))]
             elif visit_sequence == VisitSequence.ROMAN.value:
-                self.visit_sequence = list(columns_with_missing)
+                self.visit_sequence = list(imputed_columns)
             elif visit_sequence == VisitSequence.ARABIC.value:
-                self.visit_sequence = columns_with_missing[::-1]
+                self.visit_sequence = imputed_columns[::-1]
             elif visit_sequence == VisitSequence.MONOTONE.value:
                 self.visit_sequence = monotone
             elif visit_sequence == VisitSequence.REVMONOTONE.value:

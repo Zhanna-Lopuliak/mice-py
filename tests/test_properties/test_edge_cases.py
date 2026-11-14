@@ -855,7 +855,7 @@ def test_meanobs_initial_imputation_of_non_numeric_columns():
     mice = MICE(df)
     impute_checking_log_warning(mice, n_imputations=1, maxit=1, initial="meanobs", method="sample", seed=1)
     # the start of a chain, written into the data
-    data = _complete(mice._chain_data, mice._initial_imputation(np.random.default_rng(0)), mice._where)
+    data = _complete(mice._chain_data, mice._initial_imputation(np.random.default_rng(0)), mice.where)
     assert data.loc[[3, 5], "num"].tolist() == [4.0, 4.0]
     assert data.loc[[3, 6], "obj"].tolist() == ["b", "b"]
     assert data.loc[[1, 6], "cat"].tolist() == ["z", "z"]

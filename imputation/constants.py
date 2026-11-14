@@ -187,8 +187,9 @@ class VisitSequence(Enum):
     """
     Enumeration of supported visit sequence types for MICE.
 
-    The keywords of R's ``mice``, plus ``random``. Only incomplete columns
-    that are imputed are visited.
+    The keywords of R's ``mice``, plus ``random``. Only the columns that are
+    imputed are visited: those with where-cells (by default the incomplete
+    columns) and a method other than ``""``.
 
     Attributes
     ----------
@@ -197,7 +198,8 @@ class VisitSequence(Enum):
     ARABIC
         Columns in reverse data order.
     MONOTONE
-        Columns by increasing number of missing values; ties in data order.
+        Columns by increasing number of where-cells (by default of missing
+        values); ties in data order.
     REVMONOTONE
         The reverse of MONOTONE.
     RANDOM

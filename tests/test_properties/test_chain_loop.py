@@ -11,10 +11,11 @@ where-cell outside ``cx`` becomes NaN in ``imp``. A completed dataset is a
 copy of the data with every where-cell replaced by ``imp``, and the chain
 statistics are computed from ``imp`` at the end of each iteration.
 
-``impute`` has no ``where`` or ``ignore`` argument yet (version 0.4 adds
-them): it uses the missing cells and no row. The tests with other masks set
-the private attributes ``MICE._where`` and ``MICE._ignore`` and call the
-loop's methods directly.
+``impute`` has no ``ignore`` argument yet (version 0.4 adds it): it leaves
+out no row. The tests with an ignored row set ``MICE.where`` (the frame
+``impute(where=...)`` keeps) and the private mask ``MICE._ignore`` after a
+run, and call the loop's methods directly; test_where tests ``where``
+through ``impute``.
 """
 
 import warnings
@@ -173,7 +174,7 @@ def _mice_with_masks(spy):
     where = pd.DataFrame(False, index=df.index, columns=df.columns)
     where["y"] = WHERE
     where["z"] = df["z"].isna()
-    mice._where = where
+    mice.where = where
     mice._ignore = IGNORE.copy()
     mice._log = []
     return mice
@@ -216,7 +217,7 @@ def test_one_iteration_with_an_observed_where_cell_and_an_ignored_row(spy):
     expected_working["y"] = [1.0, 40.0, 102.0, NAN, 5.0, NAN, 7.0, 8.0]
     pd.testing.assert_frame_equal(working, expected_working)
 
-    completed = _complete(mice._chain_data, state.imp, mice._where)
+    completed = _complete(mice._chain_data, state.imp, mice.where)
     expected_completed = _frame()
     expected_completed["y"] = [100.0, 40.0, 102.0, NAN, NAN, NAN, 7.0, 8.0]
     pd.testing.assert_frame_equal(completed, expected_completed)
@@ -324,7 +325,7 @@ def test_impute_keeps_one_state_per_chain_and_completes_from_it():
         for col, values in state.imp.items():
             assert list(values.index) == list(df.index[df[col].isna()])
             assert values.dtype == df[col].dtype
-        pd.testing.assert_frame_equal(_complete(mice._chain_data, state.imp, mice._where), completed)
+        pd.testing.assert_frame_equal(_complete(mice._chain_data, state.imp, mice.where), completed)
     # the generators went on independently
     assert len({state.rng.bit_generator.state["state"]["state"] for state in mice._chain_states}) == 3
 
