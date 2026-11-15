@@ -1,12 +1,12 @@
 # L3 simulation study: mice-py against R mice
 
-Generated 2026-11-12 09:23 by `simulations/report.py` from `simulations/work/results/`. Method and formulas: `simulations/README.md` and `simulations/metrics.py`.
+Generated 2026-11-15 22:19 by `simulations/report.py` from `simulations/work/results/`. Method and formulas: `simulations/README.md` and `simulations/metrics.py`.
 
 ## Run
 
 |  | Python | R |
 |---|---|---|
-| software | mice-py 0.3.0, Python 3.13.7, NumPy 2.3.3 | R version 4.6.2 (2026-10-29), mice 3.19.0, ranger 0.18.0, rpart 4.1.27 |
+| software | mice-py 0.4.0, Python 3.13.7, NumPy 2.3.3 | R version 4.6.2 (2026-10-29), mice 3.19.0, ranger 0.18.0, rpart 4.1.27 |
 | seeds | per replication | per replication (`mice(seed = )`) |
 | replications | 500, 1000 per cell | 500, 1000 per cell |
 | processes | 2 | 2 |
@@ -23,12 +23,13 @@ Scenarios:
 | S6 | w = exp(0.5 x1 + u), u ~ N(0, 0.5^2); y = 1 + 0.5w + 0.5x1 + e | 200 | w MAR on y 30% | 1 | (Intercept) = 1, w = 0.5, x1 = 0.5, mean(w) = 1.284 |
 | S7 | b in {no,yes} (0.6, 0.4); x ~ N(0.5 code, 1); y = 0.5 + 1.0[b=yes] + 0.7x + e | 200 | b MAR on y 30%; x MCAR 20% | 5 | (Intercept) = 0.5, byes = 1, x = 0.7, P(b=yes) = 0.4, mean(x) = 0.2 |
 | S8 | o ordered lo < mid < hi < top (0.2, 0.3, 0.3, 0.2), code 0-3; x ~ N(0.5 code, 1); y = 0.5 + 0.4 code + 0.7x + e | 200 | o MAR on y 30%; x MCAR 20% | 5 | (Intercept) = 0.5, omid = 0.4, ohi = 0.8, otop = 1.2, x = 0.7, P(o=top) = 0.2, mean(x) = 0.75 |
+| S9 | model M with p = x1 x2; y = 0.5 + 1.0 x1 + 0.5 x2 + 0.5 p + e | 200 | x2 MAR on y 30%; p missing where x2 is | 5 | (Intercept) = 0.5, x1 = 1, x2 = 0.5, p = 0.5, mean(p) = 0.5 |
 
 Categorical columns: `g` (a, b, c, unordered) in S5; `b` (no, yes, unordered) in S7; `o` (lo < mid < hi < top, ordered) in S8. Python reads an unordered column as object dtype and an ordered one as an ordered `pd.Categorical`; R reads factors with these levels. The analysis uses treatment dummies for both (R analyses an unordered copy of an ordered factor).
 
 ## Cells
 
-A study method on a scenario. Replications: planned for the full study, and run here by Python and R. Rule `z`: every paired difference |z| ≤ 4.2; rule `identity`: see [Identity rule](#identity-rule).
+A study method on a scenario, some with a variant (²). Replications: planned for the full study, and run here by Python and R. Rule `z`: every paired difference |z| ≤ 4.2; rule `identity`: see [Identity rule](#identity-rule).
 
 | method | scenario | planned | Python | R | rule | method of each incomplete column |
 |---|---|---|---|---|---|---|
@@ -73,8 +74,21 @@ A study method on a scenario. Replications: planned for the full study, and run 
 | default | S7 | 1000 | 1000 | 1000 | z | no `method` argument (each engine's default by column type) |
 | default | S8 | 1000 | 1000 | 1000 | z | no `method` argument (each engine's default by column type) |
 | logreg.boot | S7 | 1000 | 1000 | 1000 | z | b: logreg.boot, x: pmm |
+| pmm+ignore_half² | S3 | 1000 | 1000 | 1000 | z | x1: pmm, y: pmm |
+| norm.predict¹+ignore_half² | S4 | 1000 | 1000 | 1000 | identity | x1: norm.predict |
+| pmm+where_all² | S3 | 1000 | 1000 | 1000 | z | x1: pmm, y: pmm; x2 (complete): default (pmm) |
+| norm+clip² | S4 | 1000 | 1000 | 1000 | z | x1: norm |
+| default+passive_product² | S9 | 1000 | 1000 | 1000 | z | each engine's default by column type; p: passive |
+| norm.predict¹+passive_product² | S9 | 1000 | 1000 | 1000 | identity | x2: norm.predict; p: passive |
 
 ¹ `norm.nob`, `norm.predict` and `mean` are improper imputation methods: they ignore the uncertainty of the imputation model (`norm.predict` and `mean` also the residual noise), so their intervals cover below 95% in both engines, by design. The pass rule is the same as for every cell: mice-py matches R.
+
+² A cell with a variant (`method+variant`) gives both engines the same arguments beyond the methods:
+
+- `ignore_half`: the second half of the rows (n/2 + 1 to n: rows 101 to 200 in S3, 26 to 50 in S4) is left out of the fits and of the start values (`ignore`); its missing cells are imputed all the same.
+- `where_all`: every cell is imputed (`where = "all"`), the observed ones too, so the analysis runs on imputed values only; a complete column gets the default method of its type.
+- `clip`: the imputations of each incomplete numeric column are clipped to the range of its observed values by `post` (Python `imp.clip(lo, hi)`, R `squeeze()`).
+- `passive_product`: `p` is passive, `p = x1 * x2` (Python `passive`, R method `~ I(x1 * x2)`), and does not predict `x2` (its entry in the predictor matrix is 0).
 
 ## Harness checks
 
@@ -121,37 +135,47 @@ Coverage of the complete-data analysis (pseudo-method `complete`) must lie withi
 | S8 | x | 0.956 ± 0.021 (1000 reps) | 0.956 ± 0.021 (1000 reps) |
 | S8 | P(o=top) | 0.949 ± 0.021 (1000 reps) | 0.949 ± 0.021 (1000 reps) |
 | S8 | mean(x) | 0.950 ± 0.021 (1000 reps) | 0.950 ± 0.021 (1000 reps) |
+| S9 | (Intercept) | 0.937 ± 0.021 (1000 reps) | 0.937 ± 0.021 (1000 reps) |
+| S9 | x1 | 0.951 ± 0.021 (1000 reps) | 0.951 ± 0.021 (1000 reps) |
+| S9 | x2 | 0.943 ± 0.021 (1000 reps) | 0.943 ± 0.021 (1000 reps) |
+| S9 | p | 0.948 ± 0.021 (1000 reps) | 0.948 ± 0.021 (1000 reps) |
+| S9 | mean(p) | 0.938 ± 0.021 (1000 reps) | 0.938 ± 0.021 (1000 reps) |
 
-Identical data, identical analysis: over 39000 complete-data rows the largest |qbar Python − qbar R| is 8.66e-15, the largest relative ubar difference 2.97e-14; dfcom equal: yes.
+Identical data, identical analysis: over 44000 complete-data rows the largest |qbar Python − qbar R| is 8.66e-15, the largest relative ubar difference 3.55e-14; dfcom equal: yes.
 
 ## Methods used
 
-Each engine records the method of every column as it ran it (Python `MICE.method` in R's names, R `imp$method`; empty for a column that is not imputed). Only replications that succeeded in both engines are compared.
+Each engine records the method of every column as it ran it (Python `MICE.method` in R's names, R `imp$method`; empty for a column that is not imputed). Only replications that succeeded in both engines are compared. A passive column is `passive` in mice-py and its formula in R (`~ I(x1 * x2)`); the comparison reads R's formula as `passive`.
 
-Cells without a `method` argument, where each engine chooses by column type (R's `make.method`):
+Cells where an engine sets methods itself, checked against the expected record: without a `method` argument each engine chooses by column type (R's `make.method`); under `where_all` a complete column gets the default of its type; a passive column is `passive`:
 
 | scenario | method | expected | Python | R | Python = R | verdict |
 |---|---|---|---|---|---|---|
+| S3 | pmm+where_all | `x1=pmm;x2=pmm;y=pmm` | x1=pmm;x2=pmm;y=pmm (1000) | x1=pmm;x2=pmm;y=pmm (1000) | 1000 / 1000 | pass |
 | S5 | default | `g=polyreg;x=pmm;y=` | g=polyreg;x=pmm;y= (1000) | g=polyreg;x=pmm;y= (1000) | 1000 / 1000 | pass |
 | S7 | default | `b=logreg;x=pmm;y=` | b=logreg;x=pmm;y= (1000) | b=logreg;x=pmm;y= (1000) | 1000 / 1000 | pass |
 | S8 | default | `o=polr;x=pmm;y=` | o=polr;x=pmm;y= (1000) | o=polr;x=pmm;y= (1000) | 1000 / 1000 | pass |
+| S9 | default+passive_product | `x1=;x2=pmm;p=passive;y=` | x1=;x2=pmm;p=passive;y= (1000) | x1=;x2=pmm;p=passive;y= (1000) | 1000 / 1000 | pass |
+| S9 | norm.predict+passive_product | `x1=;x2=norm.predict;p=passive;y=` | x1=;x2=norm.predict;p=passive;y= (1000) | x1=;x2=norm.predict;p=passive;y= (1000) | 1000 / 1000 | pass |
 
-In the other 37 cells Python and R recorded the same methods in every paired replication (34000 pairs).
+In the other 40 cells Python and R recorded the same methods in every paired replication (37000 pairs).
 
 ## Identity rule
 
-Deterministic methods on S4 (one incomplete column, maxit = 1) draw nothing, so the paired z statistic is 0/0 and is not computed. Such a cell passes when the largest |qbar Python − qbar R| over replications and terms is at most 1e-08 and B = 0 in both engines (to rounding: largest B at most 1e-16).
+In these cells nothing that is drawn reaches the completed data: on S4 `norm.predict` and `mean` impute the only incomplete column, whose predictors are complete, in one iteration, so the start values are overwritten before anything reads them (also with half of the rows ignored); on S9 `norm.predict` imputes `x2` from the complete `x1` and `y` only, and the passive `p`, which does not predict `x2`, is computed from it, so every iteration gives the same values. So the paired z statistic is 0/0 and is not computed. Such a cell passes when the largest |qbar Python − qbar R| over replications and terms is at most 1e-08 and B = 0 in both engines (to rounding: largest B at most 1e-16).
 
 | scenario | method | pairs × terms | max |qbar Py − qbar R| | max B Python | max B R | verdict |
 |---|---|---|---|---|---|---|
 | S4 | mean¹ | 1000 × 4 | 2.22e-15 | 1.54e-32 | 0.00e+00 | pass |
 | S4 | norm.predict¹ | 1000 × 4 | 3.33e-15 | 6.16e-32 | 0.00e+00 | pass |
+| S4 | norm.predict¹+ignore_half² | 1000 × 4 | 2.89e-15 | 6.16e-32 | 0.00e+00 | pass |
+| S9 | norm.predict¹+passive_product² | 1000 × 5 | 2.66e-15 | 1.54e-32 | 0.00e+00 | pass |
 
 ## Flagged comparisons (|z| > 4.2)
 
-Cells judged by the identity rule have no z and are not counted: S4 mean, S4 norm.predict.
+Cells judged by the identity rule have no z and are not counted: S4 mean, S4 norm.predict, S4 norm.predict+ignore_half, S9 norm.predict+passive_product.
 
-18 of 1044 paired comparisons:
+18 of 1158 paired comparisons:
 
 | scenario | method | term | metric | Python | R | Py − R (SE) | z |
 |---|---|---|---|---|---|---|---|
@@ -193,38 +217,42 @@ Mean seconds per replication (m = 5 imputations plus analysis), measured with al
 
 | scenario | method | Python | R |
 |---|---|---|---|
-| S1 | cart | 0.009 | 0.048 |
-| S1 | midastouch | 0.009 | 0.052 |
-| S1 | pmm | 0.009 | 0.017 |
-| S1 | rf | 0.031 | 0.059 |
-| S1 | sample | 0.007 | 0.035 |
+| S1 | cart | 0.010 | 0.048 |
+| S1 | midastouch | 0.010 | 0.052 |
+| S1 | pmm | 0.015 | 0.017 |
+| S1 | rf | 0.032 | 0.059 |
+| S1 | sample | 0.008 | 0.035 |
 | S2 | cart | 0.010 | 0.044 |
 | S2 | midastouch | 0.009 | 0.060 |
 | S2 | pmm | 0.009 | 0.025 |
-| S2 | rf | 0.031 | 0.047 |
-| S2 | sample | 0.007 | 0.024 |
-| S3 | cart | 0.044 | 0.183 |
-| S3 | midastouch | 0.037 | 0.288 |
-| S3 | norm | 0.029 | 0.067 |
+| S2 | rf | 0.032 | 0.047 |
+| S2 | sample | 0.008 | 0.024 |
+| S3 | cart | 0.047 | 0.183 |
+| S3 | midastouch | 0.043 | 0.288 |
+| S3 | norm | 0.033 | 0.067 |
 | S3 | norm.boot | 0.028 | 0.068 |
-| S3 | pmm | 0.033 | 0.067 |
-| S3 | rf | 0.258 | 0.266 |
-| S3 | sample | 0.021 | 0.063 |
+| S3 | pmm | 0.035 | 0.067 |
+| S3 | pmm+ignore_half | 0.032 | 0.059 |
+| S3 | pmm+where_all | 0.046 | 0.097 |
+| S3 | rf | 0.282 | 0.266 |
+| S3 | sample | 0.022 | 0.063 |
 | S4 | cart | 0.009 | 0.031 |
 | S4 | mean | 0.007 | 0.021 |
 | S4 | midastouch | 0.008 | 0.027 |
 | S4 | norm | 0.008 | 0.022 |
+| S4 | norm+clip | 0.010 | 0.022 |
 | S4 | norm.boot | 0.008 | 0.022 |
 | S4 | norm.nob | 0.008 | 0.022 |
 | S4 | norm.predict | 0.008 | 0.022 |
-| S4 | pmm | 0.008 | 0.018 |
+| S4 | norm.predict+ignore_half | 0.008 | 0.020 |
+| S4 | pmm | 0.009 | 0.018 |
 | S4 | rf | 0.028 | 0.033 |
 | S4 | sample | 0.007 | 0.022 |
-| S5 | cart | 0.056 | 0.215 |
+| S5 | cart | 0.055 | 0.215 |
 | S5 | default | 0.071 | 0.158 |
-| S5 | pmm | 0.045 | 0.101 |
-| S5 | rf | 0.291 | 0.442 |
-| S5 | sample | 0.029 | 0.080 |
+| S5 | pmm | 0.046 | 0.101 |
+| S5 | rf | 0.283 | 0.442 |
+| S5 | sample | 0.030 | 0.080 |
 | S6 | cart | 0.010 | 0.042 |
 | S6 | midastouch | 0.009 | 0.053 |
 | S6 | pmm | 0.009 | 0.025 |
@@ -232,18 +260,27 @@ Mean seconds per replication (m = 5 imputations plus analysis), measured with al
 | S6 | sample | 0.007 | 0.028 |
 | S7 | default | 0.055 | 0.120 |
 | S7 | logreg.boot | 0.053 | 0.121 |
-| S8 | default | 0.094 | 0.311 |
+| S8 | default | 0.093 | 0.311 |
+| S9 | default+passive_product | 0.026 | 0.051 |
+| S9 | norm.predict+passive_product | 0.023 | 0.046 |
 
-Extrapolated to the full study (all 41 cells of 8 scenarios, 500 or 1000 replications each), with as many processes as this run used:
+Extrapolated to the full study (all 47 cells of 9 scenarios, 500 or 1000 replications each), with as many processes as this run used:
 
-- python: about 9 min with 2 processes (0.3 CPU hours); cells not measured, taken from the slowest measured scenario of the same method: S5/midastouch.
-- r: about 27 min with 2 processes (0.9 CPU hours); cells not measured, taken from the slowest measured scenario of the same method: S5/midastouch.
+- python: about 11 min with 2 processes (0.4 CPU hours); cells not measured, taken from the slowest measured cell of the same study method (or the slowest cell): S5/midastouch.
+- r: about 29 min with 2 processes (1.0 CPU hours); cells not measured, taken from the slowest measured cell of the same study method (or the slowest cell): S5/midastouch.
 
 ## Results per scenario and method
 
 Cells: value (Monte Carlo SE). Py − R is the paired difference over replications where both engines succeeded, with its SE; z = difference / SE; bold z is flagged. Cells of the identity rule have no z.
 
 ¹ `norm.nob`, `norm.predict` and `mean` are improper imputation methods: they ignore the uncertainty of the imputation model (`norm.predict` and `mean` also the residual noise), so their intervals cover below 95% in both engines, by design. The pass rule is the same as for every cell: mice-py matches R.
+
+² A cell with a variant (`method+variant`) gives both engines the same arguments beyond the methods:
+
+- `ignore_half`: the second half of the rows (n/2 + 1 to n: rows 101 to 200 in S3, 26 to 50 in S4) is left out of the fits and of the start values (`ignore`); its missing cells are imputed all the same.
+- `where_all`: every cell is imputed (`where = "all"`), the observed ones too, so the analysis runs on imputed values only; a complete column gets the default method of its type.
+- `clip`: the imputations of each incomplete numeric column are clipped to the range of its observed values by `post` (Python `imp.clip(lo, hi)`, R `squeeze()`).
+- `passive_product`: `p` is passive, `p = x1 * x2` (Python `passive`, R method `~ I(x1 * x2)`), and does not predict `x2` (its entry in the predictor matrix is 0).
 
 ### S1: model M; x1 MCAR 30%; n = 200, maxit = 1
 
@@ -878,6 +915,88 @@ Methods: x1: norm.boot, y: norm.boot.
 | mean(y) | mean B | 0.00312 (0.00008) | 0.00319 (0.00008) | -0.000071 (0.000103) | -0.69 |
 | mean(y) | mean T | 0.0175 (0.0001) | 0.0176 (0.0001) | -0.000105 (0.000126) | -0.83 |
 
+#### S3 pmm+ignore_half² (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x1: pmm, y: pmm.
+
+| term | metric | Python | R | Py − R | z |
+|---|---|---|---|---|---|
+| (Intercept) = 0.5 | bias | -0.0195 (0.0033) | -0.0197 (0.0034) | 0.00025 (0.00128) | +0.19 |
+| (Intercept) | % bias | -3.9 (0.7) | -3.9 (0.7) | 0.0 (0.3) | +0.19 |
+| (Intercept) | coverage | 0.942 (0.007) | 0.932 (0.008) | 0.010 (0.008) | +1.23 |
+| (Intercept) | CI width | 0.4306 (0.0035) | 0.4320 (0.0037) | -0.00142 (0.00446) | -0.32 |
+| (Intercept) | RMSE | 0.1076 (0.0024) | 0.1087 (0.0024) | -0.00111 (0.00123) | -0.90 |
+| (Intercept) | mean B | 0.00426 (0.00011) | 0.00431 (0.00012) | -0.000054 (0.000143) | -0.38 |
+| (Intercept) | mean T | 0.0104 (0.0001) | 0.0105 (0.0001) | -0.000070 (0.000172) | -0.41 |
+| x1 = 1 | bias | -0.0439 (0.0036) | -0.0450 (0.0036) | 0.00106 (0.00126) | +0.84 |
+| x1 | % bias | -4.4 (0.4) | -4.5 (0.4) | 0.1 (0.1) | +0.84 |
+| x1 | coverage | 0.933 (0.008) | 0.922 (0.008) | 0.011 (0.008) | +1.46 |
+| x1 | CI width | 0.4596 (0.0036) | 0.4607 (0.0035) | -0.00112 (0.00409) | -0.27 |
+| x1 | RMSE | 0.1230 (0.0028) | 0.1230 (0.0028) | -0.00001 (0.00142) | -0.00 |
+| x1 | mean B | 0.00428 (0.00012) | 0.00431 (0.00012) | -0.000025 (0.000149) | -0.16 |
+| x1 | mean T | 0.0124 (0.0002) | 0.0125 (0.0002) | -0.000030 (0.000182) | -0.16 |
+| x2 = 0.5 | bias | -0.0143 (0.0040) | -0.0146 (0.0040) | 0.00031 (0.00161) | +0.19 |
+| x2 | % bias | -2.9 (0.8) | -2.9 (0.8) | 0.1 (0.3) | +0.19 |
+| x2 | coverage | 0.943 (0.007) | 0.931 (0.008) | 0.012 (0.009) | +1.34 |
+| x2 | CI width | 0.5272 (0.0048) | 0.5314 (0.0049) | -0.00418 (0.00597) | -0.70 |
+| x2 | RMSE | 0.1265 (0.0031) | 0.1266 (0.0029) | -0.00009 (0.00163) | -0.05 |
+| x2 | mean B | 0.00684 (0.00018) | 0.00700 (0.00019) | -0.000164 (0.000228) | -0.72 |
+| x2 | mean T | 0.0152 (0.0002) | 0.0154 (0.0002) | -0.000195 (0.000275) | -0.71 |
+| mean(x1) = 0 | bias | -0.0177 (0.0028) | -0.0183 (0.0028) | 0.000671 (0.000764) | +0.88 |
+| mean(x1) | coverage | 0.927 (0.008) | 0.926 (0.008) | 0.001 (0.007) | +0.13 |
+| mean(x1) | CI width | 0.3289 (0.0016) | 0.3313 (0.0017) | -0.00240 (0.00203) | -1.18 |
+| mean(x1) | RMSE | 0.0896 (0.0020) | 0.0900 (0.0019) | -0.000343 (0.000801) | -0.43 |
+| mean(x1) | mean B | 0.00153 (0.00004) | 0.00160 (0.00004) | -0.0000733 (0.0000558) | -1.31 |
+| mean(x1) | mean T | 0.00664 (0.00006) | 0.00673 (0.00006) | -0.0000861 (0.0000676) | -1.27 |
+| mean(y) = 0.5 | bias | -0.0363 (0.0044) | -0.0372 (0.0045) | 0.00092 (0.00116) | +0.79 |
+| mean(y) | % bias | -7.3 (0.9) | -7.4 (0.9) | 0.2 (0.2) | +0.79 |
+| mean(y) | coverage | 0.926 (0.008) | 0.922 (0.008) | 0.004 (0.006) | +0.63 |
+| mean(y) | CI width | 0.5246 (0.0023) | 0.5270 (0.0023) | -0.00248 (0.00253) | -0.98 |
+| mean(y) | RMSE | 0.1430 (0.0032) | 0.1455 (0.0032) | -0.00253 (0.00114) | -2.22 |
+| mean(y) | mean B | 0.00340 (0.00009) | 0.00352 (0.00009) | -0.000125 (0.000112) | -1.12 |
+| mean(y) | mean T | 0.0171 (0.0001) | 0.0172 (0.0001) | -0.000137 (0.000136) | -1.01 |
+
+#### S3 pmm+where_all² (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x1: pmm, y: pmm; x2 (complete): default (pmm).
+
+| term | metric | Python | R | Py − R | z |
+|---|---|---|---|---|---|
+| (Intercept) = 0.5 | bias | -0.0109 (0.0034) | -0.0101 (0.0035) | -0.00077 (0.00247) | -0.31 |
+| (Intercept) | % bias | -2.2 (0.7) | -2.0 (0.7) | -0.2 (0.5) | -0.31 |
+| (Intercept) | coverage | 0.993 (0.003) | 0.985 (0.004) | 0.008 (0.004) | +1.79 |
+| (Intercept) | CI width | 0.7494 (0.0077) | 0.7398 (0.0077) | 0.0095 (0.0102) | +0.93 |
+| (Intercept) | RMSE | 0.1086 (0.0025) | 0.1114 (0.0026) | -0.00274 (0.00239) | -1.14 |
+| (Intercept) | mean B | 0.0156 (0.0004) | 0.0152 (0.0004) | 0.000417 (0.000483) | +0.87 |
+| (Intercept) | mean T | 0.0272 (0.0004) | 0.0267 (0.0004) | 0.000524 (0.000580) | +0.90 |
+| x1 = 1 | bias | -0.2257 (0.0037) | -0.2236 (0.0036) | -0.00206 (0.00244) | -0.84 |
+| x1 | % bias | -22.6 (0.4) | -22.4 (0.4) | -0.2 (0.2) | -0.84 |
+| x1 | coverage | 0.817 (0.012) | 0.832 (0.012) | -0.015 (0.014) | -1.07 |
+| x1 | CI width | 0.7512 (0.0070) | 0.7441 (0.0067) | 0.00707 (0.00961) | +0.74 |
+| x1 | RMSE | 0.2541 (0.0034) | 0.2514 (0.0033) | 0.00268 (0.00240) | +1.11 |
+| x1 | mean B | 0.0149 (0.0004) | 0.0145 (0.0003) | 0.000393 (0.000484) | +0.81 |
+| x1 | mean T | 0.0292 (0.0004) | 0.0287 (0.0004) | 0.000560 (0.000585) | +0.96 |
+| x2 = 0.5 | bias | -0.1659 (0.0024) | -0.1646 (0.0024) | -0.00127 (0.00234) | -0.54 |
+| x2 | % bias | -33.2 (0.5) | -32.9 (0.5) | -0.3 (0.5) | -0.54 |
+| x2 | coverage | 0.953 (0.007) | 0.946 (0.007) | 0.007 (0.009) | +0.78 |
+| x2 | CI width | 0.7252 (0.0068) | 0.7157 (0.0065) | 0.00951 (0.00914) | +1.04 |
+| x2 | RMSE | 0.1829 (0.0023) | 0.1812 (0.0022) | 0.00169 (0.00226) | +0.75 |
+| x2 | mean B | 0.0137 (0.0003) | 0.0132 (0.0003) | 0.000464 (0.000444) | +1.04 |
+| x2 | mean T | 0.0274 (0.0004) | 0.0268 (0.0004) | 0.000613 (0.000536) | +1.14 |
+| mean(x1) = 0 | bias | -0.0111 (0.0028) | -0.0108 (0.0027) | -0.00027 (0.00141) | -0.19 |
+| mean(x1) | coverage | 0.978 (0.005) | 0.976 (0.005) | 0.002 (0.005) | +0.38 |
+| mean(x1) | CI width | 0.4612 (0.0040) | 0.4526 (0.0038) | 0.00867 (0.00519) | +1.67 |
+| mean(x1) | RMSE | 0.0882 (0.0020) | 0.0874 (0.0019) | 0.00076 (0.00135) | +0.57 |
+| mean(x1) | mean B | 0.00539 (0.00012) | 0.00512 (0.00012) | 0.000272 (0.000162) | +1.68 |
+| mean(x1) | mean T | 0.0112 (0.0002) | 0.0109 (0.0001) | 0.000319 (0.000195) | +1.63 |
+| mean(y) = 0.5 | bias | -0.0204 (0.0044) | -0.0192 (0.0045) | -0.00126 (0.00222) | -0.57 |
+| mean(y) | % bias | -4.1 (0.9) | -3.8 (0.9) | -0.3 (0.4) | -0.57 |
+| mean(y) | coverage | 0.977 (0.005) | 0.968 (0.006) | 0.009 (0.006) | +1.62 |
+| mean(y) | CI width | 0.7010 (0.0056) | 0.7050 (0.0057) | -0.00399 (0.00751) | -0.53 |
+| mean(y) | RMSE | 0.1401 (0.0032) | 0.1430 (0.0033) | -0.00287 (0.00225) | -1.27 |
+| mean(y) | mean B | 0.0117 (0.0003) | 0.0119 (0.0003) | -0.000190 (0.000376) | -0.51 |
+| mean(y) | mean T | 0.0270 (0.0003) | 0.0272 (0.0003) | -0.000231 (0.000453) | -0.51 |
+
 ### S4: model M, small sample; x1 MCAR 50%; n = 50, maxit = 1
 
 #### S4 pmm (Python 1000 reps, R 1000 reps, 1000 pairs)
@@ -1223,6 +1342,76 @@ Identity rule: max |qbar Python − qbar R| = 2.22e-15, max B Python 1.54e-32, R
 | mean(x1) | RMSE | 0.1988 (0.0044) | 0.1988 (0.0044) | -0.00000000 (0.00000000) | – |
 | mean(x1) | mean B | 0.00000000 (0.00000000) | 0.0000 (0.0000) | 0.00000000 (0.00000000) | – |
 | mean(x1) | mean T | 0.00966 (0.00010) | 0.00966 (0.00010) | 0.00000000 (0.00000000) | – |
+
+#### S4 norm.predict¹+ignore_half² (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x1: norm.predict.
+
+Identity rule: max |qbar Python − qbar R| = 2.89e-15, max B Python 6.16e-32, R 0.00e+00: pass.
+
+| term | metric | Python | R | Py − R | z |
+|---|---|---|---|---|---|
+| (Intercept) = 0.5 | bias | 0.00828 (0.00762) | 0.00828 (0.00762) | 0.00000000 (0.00000000) | – |
+| (Intercept) | % bias | 1.7 (1.5) | 1.7 (1.5) | 0.0 (0.0) | – |
+| (Intercept) | coverage | 0.705 (0.014) | 0.705 (0.014) | 0.000 (0.000) | – |
+| (Intercept) | CI width | 0.5062 (0.0039) | 0.5062 (0.0039) | 0.00000000 (0.00000000) | – |
+| (Intercept) | RMSE | 0.2409 (0.0060) | 0.2409 (0.0060) | 0.00000000 (0.00000000) | – |
+| (Intercept) | mean B | 0.00000000 (0.00000000) | 0.0000 (0.0000) | 0.00000000 (0.00000000) | – |
+| (Intercept) | mean T | 0.0167 (0.0003) | 0.0167 (0.0003) | 0.00000000 (0.00000000) | – |
+| x1 = 1 | bias | 0.3467 (0.0096) | 0.3467 (0.0096) | -0.00000000 (0.00000000) | – |
+| x1 | % bias | 34.7 (1.0) | 34.7 (1.0) | -0.0 (0.0) | – |
+| x1 | coverage | 0.447 (0.016) | 0.447 (0.016) | 0.000 (0.000) | – |
+| x1 | CI width | 0.7206 (0.0087) | 0.7206 (0.0087) | -0.00000000 (0.00000000) | – |
+| x1 | RMSE | 0.4608 (0.0097) | 0.4608 (0.0097) | 0.00000000 (0.00000000) | – |
+| x1 | mean B | 0.00000000 (0.00000000) | 0.0000 (0.0000) | 0.00000000 (0.00000000) | – |
+| x1 | mean T | 0.0367 (0.0010) | 0.0367 (0.0010) | -0.00000000 (0.00000000) | – |
+| x2 = 0.5 | bias | -0.1664 (0.0090) | -0.1664 (0.0090) | 0.00000000 (0.00000000) | – |
+| x2 | % bias | -33.3 (1.8) | -33.3 (1.8) | 0.0 (0.0) | – |
+| x2 | coverage | 0.651 (0.015) | 0.651 (0.015) | 0.000 (0.000) | – |
+| x2 | CI width | 0.6274 (0.0065) | 0.6274 (0.0065) | 0.00000000 (0.00000000) | – |
+| x2 | RMSE | 0.3297 (0.0077) | 0.3297 (0.0077) | 0.00000000 (0.00000000) | – |
+| x2 | mean B | 0.00000000 (0.00000000) | 0.0000 (0.0000) | 0.00000000 (0.00000000) | – |
+| x2 | mean T | 0.0269 (0.0007) | 0.0269 (0.0007) | 0.00000000 (0.00000000) | – |
+| mean(x1) = 0 | bias | -0.00344 (0.00603) | -0.00344 (0.00603) | -0.00000000 (0.00000000) | – |
+| mean(x1) | coverage | 0.821 (0.012) | 0.821 (0.012) | 0.000 (0.000) | – |
+| mean(x1) | CI width | 0.5102 (0.0030) | 0.5102 (0.0030) | 0.00000000 (0.00000000) | – |
+| mean(x1) | RMSE | 0.1906 (0.0048) | 0.1906 (0.0048) | 0.00000000 (0.00000000) | – |
+| mean(x1) | mean B | 0.00000000 (0.00000000) | 0.0000 (0.0000) | 0.00000000 (0.00000000) | – |
+| mean(x1) | mean T | 0.0166 (0.0002) | 0.0166 (0.0002) | 0.00000000 (0.00000000) | – |
+
+#### S4 norm+clip² (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x1: norm.
+
+| term | metric | Python | R | Py − R | z |
+|---|---|---|---|---|---|
+| (Intercept) = 0.5 | bias | 0.00388 (0.00576) | 0.00514 (0.00573) | -0.00125 (0.00192) | -0.65 |
+| (Intercept) | % bias | 0.8 (1.2) | 1.0 (1.1) | -0.3 (0.4) | -0.65 |
+| (Intercept) | coverage | 0.951 (0.007) | 0.948 (0.007) | 0.003 (0.006) | +0.48 |
+| (Intercept) | CI width | 0.7612 (0.0051) | 0.7502 (0.0052) | 0.0110 (0.0055) | +2.01 |
+| (Intercept) | RMSE | 0.1821 (0.0042) | 0.1811 (0.0042) | 0.00094 (0.00183) | +0.51 |
+| (Intercept) | mean B | 0.00881 (0.00024) | 0.00828 (0.00026) | 0.000529 (0.000307) | +1.72 |
+| (Intercept) | mean T | 0.0329 (0.0004) | 0.0322 (0.0004) | 0.000721 (0.000380) | +1.89 |
+| x1 = 1 | bias | -0.0117 (0.0076) | -0.00965 (0.00779) | -0.00201 (0.00325) | -0.62 |
+| x1 | % bias | -1.2 (0.8) | -1.0 (0.8) | -0.2 (0.3) | -0.62 |
+| x1 | coverage | 0.962 (0.006) | 0.946 (0.007) | 0.016 (0.007) | +2.37 |
+| x1 | CI width | 1.0898 (0.0158) | 1.0586 (0.0149) | 0.0312 (0.0151) | +2.07 |
+| x1 | RMSE | 0.2421 (0.0061) | 0.2464 (0.0059) | -0.00436 (0.00411) | -1.06 |
+| x1 | mean B | 0.0262 (0.0013) | 0.0240 (0.0011) | 0.00225 (0.00129) | +1.74 |
+| x1 | mean T | 0.0658 (0.0019) | 0.0631 (0.0017) | 0.00272 (0.00159) | +1.71 |
+| x2 = 0.5 | bias | 0.0304 (0.0068) | 0.0337 (0.0068) | -0.00328 (0.00253) | -1.30 |
+| x2 | % bias | 6.1 (1.4) | 6.7 (1.4) | -0.7 (0.5) | -1.30 |
+| x2 | coverage | 0.952 (0.007) | 0.945 (0.007) | 0.007 (0.007) | +1.07 |
+| x2 | CI width | 0.9483 (0.0089) | 0.9347 (0.0091) | 0.0136 (0.0082) | +1.64 |
+| x2 | RMSE | 0.2163 (0.0050) | 0.2169 (0.0047) | -0.00061 (0.00265) | -0.23 |
+| x2 | mean B | 0.0160 (0.0005) | 0.0154 (0.0005) | 0.000644 (0.000555) | +1.16 |
+| x2 | mean T | 0.0505 (0.0009) | 0.0495 (0.0009) | 0.00105 (0.00070) | +1.50 |
+| mean(x1) = 0 | bias | -0.00178 (0.00551) | -0.00291 (0.00551) | 0.00114 (0.00191) | +0.60 |
+| mean(x1) | coverage | 0.956 (0.006) | 0.948 (0.007) | 0.008 (0.007) | +1.13 |
+| mean(x1) | CI width | 0.7422 (0.0059) | 0.7226 (0.0056) | 0.0196 (0.0064) | +3.08 |
+| mean(x1) | RMSE | 0.1742 (0.0042) | 0.1740 (0.0042) | 0.00017 (0.00194) | +0.09 |
+| mean(x1) | mean B | 0.00945 (0.00027) | 0.00852 (0.00025) | 0.000930 (0.000325) | +2.86 |
+| mean(x1) | mean T | 0.0308 (0.0004) | 0.0296 (0.0004) | 0.00115 (0.00040) | +2.90 |
 
 ### S5: g in {a,b,c} (0.5, 0.3, 0.2); x ~ N(0.5 code, 1); y = 0.5[g=b] + 1.0[g=c] + 0.7x + e; g MAR on y 30%; x MCAR 20%; n = 200, maxit = 5
 
@@ -1786,4 +1975,92 @@ Methods: no `method` argument (each engine's default by column type).
 | mean(x) | RMSE | 0.0874 (0.0019) | 0.0869 (0.0019) | 0.000484 (0.000608) | +0.80 |
 | mean(x) | mean B | 0.000851 (0.000021) | 0.000847 (0.000019) | 0.0000037 (0.0000274) | +0.13 |
 | mean(x) | mean T | 0.00732 (0.00004) | 0.00731 (0.00003) | 0.0000175 (0.0000337) | +0.52 |
+
+### S9: model M with p = x1 x2; y = 0.5 + 1.0 x1 + 0.5 x2 + 0.5 p + e; x2 MAR on y 30%; p missing where x2 is; n = 200, maxit = 5
+
+#### S9 default+passive_product² (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: each engine's default by column type; p: passive.
+
+| term | metric | Python | R | Py − R | z |
+|---|---|---|---|---|---|
+| (Intercept) = 0.5 | bias | 0.0867 (0.0029) | 0.0866 (0.0029) | 0.000071 (0.000688) | +0.10 |
+| (Intercept) | % bias | 17.3 (0.6) | 17.3 (0.6) | 0.0 (0.1) | +0.10 |
+| (Intercept) | coverage | 0.859 (0.011) | 0.850 (0.011) | 0.009 (0.007) | +1.21 |
+| (Intercept) | CI width | 0.3755 (0.0014) | 0.3747 (0.0012) | 0.00081 (0.00132) | +0.62 |
+| (Intercept) | RMSE | 0.1271 (0.0024) | 0.1273 (0.0024) | -0.000160 (0.000681) | -0.23 |
+| (Intercept) | mean B | 0.00128 (0.00004) | 0.00125 (0.00004) | 0.0000269 (0.0000435) | +0.62 |
+| (Intercept) | mean T | 0.00890 (0.00006) | 0.00886 (0.00005) | 0.0000411 (0.0000531) | +0.77 |
+| x1 = 1 | bias | 0.1128 (0.0041) | 0.1126 (0.0041) | 0.00025 (0.00105) | +0.24 |
+| x1 | % bias | 11.3 (0.4) | 11.3 (0.4) | 0.0 (0.1) | +0.24 |
+| x1 | coverage | 0.768 (0.013) | 0.752 (0.014) | 0.016 (0.009) | +1.84 |
+| x1 | CI width | 0.4262 (0.0024) | 0.4281 (0.0024) | -0.00188 (0.00279) | -0.67 |
+| x1 | RMSE | 0.1722 (0.0037) | 0.1724 (0.0037) | -0.00022 (0.00104) | -0.21 |
+| x1 | mean B | 0.00261 (0.00008) | 0.00267 (0.00008) | -0.000060 (0.000101) | -0.60 |
+| x1 | mean T | 0.0112 (0.0001) | 0.0112 (0.0001) | -0.000067 (0.000122) | -0.55 |
+| x2 = 0.5 | bias | -0.0996 (0.0043) | -0.0995 (0.0044) | -0.00009 (0.00136) | -0.07 |
+| x2 | % bias | -19.9 (0.9) | -19.9 (0.9) | -0.0 (0.3) | -0.07 |
+| x2 | coverage | 0.868 (0.011) | 0.865 (0.011) | 0.003 (0.010) | +0.31 |
+| x2 | CI width | 0.4938 (0.0037) | 0.4981 (0.0038) | -0.00429 (0.00432) | -0.99 |
+| x2 | RMSE | 0.1696 (0.0039) | 0.1711 (0.0040) | -0.00150 (0.00157) | -0.96 |
+| x2 | mean B | 0.00454 (0.00014) | 0.00472 (0.00015) | -0.000184 (0.000176) | -1.04 |
+| x2 | mean T | 0.0146 (0.0002) | 0.0148 (0.0002) | -0.000204 (0.000212) | -0.96 |
+| p = 0.5 | bias | -0.0811 (0.0029) | -0.0815 (0.0028) | 0.00034 (0.00119) | +0.29 |
+| p | % bias | -16.2 (0.6) | -16.3 (0.6) | 0.1 (0.2) | +0.29 |
+| p | coverage | 0.906 (0.009) | 0.912 (0.009) | -0.006 (0.008) | -0.74 |
+| p | CI width | 0.4240 (0.0037) | 0.4250 (0.0038) | -0.00103 (0.00347) | -0.30 |
+| p | RMSE | 0.1222 (0.0024) | 0.1213 (0.0025) | 0.00086 (0.00128) | +0.67 |
+| p | mean B | 0.00334 (0.00011) | 0.00340 (0.00012) | -0.000060 (0.000131) | -0.46 |
+| p | mean T | 0.0110 (0.0002) | 0.0111 (0.0002) | -0.000067 (0.000158) | -0.42 |
+| mean(p) = 0.5 | bias | -0.0759 (0.0030) | -0.0759 (0.0031) | 0.000033 (0.000761) | +0.04 |
+| mean(p) | % bias | -15.2 (0.6) | -15.2 (0.6) | 0.0 (0.2) | +0.04 |
+| mean(p) | coverage | 0.787 (0.013) | 0.783 (0.013) | 0.004 (0.009) | +0.46 |
+| mean(p) | CI width | 0.3314 (0.0020) | 0.3319 (0.0021) | -0.00049 (0.00201) | -0.25 |
+| mean(p) | RMSE | 0.1214 (0.0023) | 0.1228 (0.0024) | -0.00139 (0.00076) | -1.83 |
+| mean(p) | mean B | 0.00147 (0.00005) | 0.00148 (0.00005) | -0.0000107 (0.0000587) | -0.18 |
+| mean(p) | mean T | 0.00686 (0.00008) | 0.00689 (0.00008) | -0.0000289 (0.0000717) | -0.40 |
+
+#### S9 norm.predict¹+passive_product² (Python 1000 reps, R 1000 reps, 1000 pairs)
+
+Methods: x2: norm.predict; p: passive.
+
+Identity rule: max |qbar Python − qbar R| = 2.66e-15, max B Python 1.54e-32, R 0.00e+00: pass.
+
+| term | metric | Python | R | Py − R | z |
+|---|---|---|---|---|---|
+| (Intercept) = 0.5 | bias | 0.0184 (0.0028) | 0.0184 (0.0028) | -0.00000000 (0.00000000) | – |
+| (Intercept) | % bias | 3.7 (0.6) | 3.7 (0.6) | -0.0 (0.0) | – |
+| (Intercept) | coverage | 0.911 (0.009) | 0.911 (0.009) | 0.000 (0.000) | – |
+| (Intercept) | CI width | 0.3143 (0.0007) | 0.3143 (0.0007) | -0.00000000 (0.00000000) | – |
+| (Intercept) | RMSE | 0.0907 (0.0021) | 0.0907 (0.0021) | 0.00000000 (0.00000000) | – |
+| (Intercept) | mean B | 0.00000000 (0.00000000) | 0.0000 (0.0000) | 0.00000000 (0.00000000) | – |
+| (Intercept) | mean T | 0.00638 (0.00003) | 0.00638 (0.00003) | -0.00000000 (0.00000000) | – |
+| x1 = 1 | bias | -0.0445 (0.0041) | -0.0445 (0.0041) | 0.00000000 (0.00000000) | – |
+| x1 | % bias | -4.4 (0.4) | -4.4 (0.4) | 0.0 (0.0) | – |
+| x1 | coverage | 0.780 (0.013) | 0.780 (0.013) | 0.000 (0.000) | – |
+| x1 | CI width | 0.3399 (0.0009) | 0.3399 (0.0009) | 0.00000000 (0.00000000) | – |
+| x1 | RMSE | 0.1383 (0.0032) | 0.1383 (0.0032) | 0.00000000 (0.00000000) | – |
+| x1 | mean B | 0.00000000 (0.00000000) | 0.0000 (0.0000) | 0.00000000 (0.00000000) | – |
+| x1 | mean T | 0.00748 (0.00004) | 0.00748 (0.00004) | 0.00000000 (0.00000000) | – |
+| x2 = 0.5 | bias | 0.1428 (0.0042) | 0.1428 (0.0042) | 0.00000000 (0.00000000) | – |
+| x2 | % bias | 28.6 (0.8) | 28.6 (0.8) | 0.0 (0.0) | – |
+| x2 | coverage | 0.612 (0.015) | 0.612 (0.015) | 0.000 (0.000) | – |
+| x2 | CI width | 0.3962 (0.0014) | 0.3962 (0.0014) | 0.00000000 (0.00000000) | – |
+| x2 | RMSE | 0.1943 (0.0033) | 0.1943 (0.0033) | 0.00000000 (0.00000000) | – |
+| x2 | mean B | 0.00000000 (0.00000000) | 0.0000 (0.0000) | 0.00000000 (0.00000000) | – |
+| x2 | mean T | 0.0102 (0.0001) | 0.0102 (0.0001) | 0.00000000 (0.00000000) | – |
+| p = 0.5 | bias | 0.0561 (0.0030) | 0.0561 (0.0030) | 0.00000000 (0.00000000) | – |
+| p | % bias | 11.2 (0.6) | 11.2 (0.6) | 0.0 (0.0) | – |
+| p | coverage | 0.852 (0.011) | 0.852 (0.011) | 0.000 (0.000) | – |
+| p | CI width | 0.3013 (0.0017) | 0.3013 (0.0017) | -0.00000000 (0.00000000) | – |
+| p | RMSE | 0.1094 (0.0028) | 0.1094 (0.0028) | 0.00000000 (0.00000000) | – |
+| p | mean B | 0.00000000 (0.00000000) | 0.0000 (0.0000) | 0.00000000 (0.00000000) | – |
+| p | mean T | 0.00603 (0.00007) | 0.00603 (0.00007) | -0.00000000 (0.00000000) | – |
+| mean(p) = 0.5 | bias | -0.0389 (0.0031) | -0.0389 (0.0031) | 0.00000000 (0.00000000) | – |
+| mean(p) | % bias | -7.8 (0.6) | -7.8 (0.6) | 0.0 (0.0) | – |
+| mean(p) | coverage | 0.776 (0.013) | 0.776 (0.013) | 0.000 (0.000) | – |
+| mean(p) | CI width | 0.2777 (0.0014) | 0.2777 (0.0014) | 0.00000000 (0.00000000) | – |
+| mean(p) | RMSE | 0.1052 (0.0022) | 0.1052 (0.0022) | 0.00000000 (0.00000000) | – |
+| mean(p) | mean B | 0.00000000 (0.00000000) | 0.0000 (0.0000) | 0.00000000 (0.00000000) | – |
+| mean(p) | mean T | 0.00508 (0.00005) | 0.00508 (0.00005) | 0.00000000 (0.00000000) | – |
 
