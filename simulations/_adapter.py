@@ -7,15 +7,25 @@ What it fixes explicitly, so that the study does not depend on defaults:
 
 - the full predictor matrix (all ones, zero diagonal), as R's
   ``make.predictorMatrix``;
-- the visit sequence: incomplete columns in column order (R's ``"roman"``);
+- the visit sequence: the columns with cells to impute, in column order
+  (R's ``"roman"``): the incomplete columns, or every column under
+  ``where="all"``;
 - the method of every incomplete column, given by the study cell; or no
   ``method`` argument at all (cell ``default``), so that the library chooses
   by column type as R's ``make.method`` does;
-- ``n_imputations`` and ``maxit``.
+- ``n_imputations`` and ``maxit``;
+- the arguments of the cell's variant (``study.VARIANTS``), which
+  ``run_r.R`` gives R in the same way: ``ignore_half`` (``ignore``, the
+  second half of the rows), ``where_all`` (``where="all"``; a complete
+  column gets the default method of its type), ``clip`` (``post`` clips the
+  imputations of each incomplete numeric column to the range of its observed
+  values), ``passive_product`` (``p`` passive, ``x1 * x2``, and not a
+  predictor of ``x2``).
 
 It records the method the library used for every column (``MICE.method``),
 translated to R's names, so that the report can compare it with R's
-``imp$method``.
+``imp$method``; a passive column is recorded as ``"passive"`` (R records its
+formula).
 
 joblib runs sequentially inside the call: the study parallelises over
 replications instead. rf grows its trees in one job by default anyway; the
@@ -127,7 +137,45 @@ class Outcome:
         return self.datasets is not None
 
 
-def impute(df, methods, m, maxit, seed):
+def _clip(lo, hi):
+    """The ``post`` function of variant ``clip``: imputations clipped to ``[lo, hi]``."""
+    return lambda imp, data: imp.clip(lo, hi)
+
+
+def _product(data):
+    """The passive function of variant ``passive_product``."""
+    return data["x1"] * data["x2"]
+
+
+def variant_arguments(variant, df):
+    """Arguments of ``MICE.impute`` for a variant, besides the methods, and the predictor matrix.
+
+    Returns ``(kwargs, predictor_matrix)``; ``run_r.R`` (``variant_arguments``)
+    gives R the same.
+    """
+    predictor_matrix = full_predictor_matrix(df.columns)
+    if variant is None:
+        return {}, predictor_matrix
+    if variant == "ignore_half":
+        # Rows n/2 + 1 to n in R's numbering
+        n = len(df)
+        return {"ignore": np.arange(n) >= n // 2}, predictor_matrix
+    if variant == "where_all":
+        return {"where": "all"}, predictor_matrix
+    if variant == "clip":
+        post = {}
+        for col in df.columns:
+            values = df[col]
+            if values.isna().any() and pd.api.types.is_numeric_dtype(values):
+                post[col] = _clip(values.min(), values.max())
+        return {"post": post}, predictor_matrix
+    if variant == "passive_product":
+        predictor_matrix.loc["x2", "p"] = 0
+        return {"passive": {"p": _product}}, predictor_matrix
+    raise ValueError(f"unknown variant {variant!r}")
+
+
+def impute(df, methods, m, maxit, seed, variant=None):
     """Impute ``df`` with the given method of every incomplete column.
 
     Parameters
@@ -138,12 +186,15 @@ def impute(df, methods, m, maxit, seed):
     methods : dict or None
         Method of each incomplete column, by R's name (``pmm``,
         ``midastouch``, ``norm``, ``logreg.boot``, ...). Every incomplete
-        column must be in it. None: no ``method`` argument, so the library
-        chooses each column's method by its type.
+        column must be in it, except a passive column of the variant. None:
+        no ``method`` argument, so the library chooses each column's method
+        by its type.
     m, maxit : int
         Number of imputations and iterations.
     seed : int
         Seed of this replication; passed only if the library accepts it.
+    variant : str or None
+        The cell's variant (``study.VARIANTS``), see :func:`variant_arguments`.
 
     Returns
     -------
@@ -155,20 +206,26 @@ def impute(df, methods, m, maxit, seed):
     Raises
     ------
     ValueError
-        If ``methods`` misses an incomplete column (an error of the study).
+        If ``methods`` misses an incomplete column, or the variant is
+        unknown (errors of the study).
     """
     incomplete = [c for c in df.columns if df[c].isna().any()]
+    extra, predictor_matrix = variant_arguments(variant, df)
+    passive = list(extra.get("passive", {}))
+    # The columns with cells to impute, in column order
+    imputed = list(df.columns) if extra.get("where") == "all" else incomplete
     kwargs = dict(
         n_imputations=int(m),
         maxit=int(maxit),
-        predictor_matrix=full_predictor_matrix(df.columns),
-        visit_sequence=list(incomplete),
+        predictor_matrix=predictor_matrix,
+        visit_sequence=list(imputed),
+        **extra,
     )
     if methods is not None:
-        unassigned = [c for c in incomplete if c not in methods]
+        unassigned = [c for c in incomplete if c not in methods and c not in passive]
         if unassigned:
             raise ValueError(f"no method for the incomplete column(s) {unassigned}")
-        kwargs["method"] = {c: PYTHON_METHOD[methods[c]] for c in incomplete}
+        kwargs["method"] = {c: PYTHON_METHOD[methods[c]] for c in incomplete if c not in passive}
     if SEED_SUPPORTED:
         kwargs["seed"] = int(seed)
     else:

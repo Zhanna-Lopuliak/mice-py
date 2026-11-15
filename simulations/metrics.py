@@ -37,16 +37,23 @@ Monte Carlo standard errors (R = number of replications):
 - other paired differences: sd(difference) / sqrt(R); for RMSE the paired
   difference of squared errors divided by (RMSE_py + RMSE_r).
 
-Identity rule. A deterministic method (cells with ``rule = "identity"`` in
-the manifest: ``norm.predict`` and ``mean`` on S4, one incomplete column and
-maxit = 1) draws nothing, so both engines must give the same completed data
-up to rounding and every between-imputation variance is 0. The paired
-differences and their Monte Carlo errors are then 0 or rounding noise, and z
-is 0/0 or meaningless. Such a cell gets no z and no flag; it passes when the
-largest |qbar_python - qbar_R| over replications and terms is at most
-``IDENTITY_TOL`` (1e-8) and B = 0 on both sides, to rounding: the largest B
-of each engine at most ``IDENTITY_TOL ** 2`` (the m estimates differ by at
-most about 1e-8).
+Identity rule. In a deterministic cell (``rule = "identity"`` in the
+manifest) nothing that is drawn reaches the completed data: ``norm.predict``
+and ``mean`` on S4 (one incomplete column, maxit = 1, so the start values are
+overwritten before anything reads them), also with half of the rows ignored,
+and ``norm.predict`` on S9 with the passive ``p`` (``x2`` is predicted from
+complete columns only and ``p`` is computed from it). Both engines must then
+give the same completed data up to rounding, and every between-imputation
+variance is 0. The paired differences and their Monte Carlo errors are then
+0 or rounding noise, and z is 0/0 or meaningless. Such a cell gets no z and
+no flag; it passes when the largest |qbar_python - qbar_R| over replications
+and terms is at most ``IDENTITY_TOL`` (1e-8) and B = 0 on both sides, to
+rounding: the largest B of each engine at most ``IDENTITY_TOL ** 2`` (the m
+estimates differ by at most about 1e-8).
+
+Cells are keyed by ``(scenario, label)``: the label is the study method,
+followed by ``+<variant>`` for a cell with a variant (``study.cell_label``),
+and it is the ``method`` column of the result and status files.
 """
 
 from __future__ import annotations
@@ -127,14 +134,22 @@ def load_truth(manifest_path):
     }
 
 
+def cell_label(cell):
+    """The label of a manifest cell; manifests written before variants existed have none."""
+    if cell.get("label"):
+        return cell["label"]
+    variant = cell.get("variant")
+    return cell["method"] if variant is None else f"{cell['method']}+{variant}"
+
+
 def load_cells(manifest_path):
-    """The cells of the manifest as ``{(scenario, method): cell}`` (dicts as ``study.py`` wrote them)."""
+    """The cells of the manifest as ``{(scenario, label): cell}`` (dicts as ``study.py`` wrote them)."""
     manifest = json.loads(Path(manifest_path).read_text())
-    return {(c["scenario"], c["method"]): c for c in manifest.get("cells", [])}
+    return {(c["scenario"], cell_label(c)): c for c in manifest.get("cells", [])}
 
 
 def identity_cells(cells):
-    """``{(scenario, method)}`` of the cells judged by the identity rule."""
+    """``{(scenario, label)}`` of the cells judged by the identity rule."""
     return {key for key, c in cells.items() if c.get("rule") == "identity"}
 
 
@@ -257,7 +272,7 @@ def _z(diff, se):
 def paired_differences(pooled, identity=frozenset()):
     """Long table: scenario, method, term, metric, diff, diff_se, z, flagged, n_pairs.
 
-    Cells in ``identity`` (``(scenario, method)`` pairs) get z = NaN and no
+    Cells in ``identity`` (``(scenario, label)`` pairs) get z = NaN and no
     flag: they are judged by :func:`identity_check`.
     """
     cols = ["scenario", "method", "term", "rep", "truth", "qbar", "width", "covered", "sqerr", "b", "t"]
@@ -359,15 +374,18 @@ def harness_identity(results):
 def identity_check(pooled, identity):
     """The identity rule for each deterministic cell (see the module docstring).
 
-    Returns a DataFrame with one row per cell: ``scenario, method, pairs``
-    (paired replications), ``terms``, ``max_abs_qbar`` (largest |qbar
-    Python - qbar R| over paired replications and terms), ``max_b_python``,
-    ``max_b_r`` (largest B of each engine over all its replications) and
-    ``passed``.
+    Returns a DataFrame with one row per cell that has results in at least
+    one engine: ``scenario, method, pairs`` (paired replications),
+    ``terms``, ``max_abs_qbar`` (largest |qbar Python - qbar R| over paired
+    replications and terms), ``max_b_python``, ``max_b_r`` (largest B of
+    each engine over all its replications) and ``passed``. A cell that has
+    not run in either engine is left out.
     """
     rows = []
     for sid, method in sorted(identity):
         c = pooled[(pooled["scenario"] == sid) & (pooled["method"] == method)]
+        if c.empty:
+            continue
         py = c[c["engine"] == "python"]
         r = c[c["engine"] == "r"]
         both = py.merge(r, on=["term", "rep"], suffixes=("_py", "_r"))
@@ -399,11 +417,29 @@ def identity_check(pooled, identity):
 # ---------------------------------------------------------------------------
 
 
+#: The method of a passive column in the records: mice-py's ``MICE.method``
+#: has ``"passive"``, R's ``imp$method`` the formula (``"~ I(x1 * x2)"``).
+PASSIVE = "passive"
+
+
+def normalise_methods(record):
+    """A method record with every passive formula (a method starting with ``~``) read as ``"passive"``."""
+    if not record:
+        return record
+    entries = []
+    for entry in record.split(";"):
+        col, sep, meth = entry.partition("=")
+        entries.append(f"{col}{sep}{PASSIVE}" if meth.lstrip().startswith("~") else entry)
+    return ";".join(entries)
+
+
 def expected_methods(cell, columns):
     """The method record a cell should produce, ``"col=method;..."`` over all ``columns``.
 
-    ``expected_methods`` of a ``default`` cell, otherwise the cell's own
-    method of each incomplete column; ``""`` for the other columns.
+    The cell's ``expected_methods`` where it has them (a ``default`` cell, a
+    cell with a variant under which an engine sets methods itself),
+    otherwise the cell's own method of each incomplete column; ``""`` for the
+    other columns.
     """
     wanted = cell.get("expected_methods") or cell.get("columns") or {}
     return ";".join(f"{c}={wanted.get(c, '')}" for c in columns)
@@ -412,13 +448,14 @@ def expected_methods(cell, columns):
 def methods_check(status, cells, columns_by_scenario):
     """The methods each engine recorded (``methods`` in the status files), per cell.
 
-    Only replications that succeeded in both engines are compared. Returns
-    a DataFrame with one row per cell: ``scenario, method, python, r`` (the
-    distinct records with their counts), ``pairs``, ``equal`` (pairs where
-    Python's record equals R's), ``expected`` and ``python_expected``,
+    Only replications that succeeded in both engines are compared. R's
+    passive formula counts as mice-py's ``"passive"`` (:func:`normalise_methods`).
+    Returns a DataFrame with one row per cell: ``scenario, method, python, r``
+    (the distinct records with their counts), ``pairs``, ``equal`` (pairs
+    where Python's record equals R's), ``expected`` and ``python_expected``,
     ``r_expected`` (replications whose record is the expected one), and
-    ``passed``: Python equals R in every pair and, for a ``default`` cell,
-    both chose the expected methods every time.
+    ``passed``: Python equals R in every pair and, for a cell with
+    ``expected_methods``, both chose the expected methods every time.
     """
     cols = [
         "scenario",
@@ -435,7 +472,7 @@ def methods_check(status, cells, columns_by_scenario):
     if status.empty or "methods" not in status:
         return pd.DataFrame(columns=cols)
     st = status[(status["method"] != "complete") & (status["status"] == "ok")].copy()
-    st["methods"] = st["methods"].fillna("").astype(str)
+    st["methods"] = st["methods"].fillna("").astype(str).map(normalise_methods)
     rows = []
     for (sid, method), g in st.groupby(["scenario", "method"], sort=False):
         py = g[g["engine"] == "python"].set_index("rep")["methods"]

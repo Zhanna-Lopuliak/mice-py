@@ -35,6 +35,20 @@ IMPROPER_NOTE = (
     "every cell: mice-py matches R."
 )
 
+#: Why the cells of the identity rule draw nothing that reaches the completed
+#: data, per scenario.
+IDENTITY_REASONS = {
+    "S4": (
+        "on S4 `norm.predict` and `mean` impute the only incomplete column, whose predictors are "
+        "complete, in one iteration, so the start values are overwritten before anything reads them "
+        "(also with half of the rows ignored)"
+    ),
+    "S9": (
+        "on S9 `norm.predict` imputes `x2` from the complete `x1` and `y` only, and the passive `p`, "
+        "which does not predict `x2`, is computed from it, so every iteration gives the same values"
+    ),
+}
+
 # Failures whose cause is known. (engine, method or None, error class, regex
 # on the message, label). The first match wins.
 KNOWN_FAILURES = [
@@ -175,8 +189,9 @@ def extrapolate(timing, cells, workers):
     ``workers`` maps an engine to its number of processes. Measured seconds
     come from runs with all processes busy, so they include contention; wall
     time is CPU time / processes. A cell that was not measured (or failed
-    throughout) takes the slowest measured scenario of the same method (or
-    the slowest cell of all) and is listed as a guess.
+    throughout) takes the slowest measured cell of the same study method,
+    with or without a variant (or the slowest cell of all), and is listed as
+    a guess.
     """
     if timing.empty:
         return None
@@ -188,11 +203,12 @@ def extrapolate(timing, cells, workers):
         total = 0.0
         guessed = []
         for cell in cells:
-            key = (cell["scenario"], cell["method"])
+            key = (cell["scenario"], mx.cell_label(cell))
             if key in per.index and np.isfinite(per[key]):
                 sec = per[key]
             else:
-                same = per[[k for k in per.index if k[1] == cell["method"]]].dropna()
+                method = key[1].partition("+")[0]
+                same = per[[k for k in per.index if k[1].partition("+")[0] == method]].dropna()
                 sec = same.max() if len(same) else per.dropna().max()
                 guessed.append(f"{key[0]}/{key[1]}")
             total += cell["reps"] * sec
@@ -201,14 +217,43 @@ def extrapolate(timing, cells, workers):
     return out
 
 
-def _cell_label(method):
-    return f"{method}¹" if method in IMPROPER_METHODS else method
+def _cell_label(label):
+    """A cell's label with its footnote marks: ¹ improper method, ² variant."""
+    method, _, variant = label.partition("+")
+    text = f"{method}¹" if method in IMPROPER_METHODS else method
+    return f"{text}+{variant}²" if variant else text
 
 
 def _columns_text(cell):
-    if cell.get("columns") is None:
-        return "no `method` argument (each engine's default by column type)"
-    return ", ".join(f"{c}: {m}" for c, m in cell["columns"].items())
+    """The method of each incomplete column; a variant adds the passive columns and the complete ones it imputes."""
+    expected = cell.get("expected_methods") or {}
+    passive = [c for c, m in expected.items() if m == mx.PASSIVE]
+    columns = cell.get("columns")
+    if columns is None:
+        text = "no `method` argument (each engine's default by column type)"
+        if passive:
+            text = "each engine's default by column type"
+    else:
+        text = ", ".join(f"{c}: {m}" for c, m in columns.items())
+        made = [c for c in expected if c not in columns and c not in passive]
+        if made:
+            text += "; " + ", ".join(f"{c} (complete): default ({expected[c]})" for c in made)
+    if passive:
+        text += "; " + ", ".join(f"{c}: passive" for c in passive)
+    return text
+
+
+def _variants_note(cells, variants):
+    """Footnote ² on the variants of the cells, or None if no cell has one."""
+    used = list(dict.fromkeys(c.get("variant") for c in cells.values() if c.get("variant")))
+    if not used:
+        return None
+    lines = [
+        "² A cell with a variant (`method+variant`) gives both engines the same arguments beyond the methods:",
+        "",
+    ]
+    lines += [f"- `{v}`: {variants.get(v, '(not described in the manifest)')}." for v in used]
+    return "\n".join(lines)
 
 
 def _sci(x):
@@ -361,10 +406,12 @@ def build_report(work_dir, out_dir):
     w("## Cells")
     w("")
     ran = status[status["method"] != "complete"].groupby(["scenario", "method", "engine"]).size()
+    variants_note = _variants_note(cells, manifest.get("variants", {}))
     w(
-        "A study method on a scenario. Replications: planned for the full study, and run here by "
-        "Python and R. Rule `z`: every paired difference |z| ≤ "
-        f"{mx.Z_FLAG}; rule `identity`: see [Identity rule](#identity-rule)."
+        "A study method on a scenario"
+        + (", some with a variant (²)" if variants_note else "")
+        + ". Replications: planned for the full study, and run here by Python and R. Rule `z`: every "
+        f"paired difference |z| ≤ {mx.Z_FLAG}; rule `identity`: see [Identity rule](#identity-rule)."
     )
     w("")
     w(
@@ -389,6 +436,9 @@ def build_report(work_dir, out_dir):
     w("")
     w(f"¹ {IMPROPER_NOTE}")
     w("")
+    if variants_note:
+        w(variants_note)
+        w("")
 
     # Harness
     w("## Harness checks")
@@ -446,7 +496,8 @@ def build_report(work_dir, out_dir):
         w(
             "Each engine records the method of every column as it ran it (Python `MICE.method` in R's "
             "names, R `imp$method`; empty for a column that is not imputed). Only replications that "
-            "succeeded in both engines are compared."
+            "succeeded in both engines are compared. A passive column is `passive` in mice-py and its "
+            "formula in R (`~ I(x1 * x2)`); the comparison reads R's formula as `passive`."
         )
         w("")
         is_default = [
@@ -454,7 +505,11 @@ def build_report(work_dir, out_dir):
         ]
         default = mc[is_default]
         if not default.empty:
-            w("Cells without a `method` argument, where each engine chooses by column type (R's `make.method`):")
+            w(
+                "Cells where an engine sets methods itself, checked against the expected record: without a "
+                "`method` argument each engine chooses by column type (R's `make.method`); under `where_all` "
+                "a complete column gets the default of its type; a passive column is `passive`:"
+            )
             w("")
             w(
                 md_table(
@@ -500,11 +555,13 @@ def build_report(work_dir, out_dir):
     if ic.empty:
         w("No cell is judged by the identity rule.")
     else:
+        reasons = [IDENTITY_REASONS[sid] for sid in dict.fromkeys(ic["scenario"]) if sid in IDENTITY_REASONS]
         w(
-            "Deterministic methods on S4 (one incomplete column, maxit = 1) draw nothing, so the paired "
-            "z statistic is 0/0 and is not computed. Such a cell passes when the largest |qbar Python − "
-            f"qbar R| over replications and terms is at most {mx.IDENTITY_TOL:g} and B = 0 in both "
-            f"engines (to rounding: largest B at most {mx.IDENTITY_TOL**2:g})."
+            "In these cells nothing that is drawn reaches the completed data"
+            + (": " + "; ".join(reasons) if reasons else "")
+            + ". So the paired z statistic is 0/0 and is not computed. Such a cell passes when the "
+            f"largest |qbar Python − qbar R| over replications and terms is at most {mx.IDENTITY_TOL:g} "
+            f"and B = 0 in both engines (to rounding: largest B at most {mx.IDENTITY_TOL**2:g})."
         )
         w("")
         w(
@@ -540,10 +597,10 @@ def build_report(work_dir, out_dir):
             "100 replications they are not meaningful and flags are expected by chance."
         )
         w("")
-    if identity:
+    if not ic.empty:
         w(
             "Cells judged by the identity rule have no z and are not counted: "
-            + ", ".join(f"{sid} {method}" for sid, method in sorted(identity))
+            + ", ".join(f"{r.scenario} {r.method}" for r in ic.itertuples())
             + "."
         )
         w("")
@@ -655,8 +712,8 @@ def build_report(work_dir, out_dir):
                 g = ""
                 if e["guessed"]:
                     g = (
-                        "; cells not measured, taken from the slowest measured scenario of the "
-                        f"same method: {', '.join(e['guessed'])}"
+                        "; cells not measured, taken from the slowest measured cell of the "
+                        f"same study method (or the slowest cell): {', '.join(e['guessed'])}"
                     )
                 w(
                     f"- {engine}: about {e['wall_seconds'] / 60:.0f} min with {e['workers']} processes "
@@ -675,6 +732,9 @@ def build_report(work_dir, out_dir):
     w("")
     w(f"¹ {IMPROPER_NOTE}")
     w("")
+    if variants_note:
+        w(variants_note)
+        w("")
     ident_by_cell = {(r.scenario, r.method): r for r in ic.itertuples()} if not ic.empty else {}
     for sid, spec in manifest["scenarios"].items():
         sub = summary[(summary["scenario"] == sid) & (summary["method"] != "complete")]

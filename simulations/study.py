@@ -4,19 +4,22 @@ Run from the repository root::
 
     uv run python simulations/study.py generate   [--scenarios S1,S4] [--reps N]
     uv run python simulations/study.py run-python [--scenarios S1,S4] [--methods pmm,default]
-                                                   [--reps N] [--jobs 8]
+                                                   [--variants none,clip] [--reps N] [--jobs 8]
     uv run python simulations/study.py all        (generate, then run-python; the default)
 
 Then ``Rscript simulations/run_r.R`` (same options) and
 ``uv run python simulations/report.py``.
 
 The study is a table of cells (:data:`CELLS`): a study method on a scenario,
-with its number of replications. A study method gives each incomplete column
-a method (:data:`STUDY_METHODS`), or gives no method at all (``default``:
-each engine chooses by column type). ``generate`` writes the cells, with the
-method of every column, to the manifest; ``run-python`` and ``run_r.R`` run
-the cells of the manifest, so both engines run exactly the same cells.
-``--scenarios`` and ``--methods`` select cells; ``--reps N`` caps the
+with its number of replications, and optionally a variant. A study method
+gives each incomplete column a method (:data:`STUDY_METHODS`), or gives no
+method at all (``default``: each engine chooses by column type). A variant
+(:data:`VARIANTS`) gives both engines further arguments (``ignore``,
+``where``, ``post``, a passive column); ``_adapter.py`` and ``run_r.R``
+implement each by its name. ``generate`` writes the cells, with the method of
+every column, to the manifest; ``run-python`` and ``run_r.R`` run the cells
+of the manifest, so both engines run exactly the same cells. ``--scenarios``,
+``--methods`` and ``--variants`` select cells; ``--reps N`` caps the
 replications of every selected cell (and the datasets ``generate`` writes).
 
 Files (all under ``simulations/work/``, git-ignored):
@@ -24,18 +27,21 @@ Files (all under ``simulations/work/``, git-ignored):
 - ``data/<scenario>/rep_<k>.csv``: incomplete dataset k (1-based);
 - ``data/<scenario>/complete/rep_<k>.csv``: the same dataset before deletion;
 - ``data/manifest.json``: scenario specifications and cells for ``run_r.R``;
-- ``results/python_<scenario>_<method>.csv``: one row per replication and term,
+- ``results/python_<scenario>_<label>.csv``: one row per replication and term,
   columns ``scenario, method, rep, term, qbar, ubar, b, m, n, dfcom``;
-- ``results/python_<scenario>_<method>_status.csv``: one row per replication,
+- ``results/python_<scenario>_<label>_status.csv``: one row per replication,
   ``status`` ("ok" or "failed"), exception class and message, warnings, the
   methods the library used (``methods``, ``col=method;...`` in data order,
   R's names), seconds (``n_events``/``events`` are R's ``loggedEvents`` and
   stay empty here);
 - ``results/python_meta.json``: library version, whether seeds were honoured.
 
-``method`` is the study method, with R's names (``midastouch``, not
-``midas``). The pseudo-method ``complete`` analyses the data before deletion
-(m = 1, b = 0) and validates the harness; it always runs.
+The label of a cell (:func:`cell_label`) is its study method, with R's names
+(``midastouch``, not ``midas``), followed by ``+<variant>`` for a cell with a
+variant (``pmm+ignore_half``); it is the ``method`` column of the result
+files, so a cell without a variant keeps the label, files and results it had
+before variants existed. The pseudo-method ``complete`` analyses the data
+before deletion (m = 1, b = 0) and validates the harness; it always runs.
 """
 
 from __future__ import annotations
@@ -101,14 +107,50 @@ STUDY_METHODS = {
 #: must agree to rounding (``metrics.identity_check``).
 RULES = ("z", "identity")
 
+#: Variants of a cell: arguments beyond the methods, the same in both
+#: engines. ``_adapter.impute`` and ``run_r.R`` implement each by its name;
+#: the text says what it does and goes to the manifest and the report.
+VARIANTS = {
+    "ignore_half": (
+        "the second half of the rows (n/2 + 1 to n: rows 101 to 200 in S3, 26 to 50 in S4) is left out of "
+        "the fits and of the start values (`ignore`); its missing cells are imputed all the same"
+    ),
+    "where_all": (
+        'every cell is imputed (`where = "all"`), the observed ones too, so the analysis runs on imputed '
+        "values only; a complete column gets the default method of its type"
+    ),
+    "clip": (
+        "the imputations of each incomplete numeric column are clipped to the range of its observed values "
+        "by `post` (Python `imp.clip(lo, hi)`, R `squeeze()`)"
+    ),
+    "passive_product": (
+        "`p` is passive, `p = x1 * x2` (Python `passive`, R method `~ I(x1 * x2)`), and does not predict `x2` "
+        "(its entry in the predictor matrix is 0)"
+    ),
+}
+
+#: Passive columns of a variant; the study method gives them no method.
+PASSIVE_COLUMNS = {"passive_product": ("p",)}
+
+#: Name of the pseudo-variant that selects the cells without a variant
+#: (``--variants none``).
+NO_VARIANT = "none"
+
+
+def cell_label(method, variant=None):
+    """``method``, or ``method+variant`` for a cell with a variant: the cell's name in files and report."""
+    return method if variant is None else f"{method}+{variant}"
+
 
 @dataclass(frozen=True)
 class Cell:
-    """One cell of the study: a study method on a scenario.
+    """One cell of the study: a study method on a scenario, optionally with a variant.
 
-    ``expected`` (``default`` cells only) is the method of each incomplete
-    column that R's ``make.method`` chooses; the report checks that both
-    engines chose it.
+    ``expected`` is the method record both engines must produce, for the
+    columns whose method an engine sets itself: every incomplete column of a
+    ``default`` cell (R's ``make.method``), a complete column that a variant
+    makes imputed, a passive column (``"passive"``, R's formula counts as
+    that). The report checks that both engines recorded it.
     """
 
     method: str
@@ -116,15 +158,26 @@ class Cell:
     reps: int = DEFAULT_REPS
     rule: str = "z"
     expected: dict | None = None
+    variant: str | None = None
+
+    @property
+    def label(self):
+        return cell_label(self.method, self.variant)
 
     def columns(self):
-        """Method of each incomplete column of the scenario (R's names), or None for ``default``."""
+        """Method of each incomplete column of the scenario (R's names), or None for ``default``.
+
+        A passive column of the variant gets no method.
+        """
         kinds = STUDY_METHODS[self.method]
         if kinds is None:
             return None
         sc = SCENARIOS[self.scenario]
+        passive = PASSIVE_COLUMNS.get(self.variant, ())
         out = {}
         for col in sc.incomplete:
+            if col in passive:
+                continue
             method = kinds[1] if col in sc.categorical else kinds[0]
             if method is None:
                 raise ValueError(f"study method {self.method!r} has no method for column {col!r} of {sc.id}")
@@ -140,11 +193,14 @@ class Cell:
             "rule": self.rule,
             "columns": self.columns(),
             "expected_methods": self.expected,
+            "variant": self.variant,
+            "label": self.label,
         }
 
 
 #: The cells of the study. The 0.2 cells (five donor methods on S1-S6) come
-#: first, unchanged; then the model-based methods of 0.3 and the defaults.
+#: first, unchanged; then the model-based methods of 0.3 and the defaults;
+#: then the variants of 0.4.
 CELLS = [
     *(
         Cell(method, sid, RF_REPS if method == "rf" else DEFAULT_REPS)
@@ -163,6 +219,23 @@ CELLS = [
     Cell("default", "S7", expected={"b": "logreg", "x": "pmm"}),
     Cell("default", "S8", expected={"o": "polr", "x": "pmm"}),
     Cell("logreg.boot", "S7"),
+    Cell("pmm", "S3", variant="ignore_half"),
+    # As norm.predict on S4: the ignored rows change the fit, and the start
+    # values, the only draws, are overwritten before anything reads them
+    Cell("norm.predict", "S4", rule="identity", variant="ignore_half"),
+    Cell("pmm", "S3", variant="where_all", expected={"x1": "pmm", "x2": "pmm", "y": "pmm"}),
+    Cell("norm", "S4", variant="clip"),
+    Cell("default", "S9", variant="passive_product", expected={"x2": "pmm", "p": "passive"}),
+    # x2 is predicted from the complete x1 and y only, and p, which does not
+    # predict x2, is computed from it: every iteration gives the same values,
+    # and the start values do not reach them
+    Cell(
+        "norm.predict",
+        "S9",
+        rule="identity",
+        variant="passive_product",
+        expected={"x2": "norm.predict", "p": "passive"},
+    ),
 ]
 
 RESULT_COLUMNS = ["scenario", "method", "rep", "term", "qbar", "ubar", "b", "m", "n", "dfcom"]
@@ -192,11 +265,16 @@ def cell_specs():
     return [cell.spec() for cell in CELLS]
 
 
-def select_cells(cells, scenarios, methods, reps_cap):
-    """The cells (manifest dicts) of the given scenarios and methods, with ``reps`` capped."""
+def select_cells(cells, scenarios, methods, reps_cap, variants=None):
+    """The cells (manifest dicts) of the given scenarios, methods and variants, with ``reps`` capped.
+
+    ``variants`` lists variant names, :data:`NO_VARIANT` for the cells
+    without one; None selects every variant.
+    """
     out = []
     for cell in cells:
-        if cell["scenario"] in scenarios and cell["method"] in methods:
+        variant = cell.get("variant") or NO_VARIANT
+        if cell["scenario"] in scenarios and cell["method"] in methods and (variants is None or variant in variants):
             reps = cell["reps"] if reps_cap is None else min(cell["reps"], reps_cap)
             out.append({**cell, "reps": reps})
     return out
@@ -269,6 +347,7 @@ def cmd_generate(args):
         mean_rate = pd.DataFrame(rates[sid]).mean().round(4).to_dict()
         print(f"{sid}: {need} datasets, mean missing rate per column {mean_rate}")
     manifest["cells"] = cell_specs()
+    manifest["variants"] = dict(VARIANTS)
     manifest["seed_formula"] = "scenario_index * 100000 + rep"
     manifest["generator"] = "numpy.random.default_rng([scenario_index, rep])"
     manifest["numpy"] = np.__version__
@@ -292,16 +371,17 @@ def _pool_terms(per_imputation, m):
 
 
 def _run_one(args):
-    """One (scenario, method, rep): impute, analyse, return rows and status.
+    """One (scenario, cell, rep): impute, analyse, return rows and status.
 
-    ``columns`` is the cell's method of each incomplete column, or None for
-    ``default`` (no method argument).
+    ``label`` is the cell's label (the ``method`` column of the results),
+    ``columns`` the cell's method of each incomplete column, or None for
+    ``default`` (no method argument), ``variant`` its variant or None.
     """
-    scenario_id, method, columns, rep, data_dir = args
+    scenario_id, label, columns, variant, rep, data_dir = args
     sc = SCENARIOS[scenario_id]
     status = dict(
         scenario=scenario_id,
-        method=method,
+        method=label,
         rep=rep,
         status="ok",
         error_class="",
@@ -317,7 +397,7 @@ def _run_one(args):
     rows = []
     stage = "read"
     try:
-        if method == COMPLETE:
+        if label == COMPLETE:
             df = read_dataset(Path(data_dir) / scenario_id / "complete" / f"rep_{rep}.csv", sc)
             stage = "analysis"
             analyses, m = [analyse(df, sc)], 1
@@ -326,7 +406,9 @@ def _run_one(args):
 
             df = read_dataset(Path(data_dir) / scenario_id / f"rep_{rep}.csv", sc)
             stage = "imputation"
-            outcome = _adapter.impute(df, columns, M_IMPUTATIONS, sc.maxit, replication_seed(sc.index, rep))
+            outcome = _adapter.impute(
+                df, columns, M_IMPUTATIONS, sc.maxit, replication_seed(sc.index, rep), variant=variant
+            )
             status["n_warnings"] = len(outcome.events)
             status["warnings"] = " | ".join(sorted(set(outcome.events)))[:500]
             if outcome.methods is not None:
@@ -347,7 +429,7 @@ def _run_one(args):
             rows.append(
                 dict(
                     scenario=scenario_id,
-                    method=method,
+                    method=label,
                     rep=rep,
                     term=term,
                     qbar=qbar[i],
@@ -382,12 +464,13 @@ def cmd_run_python(args):
 
     if manifest.get("cells") != cell_specs():
         sys.exit(f"the cells in {manifest_path} differ from study.CELLS: run 'study.py generate' again")
-    cells = select_cells(manifest["cells"], args.scenarios, args.methods, args.reps)
+    cells = select_cells(manifest["cells"], args.scenarios, args.methods, args.reps, args.variants)
     if not cells:
-        sys.exit("no cell matches --scenarios and --methods")
+        sys.exit("no cell matches --scenarios, --methods and --variants")
 
-    plan = {}  # (scenario, method) -> reps
-    columns = {}  # (scenario, method) -> method of each incomplete column, or None
+    plan = {}  # (scenario, label) -> reps
+    columns = {}  # (scenario, label) -> method of each incomplete column, or None
+    variants = {}  # (scenario, label) -> variant or None
     for sid in args.scenarios:
         own = [c for c in cells if c["scenario"] == sid]
         if not own:
@@ -397,10 +480,12 @@ def cmd_run_python(args):
         if available < need:
             sys.exit(f"{sid}: {available} datasets generated, {need} needed: run 'study.py generate --reps {need}'")
         for c in own:
-            plan[(sid, c["method"])] = c["reps"]
-            columns[(sid, c["method"])] = c["columns"]
+            plan[(sid, c["label"])] = c["reps"]
+            columns[(sid, c["label"])] = c["columns"]
+            variants[(sid, c["label"])] = c["variant"]
         plan[(sid, COMPLETE)] = need
         columns[(sid, COMPLETE)] = None
+        variants[(sid, COMPLETE)] = None
 
     if not _adapter.SEED_SUPPORTED:
         print(
@@ -410,8 +495,8 @@ def cmd_run_python(args):
         )
 
     tasks = [
-        (sid, mth, columns[(sid, mth)], rep, str(data_dir))
-        for (sid, mth), reps in plan.items()
+        (sid, label, columns[(sid, label)], variants[(sid, label)], rep, str(data_dir))
+        for (sid, label), reps in plan.items()
         for rep in range(1, reps + 1)
     ]
     remaining = {key: reps for key, reps in plan.items()}
@@ -506,6 +591,12 @@ def main(argv=None):
         type=_csv_list(STUDY_METHODS, "study method"),
         default=list(STUDY_METHODS),
         help="study methods whose cells run (default: all)",
+    )
+    parser.add_argument(
+        "--variants",
+        type=_csv_list([NO_VARIANT, *VARIANTS], "variant"),
+        default=None,
+        help=f"variants whose cells run, '{NO_VARIANT}' for the cells without one (default: all)",
     )
     parser.add_argument(
         "--reps",

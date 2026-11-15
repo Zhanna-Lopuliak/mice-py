@@ -201,6 +201,20 @@ def _gen_s8(rng, n):
     return _category_x_y(rng, n, "o", S8_LEVELS, [0.2, 0.3, 0.3, 0.2], (0.0, 0.4, 0.8, 1.2))
 
 
+def _gen_s9(rng, n):
+    """Model M with the product p = x1 x2 in y; draws as model M (z1, z2, e), then the mask.
+
+    y = 0.5 + 1.0 x1 + 0.5 x2 + 0.5 p + e. x2 is MAR on y with rate 0.30,
+    and p is missing in the same rows (it is a function of x2).
+    """
+    full = _model_m(rng, n)
+    p = full["x1"] * full["x2"]
+    full = pd.DataFrame({"x1": full["x1"], "x2": full["x2"], "p": p, "y": full["y"] + 0.5 * p})
+    data = full.copy()
+    data.loc[mar_mask(rng, full["y"], 0.30), ["x2", "p"]] = np.nan
+    return full, data
+
+
 def _gen_s6(rng, n):
     """Draws: x1, u (sd 0.5), e, then the mask."""
     x1 = rng.standard_normal(n)
@@ -393,6 +407,21 @@ SCENARIOS = {
                 "P(o=top)": 0.2,
                 "mean(x)": 0.75,
             },
+        ),
+        Scenario(
+            id="S9",
+            index=9,
+            n=200,
+            maxit=5,
+            columns=("x1", "x2", "p", "y"),
+            incomplete=("x2", "p"),
+            description="model M with p = x1 x2; y = 0.5 + 1.0 x1 + 0.5 x2 + 0.5 p + e",
+            missingness="x2 MAR on y 30%; p missing where x2 is",
+            generator=_gen_s9,
+            regression=("y", ("x1", "x2", "p")),
+            means=("p",),
+            # E(x1 x2) = cov(x1, x2) = 0.5
+            truth={"(Intercept)": 0.5, "x1": 1.0, "x2": 0.5, "p": 0.5, "mean(p)": 0.5},
         ),
     ]
 }
