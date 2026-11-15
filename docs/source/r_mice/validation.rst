@@ -2,19 +2,23 @@ Validation against R mice
 =========================
 
 mice-py is a port of the R package `mice <https://cran.r-project.org/package=mice>`_.
-Version 0.3.0 was compared with **R mice 3.19.0** under **R 4.6.2** (with
+Version 0.4.0 was compared with **R mice 3.19.0** under **R 4.6.2** (with
 nnet 7.3-21 and MASS 7.3-66 for ``polyreg`` and ``polr``), in four layers.
 This page describes what was compared, gives the results, says how to
 reproduce them and where the evidence stops.
 
 In short: every deterministic piece that was compared gives R's numbers;
 the nine model-based methods, given R's random numbers, give R's
-imputations; every method gives R's distribution of imputed values on the
-test inputs; in a simulation with known truth, 18 of 1044 Python-minus-R
-comparisons differ by more than Monte Carlo error, all of them in one cell:
-random forest with a categorical variable (:ref:`rf-categorical`). The
-agreement is within the tolerances and thresholds the tests enforce, not
-identity.
+imputations, also when they are called with the rows R's ``sampler.univ``
+passes under ``where`` and ``ignore``; whole chains, started from R's start
+values and given R's random numbers, give R's imputations, chain statistics
+and logged events, with ``where``, ``ignore``, ``post``, passive columns and
+continued runs; every method gives R's distribution of imputed values on
+the test inputs, and so do full chains with the new arguments; in a
+simulation with known truth, 18 of 1158 Python-minus-R comparisons differ by
+more than Monte Carlo error, all of them in one cell: random forest with a
+categorical variable (:ref:`rf-categorical`). The agreement is within the
+tolerances and thresholds the tests enforce, not identity.
 
 The four layers
 ---------------
@@ -39,21 +43,29 @@ The four layers
        ``logreg``, ``logreg.boot``, ``polyreg``, ``polr``) with every random
        number of R replayed in Python, and the pieces behind them:
        ``mice:::augment``, ``glm.fit`` with the logit link, the BFGS of
-       ``optim`` (``vmmin``), ``nnet::multinom``, ``MASS::polr``.
+       ``optim`` (``vmmin``), ``nnet::multinom``, ``MASS::polr``. The
+       methods called with the masks of ``sampler.univ`` (rows both fitted
+       on and imputed, rows in neither). Whole chains of ``mice()`` and
+       ``mice.mids()`` from R's start values, with ``where``, ``ignore``,
+       ``post`` and passive variables; the setup under ``where`` and with
+       passive variables.
      - R output is stored as JSON fixtures together with its inputs. Python
        must match to a relative tolerance of 1e-8 (some checks 1e-12, the
        fits of ``polyreg`` and ``polr`` 1e-6, see below); counts, labels and
        0/1 matrices must be equal.
    * - L2 distribution parity
      - The imputed values of one call of each method on fixed inputs F1 to
-       F7, cell by cell; 200 full pmm chains; full chains with R's default
-       methods on a mixed frame.
-     - R: 20,000 calls per method (rf 5,000). Python: 3,000 (midas and cart
-       1,500; polr 2,000; rf 300). Tests below.
+       F8, cell by cell; 200 full pmm chains; full chains with R's default
+       methods on a mixed frame, also with ``where = "all"`` and with
+       ignored rows; full chains with a passive variable and ``post``.
+     - R: 20,000 calls per method (rf 5,000), 200 chains. Python: 3,000
+       calls (midas and cart 1,500; polr 2,000; rf 300), 120 chains. Tests
+       below.
    * - L3 simulation with known truth
      - Bias, coverage, interval width, RMSE, between-imputation variance B
-       and total variance T of pooled estimates; eight scenarios, 41 cells
-       (a method on a scenario).
+       and total variance T of pooled estimates; nine scenarios, 47 cells
+       (a method on a scenario, some with ``where``, ``ignore``, ``post`` or
+       a passive column).
      - Python and R impute the **same** incomplete datasets; one Python
        routine computes the metrics for both; every paired difference is
        divided by its Monte Carlo standard error.
@@ -63,7 +75,10 @@ The four layers
        observed values for donor methods and labels of the column for the
        categorical methods, finite floats for the norm methods, dtypes kept,
        ...), seeds, argument handling, the default method of each column
-       type, edge cases, pooling identities, the plotting contract.
+       type, edge cases, pooling identities, the plotting contract; for the
+       arguments of 0.4, the cells outside ``where``, the missing cells a
+       mask-only oracle predicts, ``post`` bounds, passive values, the start
+       of the chains, and split runs equal to one run.
      - pytest, partly with ``hypothesis`` on random small data frames.
 
 L1 replays R's random numbers through a scripted generator: the R script
@@ -97,16 +112,104 @@ reproduced step for step, not merely to the same optimum:
   fixtures is at least 1e-4 away from every cumulative probability (checked
   in R), so the imputed labels must be identical.
 
-The L1 fixtures of the new methods (cases): ``l1_norm`` (38), ``l1_augment``
-(14), ``l1_logreg`` (24), ``l1_vmmin`` (10), ``l1_polyreg`` (19, plus 3
-direct ``multinom`` fits), ``l1_polr`` (23, plus 8 direct ``MASS::polr``
-fits), ``l1_make_method`` (one frame with a column of every type). They
-include the cases where R stops or imputes unusable values; there the
-fixture records R's outcome and the test checks what mice-py does instead
-(:doc:`differences`).
+The L1 fixtures of the model-based methods of 0.3 (cases): ``l1_norm``
+(38), ``l1_augment`` (14), ``l1_logreg`` (24), ``l1_vmmin`` (10),
+``l1_polyreg`` (19, plus 3 direct ``multinom`` fits), ``l1_polr`` (23, plus
+8 direct ``MASS::polr`` fits), ``l1_make_method`` (one frame with a column
+of every type). They include the cases where R stops or imputes unusable
+values; there the fixture records R's outcome and the test checks what
+mice-py does instead (:doc:`differences`).
 
-The test inputs of L2 have 40 observed and 20 missing values of the target
-each:
+**The methods under R's masks** (``l1_masks``, 59 tests). Inside a chain,
+R's ``sampler.univ`` calls a method with every row: the rows the model is
+fitted on and the rows to impute may overlap (an observed cell that
+``where`` marks), and a row may be in neither (an ignored row with an
+observed cell, a missing cell that ``where`` leaves out, a row with a
+missing predictor value). The fixture calls R's methods directly with three
+such patterns: all 30 rows imputed, 23 of them fit rows (``overlap``); 20 fit
+rows, 4 rows to impute and 6 rows in neither, 3 with a decoy observed value
+and 3 missing (``outside``); and the same with missing values in one or
+both predictors of the rows in neither (``na_rows``). The rows in neither
+hold extreme predictors, extreme values or a label no fit row has, so that a
+method that reads them gives other numbers. Compared: the nine model-based
+methods with every draw replayed, pmm with one donor, the donor
+probabilities of midastouch, and five cases of ``augment``, among them a
+row with a missing value in one predictor only, a category held only
+outside the fit rows, exactly one row outside the fit rows that is not
+imputed (R skips the augmentation), and one cell to impute plus ignored
+rows (R does not skip it). Where R's ``logreg.boot`` predicts a row that is
+both fitted on and imputed from another row's predictors, the fixture
+stores R's labels and the test checks mice-py's (:doc:`differences`).
+
+**Whole chains** (``l1_chain``, 51 cases, 524 tests). R ran ``mice(data,
+m, maxit = 0)`` for the start values and the generator state after them,
+then ``mice()`` and ``mice.mids()`` step by step. The test runs
+``impute(maxit=0)`` with the same arguments, writes R's start values into
+the state of each chain, replaces each chain's generator by a strict
+scripted generator, and continues with ``continue_chains()`` as R did.
+Three kinds of case:
+
+- **deterministic** (25 cases): ``norm.predict``, ``mean`` and passive
+  variables, two chains with different start values; nothing is drawn after
+  the start, and any draw fails the test;
+- **scripted** (14 cases): ``norm``, ``logreg`` and ``polr`` with one chain;
+  the R script replays every draw of the chain from the generator state
+  after the start and proves by the final state that it captured all of
+  them, in order; Python serves exactly these numbers;
+- **spy** (12 cases): a method ``mice.impute.spy`` records, at every call,
+  what ``sampler.univ`` hands it (``y``, ``ry``, ``x``, ``wy`` and the
+  predictors kept) and imputes as ``norm.predict``; mice-py registers the
+  same method and must receive the same, call by call.
+
+After the start and after each step the test compares the imputations of
+every where-cell, the completed data, ``chainMean`` and ``chainVar``, the
+logged events, ``iteration``, the methods, the visit sequence and the
+predictor matrix, the draws, and the number of observed values the
+completed data lose (R silently, mice-py with a warning). The cases cover
+the keywords and matrices of ``where`` (missing cells left out, observed
+cells imputed, cells without complete predictors, a column with method
+``""``), ``ignore`` (ignored rows observed and missing, few fit rows, a
+category held only by ignored rows), ``post`` (bounds, a shift, a rule that
+reads another variable, under ``where`` and ``ignore``, a variable removed
+by the setup step), passive variables (``bmi`` on ``boys`` by default,
+before its inputs under ``"roman"``, named twice in the visit sequence, as a
+predictor, with observed where-cells, with an input that keeps missing
+values, a passive copy, a complete and an entirely missing one), a predictor
+with method ``""`` and runs continued with ``mice.mids()``. The largest
+difference from R's numbers in any case is 3.3e-11. The fixture also
+records six calls where R stops (the test checks mice-py's ``ValueError``
+or, for ``polyreg``, its imputation), one passive function that is not
+row-wise, where mice-py deliberately differs, and a ``post`` for a passive
+variable, which R never runs and mice-py rejects.
+
+Exact parity of whole chains means: given R's start values and R's random
+numbers, the chain loop does what R's ``sampler`` does, step by step, with
+every argument the cases use. It does not mean that a run of mice-py equals
+a run of R: the start values are injected, and mice-py's own generator draws
+other numbers. The start is tested on its own through ``impute(maxit=0)``
+(L4): which cells are started, that every start value is an observed value
+of a row that ``ignore`` keeps, that a passive column starts from sampled
+values and a column without a method is not started, and, by a chi-square
+test over 100 chains, that the draws are uniform with replacement over the
+observed values. It is not compared with R directly (R's ``sample`` draws
+differently); it enters the comparisons with R only through the chains of
+L2 and L3, which compare their results. The methods in the exact chain
+cases are ``norm``, ``norm.predict``, ``mean``, ``logreg`` and ``polr``; the
+others reach the new arguments in distribution (L2, L3) or in the
+properties of L4 only.
+
+**The setup** (``l1_setup``, 109 tests) gained three groups of cases:
+``make.method(where = )`` and ``mice(maxit = 0, where = )`` for each keyword
+and a matrix (methods, visit sequences, a method the user names for a column
+without where-cells); ``"monotone"`` with ``maxit = 1``, whose predictor
+matrix R edits (also under a ``where`` that changes the order), and with
+``maxit = 2`` and ``"revmonotone"``, which R leaves alone; and passive
+variables (their place in the visit sequence by default, under each keyword
+and in a vector that names one twice, a passive copy, a complete and an
+entirely missing passive variable, a passive variable under ``where``).
+
+The test inputs F1 to F7 of L2 have 40 observed and 20 missing values of
+the target each:
 
 - **F1**: predictors ``x1`` and ``x2`` correlated 0.9 plus an independent
   ``x3``; half of the missing rows lie away from the bulk of the observed
@@ -123,6 +226,12 @@ each:
 - **F7**: an ordered target with four levels, drawn from a multinomial model
   that is not a proportional-odds model, so that ``polr`` and ``polyreg``
   predict probabilities that differ by at least 0.15 for the missing rows.
+- **F8**: the masks of ``sampler.univ`` under ``where`` and ``ignore``, for
+  the donor methods: 60 rows, 40 fit rows, 20 rows to impute of which 8 are
+  fit rows too (a fit row can be its own donor), and 8 rows in neither,
+  4 with an observed value far above every value of the fit rows and 4
+  missing, two of them with missing predictors; the predictors of the rows
+  in neither lie outside the range of the others.
 
 The methods fall into three kinds, which decide what is compared:
 **donor** methods (pmm, midastouch, cart, rf, sample) impute observed values;
@@ -149,7 +258,21 @@ At chain level, ``l2_chain_default`` compares 120 Python chains of
 three-level and an ordered four-level incomplete column. Both choose pmm,
 logreg, polyreg and polr; the mean and variance of the imputed numeric
 values and the share of each level among the imputed labels, in the last
-iteration, are compared with the z-scores of T2.
+iteration, are compared with the z-scores of T2. Three further chain-level
+tests compare 120 Python chains with 200 R chains in the same way:
+
+- ``l2_chain_where``: the same frame with ``where = "all"``, so the
+  complete column is imputed too and every column is fitted on its observed
+  values while the chains predict the others from them;
+- ``l2_chain_ignore``: the same frame plus 40 ignored rows from a clearly
+  shifted distribution, with missing cells of their own; the statistics are
+  taken separately over the rows that are kept and the ignored rows, so
+  that fitting on the ignored rows would show;
+- ``l2_chain_passive``: a numeric frame of 100 rows with ``y1`` and ``y2``
+  imputed by pmm, their product ``p`` passive and not predicting them, and
+  ``y3`` depending on ``p``, imputed by pmm and bounded by ``post`` (13% of
+  R's imputations of ``y3`` lie at the lower bound, 31% at the upper); the
+  statistics include the share of the imputations at each bound.
 
 The thresholds are wide because many cells and statistics are tested at once.
 That they detect real defects was checked by putting defects back on
@@ -181,6 +304,58 @@ purpose and asserting that the tests flag each of them:
   The distribution statistics of the chain-level test do not flag it
   clearly on that frame (below).
 
+Version 0.4 adds 81 such tests, at four levels:
+
+- **single method calls** (``test_l1_mutants.py``, 9): the augmentation
+  with listwise deletion, with the variance divisor of all rows, with the
+  categories of the fit rows only, or skipped by the number of cells to
+  impute; ``norm``, ``mean`` and ``polyreg`` imputing every row that is not
+  a fit row instead of the rows to impute; ``logreg`` dropping the rows in
+  neither mask. The ``l1_masks`` checks catch each.
+- **whole chains** (``test_l1_chain_mutants.py``, 31): the defects a loop
+  after ``sampler`` can have, among them the rows in neither mask or with a
+  missing predictor dropped before the method (as 0.3 did), the rows with
+  complete predictors determined after the dependent predictors are
+  dropped, a start value kept where no imputation could be made, the data
+  the chains work on
+  not refreshed after a visit or after ``post``, the imputations of
+  observed where-cells written to them, the completed data built from them,
+  ``where`` not used, the chain statistics over the missing cells only or
+  taken before ``post`` or at the first of two visits, ``ignore`` not
+  applied to the fit rows or applied to the rows to impute, "df set to 1"
+  checked in every iteration or counted with the ignored rows, the
+  dependent predictors found with the ignored rows, ``post``
+  not applied or applied in the last iteration only, the passive columns
+  placed wrongly in the visit sequence or written over observed cells, the
+  methods chosen by completeness instead of by where-cells, ``"monotone"``
+  without its edit of the predictor matrix, and a continued run with fresh
+  generators or with its iteration counter restarted. The ``l1_chain`` and
+  ``l1_setup`` comparisons catch 30 of them; the 31st shows that a passive
+  function given only the rows being imputed, as R evaluates its formula,
+  is caught only by the case of the deliberate difference.
+- **distribution** (12): on F8, pmm and cart fitted on the rows where the
+  target is observed instead of the fit rows, and pmm that never takes a
+  row as its own donor (``test_l2_mutants.py``, 9); in the chain-level
+  tests, the imputations of observed where-cells written to the data the
+  chains work on (log-variance z of +6.3 to +13.7), ``ignore`` not applied
+  to the fit rows (z +26.4 for the mean of the imputed ``y``) and ``post``
+  not applied (z +28.0 for the chain mean of the bounded column).
+- **properties** (``tests/test_properties``, 29): the same kinds of
+  defect, seen through the public API, and defects of the start (start
+  values drawn from ignored rows, from half of the observed values, or
+  computed by a passive function) and of a continuation (from a new start,
+  from the completed data, with a redrawn visit sequence, with the chain
+  statistics overwritten instead of appended).
+
+Some defects only one kind of test can see. The exact chain cases inject
+R's start, so only the property tests see a defect of the start. A passive
+function given only the rows being imputed gives the same values as one
+given all rows wherever the function is row-wise, so no row-wise chain case
+sees it. A passive column computed in the first iteration only and then
+kept is not flagged by the distribution statistics of ``l2_chain_passive``
+(largest \|z\| 3.7 to 4.7, limit 5.5), while the exact chain cases catch
+it.
+
 Versions
 --------
 
@@ -194,7 +369,7 @@ Versions
        4.1.27, R's default random number generator (Mersenne-Twister,
        Inversion, Rejection)
    * - Python
-     - mice-py 0.3.0, Python 3.13.7, NumPy 2.3.3, pandas 2.3.2, SciPy 1.16.2,
+     - mice-py 0.4.0, Python 3.13.7, NumPy 2.3.3, pandas 2.3.2, SciPy 1.16.2,
        scikit-learn 1.7.2, statsmodels 0.14.5
 
 The fixtures record the R and mice versions they were made with (those of
@@ -207,14 +382,33 @@ Results
 L1 and L4
 ~~~~~~~~~
 
-All checks pass. At this version the test suite has 763 L1 tests (31 of
+All checks pass. At this version the test suite has 1421 L1 tests (71 of
 them put defects back, see above) and 26 tests of the scripted random
-generator that L1 uses, 112 L2 tests (including the tests of the tests), 6
-tests of the in-suite L3 simulation and 1304 L4 tests, besides 276 unit and
-workflow tests; all 2487 pass and none is marked as an expected failure.
-Version 0.2.0 had 917 tests. Before the fixes of 0.2, 102 L1 checks and 114
-L4 checks failed; their causes are listed in `simulations/BASELINE.md
+generator that L1 uses, 183 L2 tests (including the tests of the tests and
+29 that put defects back), 6 tests of the in-suite L3 simulation and 1902
+L4 tests (29 of them put defects back), besides 287 unit and workflow
+tests; all 3825 pass and none is marked as an expected failure. Version
+0.3.0 had 2487 tests and version 0.2.0 917. Before the fixes of 0.2, 102 L1
+checks and 114 L4 checks failed; their causes are listed in
+`simulations/BASELINE.md
 <https://github.com/Zhanna-Lopuliak/mice-py/blob/main/simulations/BASELINE.md>`_.
+
+Of the L1 tests, 59 compare the methods under R's masks (``l1_masks``),
+524 whole chains (``l1_chain``) and 109 the setup (``l1_setup``). Of the L4
+tests, the new arguments have their own files: ``where`` (60, and 65
+invariants over methods, column types and random masks), ``ignore`` (47,
+and 54 invariants), ``post`` (54), passive columns (80), the start of the
+chains (10), the chain loop (15) and ``continue_chains`` (117, among them
+the equality of ``impute(maxit=a + b)`` and ``impute(maxit=a)`` followed
+by ``continue_chains(b)`` for 22 cases, each split four ways). Which cells
+of the completed data are missing is compared with a mask-only oracle,
+which follows the visit sequence without imputing anything: a where-cell is
+missing when its column has no method or a predictor is missing in its row
+at the visit. The split runs must agree in the completed datasets, the
+chain statistics, the logged events, the visit sequence, the methods, the
+predictor matrix and ``iteration``, also from ``maxit=0``, with
+``visit_sequence="random"``, ``where``, ``ignore``, ``post`` and passive
+columns.
 
 In L1, ``MICE.impute()`` without ``method`` chooses R's methods for every
 column of R's ``nhanes2`` (``logreg`` for ``hyp``) and ``boys`` (``polr``
@@ -227,11 +421,12 @@ an unordered factor (:doc:`differences`).
 L2: distribution of imputed values
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Output of ``python -m tests.test_parity._l2_report`` for mice-py 0.3.0: the
-smallest T1 p-value over the missing cells, and the largest \|z\| of T2 and T3.
-"-" means the statistic does not apply (a factor target has no mean, and
-category methods have no T2). The rows of the donor methods are those of
-0.2.0, unchanged.
+Output of ``python -m tests.test_parity._l2_report`` for mice-py 0.4.0: the
+smallest T1 p-value over the cells to impute, and the largest \|z\| of T2 and
+T3. "-" means the statistic does not apply (a factor target has no mean, and
+category methods have no T2). The rows of the donor methods on F1 to F4 are
+those of 0.2.0, and the rows of the model-based methods those of 0.3.0,
+unchanged.
 
 .. list-table::
    :header-rows: 1
@@ -405,13 +600,45 @@ category methods have no T2). The rows of the donor methods are those of
      - \-
      - 1.66
      - category; ordered target
+   * - pmm
+     - F8
+     - 0.054
+     - 1.88
+     - 1.13
+     - overlapping masks, rows in neither
+   * - midastouch
+     - F8
+     - 0.086
+     - 2.51
+     - 1.50
+     - overlapping masks, rows in neither
+   * - cart
+     - F8
+     - 0.0095
+     - 2.45
+     - 1.74
+     - donor sets equal R's in every cell
+   * - rf
+     - F8
+     - 0.010
+     - 3.28
+     - 2.68
+     - overlapping masks, rows in neither
+   * - sample
+     - F8
+     - 0.0085
+     - 2.30
+     - 2.27
+     - overlapping masks, rows in neither
 
 Every row with the default settings passes (p ≥ 1e-7, \|z\| ≤ 5.5). For CART
 with a numeric target the comparison is stricter than in distribution: for
-every missing cell, the set of donors Python can draw equals the set R
+every cell to impute, the set of donors Python can draw equals the set R
 reached in 2,000 calls, that is scikit-learn grows the same leaves as rpart on
-F1, F2 and F4. midastouch is not run on F3 because neither R's midastouch nor
-mice-py's midas imputes a factor. rf with a numeric target also passes the
+F1, F2, F4 and F8. On F8 a fit row that is imputed can be its own donor;
+how often has no simple theory, so R is the reference (pmm draws it in
+about 10 to 20 percent of R's calls). midastouch is not run on F3 because
+neither R's midastouch nor mice-py's midas imputes a factor. rf with a numeric target also passes the
 weaker checks (per-cell means within 0.25 R standard deviations of R's mean,
 variance ratio between 0.5 and 2). In the chain-level test (200 full pmm
 chains; ``mice(data, m = 200, maxit = 5)`` in R) the distribution of the
@@ -426,6 +653,31 @@ distribution: the same 120 chains with ``method="pmm"`` reach a largest
 from nearly the same conditional distributions. It therefore asserts the
 methods R chose, not only the distribution.
 
+The chain-level tests with the arguments of 0.4 pass as well, each choosing
+R's methods and visit sequence. Largest \|z\| with the committed seed, and
+over eight other seeds:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 16 18 42
+
+   * - Test
+     - z-scores
+     - Largest \|z\|
+     - Over eight other seeds
+   * - ``l2_chain_where``
+     - 20
+     - 2.40
+     - 1.96 to 2.60
+   * - ``l2_chain_ignore``
+     - 32
+     - 1.56
+     - 1.60 to 3.08
+   * - ``l2_chain_passive``
+     - 20
+     - 1.69
+     - 1.44 to 2.75
+
 For comparison, on 0.1.0 six rows failed (pmm on F1 and F2, cart on F1 and
 F4, rf on F1 and F4, with \|z\| up to 145) and two crashed (pmm on F3,
 midastouch on F2); see ``simulations/BASELINE.md``.
@@ -433,7 +685,7 @@ midastouch on F2); see ``simulations/BASELINE.md``.
 L3: simulation study
 ~~~~~~~~~~~~~~~~~~~~
 
-Eight scenarios; model M is ``x1``, ``x2`` bivariate normal with correlation
+Nine scenarios; model M is ``x1``, ``x2`` bivariate normal with correlation
 0.5 and ``y = 0.5 + x1 + 0.5 x2 + e``. In S5, S7 and S8 the categorical
 variable is drawn first, then ``x`` given it, then ``y`` given both.
 
@@ -488,19 +740,25 @@ variable is drawn first, then ``x`` given it, then ``y`` given both.
      - 200
      - ``o`` 30% MAR on ``y``; ``x`` 20% MCAR
      - 5
+   * - S9
+     - model M with ``p = x1 x2``; ``y = 0.5 + x1 + 0.5 x2 + 0.5 p + e``
+     - 200
+     - ``x2`` 30% MAR on ``y``; ``p`` missing where ``x2`` is
+     - 5
 
 Each scenario is analyzed with OLS of ``y`` on the other variables (with
 treatment dummies for a categorical variable, also the ordered ``o``), plus
 the mean of each incomplete variable (S5: the proportion of ``g = c``; S7:
-of ``b = yes``; S8: of ``o = top``). The study runs 41 cells, each a study
-method on a scenario: the five donor methods on S1 to S6 (the 30 cells of
-0.2), and the new cells below. The methods are forced on both sides
-(``midastouch`` is ``midas`` in mice-py), except in the ``default`` cells,
-where neither engine gets a ``method`` argument. m = 5, full predictor
-matrix, 1000 replications (rf 500). Per scenario, method and term, six
-paired differences are tested: bias, coverage, interval width, RMSE, mean B
-and mean T. A difference is flagged when \|z\| > 4.2, a Bonferroni bound for
-several hundred comparisons.
+of ``b = yes``; S8: of ``o = top``; S9: the mean of ``p``). The study runs
+47 cells, each a study method on a scenario: the five donor methods on S1 to
+S6 (the 30 cells of 0.2), the 11 cells of 0.3 and the 6 cells of 0.4 below.
+The methods are forced on both sides (``midastouch`` is ``midas`` in
+mice-py), except in the ``default`` cells, where neither engine gets a
+``method`` argument. m = 5, full predictor matrix, 1000 replications (rf
+500). Per scenario, method and term, six paired differences are tested:
+bias, coverage, interval width, RMSE, mean B and mean T. A difference is
+flagged when \|z\| > 4.2, a Bonferroni bound for several hundred
+comparisons.
 
 ``norm.predict`` and ``mean`` draw no random numbers, so on S4 (one
 incomplete column, one iteration) both engines must give the same completed
@@ -515,7 +773,12 @@ code before the fixes plus the seed fix, which the study needs so that
 replications get independent random streams (commit ``fc1d3e8``). The 0.3.0
 run reproduced the 30 cells of 0.2.0 exactly: all 1248 rows of the 0.2.0
 ``summary.csv`` (every metric, Monte Carlo error and z) are identical in
-the 0.3.0 one, so the row "0.2.0, 0.3.0" holds for both versions.
+the 0.3.0 one. After the chain loop was rewritten for 0.4, and again on
+0.4.0, the Python side of all 41 earlier cells ran once more: every result
+file is byte-identical to the 0.3.0 run, and the 1768 rows of the 0.3.0
+``summary.csv`` are unchanged in the new one. So the row "0.2.0 to 0.4.0"
+holds for all three versions, and the results of the cells of 0.3.0 hold
+for 0.4.0 too.
 
 .. list-table::
    :header-rows: 1
@@ -536,7 +799,7 @@ the 0.3.0 one, so the row "0.2.0, 0.3.0" holds for both versions.
      - 11 of 24 (19.3)
      - 0 of 24 (1.9)
    * -
-     - 0.2.0, 0.3.0
+     - 0.2.0 to 0.4.0
      - 0 of 24 (2.0)
      - 0 of 24 (2.1)
      - 0 of 24 (1.8)
@@ -550,7 +813,7 @@ the 0.3.0 one, so the row "0.2.0, 0.3.0" holds for both versions.
      - 17 of 24 (22.5)
      - 0 of 24 (1.1)
    * -
-     - 0.2.0, 0.3.0
+     - 0.2.0 to 0.4.0
      - 0 of 24 (2.3)
      - 0 of 24 (2.1)
      - 0 of 24 (2.6)
@@ -564,7 +827,7 @@ the 0.3.0 one, so the row "0.2.0, 0.3.0" holds for both versions.
      - 2 of 30 (22.2)
      - 0 of 30 (1.9)
    * -
-     - 0.2.0, 0.3.0
+     - 0.2.0 to 0.4.0
      - 0 of 30 (3.0)
      - 0 of 30 (2.2)
      - 0 of 30 (3.5)
@@ -578,7 +841,7 @@ the 0.3.0 one, so the row "0.2.0, 0.3.0" holds for both versions.
      - 13 of 24 (23.1)
      - 0 of 24 (1.5)
    * -
-     - 0.2.0, 0.3.0
+     - 0.2.0 to 0.4.0
      - 0 of 24 (2.1)
      - 0 of 24 (1.6)
      - 0 of 24 (1.6)
@@ -592,7 +855,7 @@ the 0.3.0 one, so the row "0.2.0, 0.3.0" holds for both versions.
      - 22 of 36 (61.6)
      - 0 of 36 (3.2)
    * -
-     - 0.2.0, 0.3.0
+     - 0.2.0 to 0.4.0
      - 0 of 36 (2.3)
      - not possible
      - 0 of 36 (2.5)
@@ -606,7 +869,7 @@ the 0.3.0 one, so the row "0.2.0, 0.3.0" holds for both versions.
      - 6 of 24 (12.3)
      - 0 of 24 (1.0)
    * -
-     - 0.2.0, 0.3.0
+     - 0.2.0 to 0.4.0
      - 0 of 24 (2.0)
      - 0 of 24 (1.3)
      - 0 of 24 (1.3)
@@ -670,11 +933,68 @@ no ``method`` argument in either engine; both chose the methods shown in all
      - ``o``: polr, ``x``: pmm
      - 0 of 42 (2.1)
 
-Totals: 184 of 738 comparisons flagged on 0.1.0, 18 of 774 on 0.2.0, and 18
-of 1044 on 0.3.0 (the 774 of the cells of 0.2 and 270 in the new cells, of
+The cells added in 0.4.0. Each gives both engines the same arguments
+beyond the methods (a variant of the cell):
+
+- ``ignore_half``: the rows n/2 + 1 to n (101 to 200 in S3, 26 to 50 in S4)
+  are ignored; their missing cells are imputed all the same;
+- ``where_all``: ``where="all"``, so every cell is imputed, the observed ones
+  too, and the analysis runs on imputed values only; the complete ``x2``
+  gets its default method, pmm;
+- ``clip``: ``post`` clips the imputations of each incomplete column to the
+  range of its observed values (R's ``squeeze()``);
+- ``passive_product``: ``p`` is passive, ``x1 * x2`` (R's method ``"~ I(x1 *
+  x2)"``), and does not predict ``x2``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 12 28 30 30
+
+   * - Scenario
+     - Cell
+     - Methods of the incomplete columns
+     - Result
+   * - S3
+     - ``pmm``, ``ignore_half``
+     - ``x1``, ``y``: pmm
+     - 0 of 30 (2.2)
+   * - S3
+     - ``pmm``, ``where_all``
+     - ``x1``, ``y`` and the complete ``x2``: pmm
+     - 0 of 30 (1.8)
+   * - S4
+     - ``norm``, ``clip``
+     - ``x1``: norm
+     - 0 of 24 (3.1)
+   * - S4
+     - ``norm.predict``, ``ignore_half``
+     - ``x1``: norm.predict
+     - identity rule: largest \|qbar Python − qbar R\| 2.9e-15; B = 0
+   * - S9
+     - default, ``passive_product``
+     - ``x2``: pmm; ``p``: passive
+     - 0 of 30 (1.8)
+   * - S9
+     - ``norm.predict``, ``passive_product``
+     - ``x2``: norm.predict; ``p``: passive
+     - identity rule: largest \|qbar Python − qbar R\| 2.7e-15; B = 0
+
+The two identity cells with a variant draw nothing that reaches the
+completed data: on S4 the start values are overwritten in the one iteration
+before anything reads them, also with half of the rows ignored, and on S9
+``x2`` is predicted from the complete ``x1`` and ``y`` only and ``p`` is
+computed from it. In every cell Python and R recorded the same methods in
+every paired replication, and where an engine sets methods itself (a
+complete column under ``where_all``, the passive ``p``), the expected ones.
+
+Totals: 184 of 738 comparisons flagged on 0.1.0, 18 of 774 on 0.2.0, 18 of
+1044 on 0.3.0 (the 774 of the cells of 0.2 and 270 in the cells of 0.3, of
 which none is flagged; the largest \|z\| there is 3.14, for the coverage of
-the mean of ``x`` in S7 with the default methods). Outside the S5 rf cell
-the largest \|z\| per method on 0.2.0 and 0.3.0 is: pmm 3.0, midastouch 2.2,
+the mean of ``x`` in S7 with the default methods), and 18 of 1158 on 0.4.0
+(the 1044 of the earlier cells and 114 in the cells of 0.4, of which none is
+flagged; the largest \|z\| there is 3.08, for the interval width of the mean
+of ``x1`` in S4 with ``clip``). Outside the S5 rf cell
+the largest \|z\| per method on 0.2.0 to 0.4.0 is: pmm 3.0, midastouch 2.2,
 cart 3.5, rf 4.0, sample 3.2. midastouch and sample were already correct in
 0.1.0 (their numbers are the same in both runs); pmm crashed on every S5
 dataset in 0.1.0. midastouch cannot run on S5 in either engine: R's
@@ -761,7 +1081,8 @@ on the same S5 data measured, on average:
 
 No combination of scikit-learn settings reproduces ranger's rule, so this
 difference stays. It concerns rf with categorical predictors; rf agrees with
-R in the five scenarios without categorical data, and in L2 on F1 to F4.
+R in the five scenarios without categorical data, and in L2 on F1 to F4 and
+F8.
 
 How to reproduce
 ----------------
@@ -796,11 +1117,27 @@ Limits of the evidence
 - **Agreement of whole runs is in distribution, not draw by draw.** mice-py
   uses NumPy's random number generators; no imputation of a run equals R's
   for the same seed. Draw by draw, with R's random numbers fed to mice-py,
-  only single method calls were compared (L1). A difference smaller than
-  the tests can detect (about four Monte Carlo standard errors in L3) would
-  go unnoticed.
-- **The inputs are small.** L2 uses seven inputs of a few dozen rows; L3 uses
-  n = 50 and 200, at most three variables, one categorical variable with at
+  single method calls and whole chains from R's start values were compared
+  (L1). A difference smaller than the tests can detect (about four Monte
+  Carlo standard errors in L3) would go unnoticed.
+- **The start of the chains is not compared with R.** The exact chain cases
+  put R's start values into the chains, and R's ``sample`` draws differently
+  from NumPy. The start is tested by its properties (L4) and reaches the
+  comparisons with R only through the results of the chains of L2 and L3.
+  The identity cells of L3 cannot see it at all: there the start values
+  are overwritten before anything reads them.
+- **The exact chain cases use few methods.** They cover ``norm``,
+  ``norm.predict``, ``mean``, ``logreg``, ``polr`` and passive columns. The
+  other methods meet ``where``, ``ignore``, ``post`` and passive columns in
+  chains only in distribution (pmm and the default methods in L2 and L3) or
+  in the properties of L4 (``midas``, ``cart``, ``rf``, ``sample``,
+  ``norm.nob``, ``norm.boot``, ``logreg.boot``).
+- **Some defects are invisible to the distribution tests.** A passive
+  column computed in the first iteration only and then kept is not flagged
+  by the statistics of ``l2_chain_passive`` (largest \|z\| 3.7 to 4.7); the
+  exact chain cases catch it, but only for the methods they use.
+- **The inputs are small.** L2 uses eight inputs of a few dozen rows; L3 uses
+  n = 50 and 200, at most four variables, one categorical variable with at
   most four levels, maxit 1 or 5. Many columns, many factor levels, high
   missingness rates, strongly non-linear data and large n were not compared.
 - **The chain-level test of the defaults is weak on distribution.** On its
@@ -810,13 +1147,19 @@ Limits of the evidence
   comparison of the chosen methods with R's. The model-based methods
   themselves are checked by L1 and L2.
 - **Fixtures from one platform.** The R fixtures were made on macOS; CI
-  also runs the tests on Linux, where they pass for 0.3.0. The optimiser of
-  ``polyreg`` and ``polr`` takes up to 100 steps along which rounding can
-  differ between R's C code and NumPy and between platforms; hence probabilities at 1e-6, and
-  coefficients compared only for converged, well-conditioned fits. The one
-  ``glm.fit`` in the fixtures that does not converge (a separated bootstrap
-  sample of ``logreg.boot``) is compared at 1e-6 instead of 1e-8, without its
-  covariance.
+  also runs the tests on Linux, where they passed for 0.3.0. The fixtures
+  added in 0.4 (``l1_masks``, ``l1_chain``, the new cases of ``l1_setup``,
+  ``l2_masks_*``, ``l2_chain_where``, ``l2_chain_ignore``,
+  ``l2_chain_passive``) have not run in CI yet, so they have passed on
+  macOS only. The optimiser of ``polyreg`` and ``polr`` takes up to 100
+  steps along which rounding can differ between R's C code and NumPy and
+  between platforms; hence probabilities at 1e-6, and coefficients compared
+  only for converged, well-conditioned fits. The one ``glm.fit`` in the
+  fixtures that does not converge (a separated bootstrap sample of
+  ``logreg.boot``) is compared at 1e-6 instead of 1e-8, without its
+  covariance. The chain cases use ``norm``, ``norm.predict``, ``mean``,
+  ``logreg`` and ``polr``, whose single calls passed the L1 tests on Linux
+  for 0.3.0.
 - **"Matches R" is not "is correct".** The pass rule of L3 is agreement with
   R. Where R itself under-covers, so does mice-py: in S5 the coverage of
   P(g = c) is 0.89 (mice-py) and 0.90 (R) with pmm, 0.87 and 0.86 with cart,
@@ -835,16 +1178,17 @@ Limits of the evidence
   outcome and the tests check mice-py's, which is therefore not R's. The
   one difference in the default methods is a text column, which R does not
   impute and mice-py imputes as an unordered factor; it is pinned in L1
-  but not compared in distribution.
+  but not compared in distribution. The differences under ``where``,
+  ``ignore``, ``post`` and passive columns are pinned in L1 in the same way:
+  the fixture records R's result, the test checks mice-py's.
 - **Not compared with R**: the methods R has and mice-py does not (see
   :doc:`differences`); ``initial="meanobs"`` and ``visit_sequence="random"``
   (not in R); ``norm.predict`` and ``mean`` in L2 (they draw nothing; L1 and
   the identity rule of L3 compare them); ``logreg.boot`` on separated data
-  in L2 (L1 has one such bootstrap sample); the imputation of a column with
-  a predictor that keeps missing values by the methods that augment, whose
-  added rows are computed from fewer rows than R's; the strip plot, and the
-  plots' appearance in general.
+  in L2 (L1 has one such bootstrap sample); a ``post`` function that draws
+  random numbers; the strip plot, and the plots' appearance in general.
 - **Versions.** The numbers above come from the Python versions listed.
   Version 0.2.0 also passed its test suite on Python 3.9 with NumPy 2.0,
-  SciPy 1.13 and scikit-learn 1.6; for 0.3.0 that has not been checked yet.
-  Other versions of scikit-learn may grow different trees.
+  SciPy 1.13 and scikit-learn 1.6, and 0.3.0 passed it in CI on Python 3.9
+  to 3.13; for 0.4.0 neither has been checked yet. Other versions of
+  scikit-learn may grow different trees.

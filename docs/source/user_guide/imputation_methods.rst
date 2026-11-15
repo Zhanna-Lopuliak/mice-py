@@ -79,7 +79,9 @@ Default methods
 ---------------
 
 As in R, ``impute()`` without ``method`` gives each incomplete column the
-method of its type (``imputation.make_method``, R's ``make.method``):
+method of its type (``imputation.make_method``, R's ``make.method``); under
+``where`` (see :doc:`controlling_imputation`) each column with cells to
+impute, complete ones included:
 
 .. list-table::
    :header-rows: 1
@@ -108,8 +110,10 @@ the default of mice-py 0.2, pmm for every column.
 ``polyreg`` and ``polr``, like R, model at most 50 categories. A text column
 with more than 50 distinct values, such as names or identifiers, gets
 ``polyreg`` by default and makes ``impute`` raise a ``ValueError`` before
-the chains start; give it a donor method (``method={"name": "pmm"}``) or
-leave it out of the data.
+the chains start. If the column identifies the rows, remove it from the
+data. Otherwise give it a donor method (``method={"name": "pmm"}``); the
+column then stays a predictor of the other columns, with one dummy column
+per value, unless the predictor matrix excludes it.
 
 Choose a method per column with a dict; columns left out get the default of
 their type. Method parameters are passed to ``impute`` with the method name
@@ -131,7 +135,9 @@ for parameter ``ridge`` of ``norm.boot``):
 
 Each method is also a plain function, ``f(y, id_obs, x, id_mis=None, ...,
 rng=None)``, that returns the imputations of the cells in ``id_mis``; see
-:doc:`../api/methods`.
+:doc:`../api/methods`. As R's ``sampler.univ``, ``impute`` passes it every
+row: ``id_obs`` (the rows the model is fitted on) and ``id_mis`` (the rows
+to impute) may overlap, and a row may be in neither.
 
 Before the chains start, ``impute`` checks each method against the type of
 its column: a ``norm`` method or ``mean`` on a boolean, categorical or text

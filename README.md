@@ -23,6 +23,11 @@ frames, checked against R mice 3.19.0.
 - **R's model set-up**: full predictor matrix by default, `quickpred`,
   removal of constant and collinear variables (with R's logged events), R's
   dummy coding of categorical predictors.
+- **Control over the chains**, with R's arguments: which cells are imputed
+  (`where`), rows left out of the models (`ignore`), changes to the
+  imputations such as bounds (`post`), columns computed from others
+  (`passive`, R's passive imputation), and more iterations of a finished run
+  (`continue_chains`, R's `mice.mids`).
 - **Pooling** with Rubin's rules and Barnard-Rubin degrees of freedom, for
   any statsmodels formula model or for estimates computed elsewhere.
 - **Diagnostic plots** after R mice: missing-data pattern, strip, box,
@@ -30,11 +35,11 @@ frames, checked against R mice 3.19.0.
 
 ## Relation to R mice
 
-mice-py 0.3 was compared with R mice 3.19.0 (R 4.6.2) in four layers: exact
+mice-py 0.4 was compared with R mice 3.19.0 (R 4.6.2) in four layers: exact
 comparisons of the deterministic parts and, with R's random numbers
-replayed, of the model-based methods; the distribution of the imputed values
-of each method; a simulation study in which both engines impute the same
-datasets; and tests of invariants. Every comparison with R agrees (within
+replayed, of the model-based methods and of whole chains; the distribution
+of the imputed values of each method and of full chains; a simulation study
+in which both engines impute the same datasets; and tests of invariants. Every comparison with R agrees (within
 the tolerances of the tests, the random ones within Monte Carlo error)
 except random forests with categorical predictors, where scikit-learn and
 ranger grow different trees. Where R stops or imputes unusable values,
@@ -42,21 +47,25 @@ mice-py deliberately does something else. Details:
 [Validation against R mice](https://mice-py.readthedocs.io/en/latest/r_mice/validation.html)
 and [Differences from R mice](https://mice-py.readthedocs.io/en/latest/r_mice/differences.html).
 
-**Upgrading:** version 0.3 imputes boolean, categorical and text columns
-with R's default methods (`logreg`, `polyreg`, `polr`) instead of `pmm`, so
-results change for data with such columns; `method="pmm"` gives the methods
-of 0.2. Version 0.2 used R's defaults and corrected several methods of 0.1.
+**Upgrading:** version 0.4 removes the arguments `min_cor`, `min_puc`,
+`include`, `exclude`, `correlation_method` and `output_dir` of `impute`
+(use `imputation.quickpred` for the first five) and gives the results of 0.3
+except for two kinds of call. Version 0.3 imputes boolean, categorical and
+text columns with R's default methods (`logreg`, `polyreg`, `polr`) instead
+of `pmm`, so results change for data with such columns; `method="pmm"`
+gives the methods of 0.2. Version 0.2 used R's defaults and corrected
+several methods of 0.1.
 See [Upgrading](https://mice-py.readthedocs.io/en/latest/upgrading.html)
 and the [changelog](CHANGELOG.md).
 
 ## Installation
 
 ```bash
-pip install git+https://github.com/Zhanna-Lopuliak/mice-py.git@v0.3.0
+pip install git+https://github.com/Zhanna-Lopuliak/mice-py.git@v0.4.0
 ```
 
-Python 3.9 to 3.13. This installs release 0.3.0 with its two packages,
-`imputation` and `plotting`. Without `@v0.3.0`, pip installs the development
+Python 3.9 to 3.13. This installs release 0.4.0 with its two packages,
+`imputation` and `plotting`. Without `@v0.4.0`, pip installs the development
 version from `main`.
 
 ## Quick start
@@ -91,8 +100,9 @@ intervals) as a data frame.
 [quick start](https://mice-py.readthedocs.io/en/latest/quickstart.html) with
 diagnostics, the
 [user guide](https://mice-py.readthedocs.io/en/latest/user_guide/index.html)
-(methods, their defaults and parameters, predictor matrices, convergence, plots,
-pooling, logging) and the
+(methods, their defaults and parameters, predictor matrices, `where`,
+`ignore`, `post` and passive columns, convergence, plots, pooling, logging)
+and the
 [API reference](https://mice-py.readthedocs.io/en/latest/api/index.html). The
 sources are in `docs/source/`; example notebooks are in `examples/`.
 
@@ -118,7 +128,7 @@ mice-py/
 ├── tests/             # unit, parity (against R fixtures) and property tests
 │   └── reference/     # R scripts and the fixtures they produce
 ├── simulations/       # simulation study, mice-py against R mice
-├── examples/          # Jupyter notebooks and the nhanes data
+├── examples/          # Jupyter notebooks and the nhanes and boys data
 └── docs/              # Sphinx documentation
 ```
 

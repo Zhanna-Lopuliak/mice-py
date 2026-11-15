@@ -239,11 +239,8 @@ The six cells of 0.4, from the 40-replication pilot with two processes
 `norm.predict+ignore_half` 0.008 / 0.012, `default+passive_product`
 0.026 / 0.031, `norm.predict+passive_product` 0.023 / 0.029. With 1000
 replications that is about 1.3 minutes for Python and 1.6 minutes for R.
-The Python side of the 41 cells of 0.3 took 9.5 minutes when it was last
-run (phase 3 of 0.4), so the full `run-python` takes about 11 minutes. R
-ran 1.5 to 2 times slower per replication in the full run of 0.3 than in
-40-replication probes of the same cells, so allow 3 to 4 minutes for the R
-side of the new cells.
+In the full run of 0.4.0 with two processes, `run-python` took 655 seconds
+for all 47 cells, and `run_r.R` 162 seconds for the six new cells.
 
 ## Outputs
 
@@ -302,23 +299,22 @@ z-scores need about 100 or more replications to mean anything.
 
 ## Results
 
-`results/` holds the run for mice-py 0.3.0 (all 41 cells of S1-S8) and
+`results/` holds the run for mice-py 0.4.0 (all 47 cells of S1-S9) and
 `results/baseline/` the run on the code before the fixes (0.1.0 plus the
-seed fix, commit `fc1d3e8`); `BASELINE.md` describes that state. On 0.3.0,
-18 of 1044 paired comparisons are flagged, all for `rf` in S5, where
-scikit-learn and ranger grow different trees with categorical predictors;
-none of the 270 comparisons of the cells added in 0.3 is flagged (largest
-|z| 3.14), and both identity cells pass. The 30 cells of 0.2.0 reproduce
-the 0.2.0 run exactly (all 1248 rows of its `summary.csv`, which had 18 of
-774 comparisons flagged); on the baseline it was 184 of 738. The
-documentation page "Validation against R mice"
-(`docs/source/r_mice/validation.rst`) has the tables and the cause.
-
-The six cells of 0.4 (S9 and the variants) have so far run only as a
-40-replication pilot: no failure in either engine, none of 114 paired
-comparisons flagged (largest |z| 2.74), both identity cells within
-1.8e-15 with B = 0, the expected methods in every replication. Their full
-run will replace these numbers.
+seed fix, commit `fc1d3e8`); `BASELINE.md` describes that state. On 0.4.0,
+18 of 1158 paired comparisons are flagged, all for `rf` in S5, where
+scikit-learn and ranger grow different trees with categorical predictors.
+None of the 114 comparisons of the six cells added in 0.4 is flagged
+(largest |z| 3.08, `norm+clip`), and their two identity cells pass (largest
+|qbar Python − qbar R| 2.9e-15, B = 0 to rounding); none of the 270
+comparisons of the cells added in 0.3 is flagged (largest |z| 3.14), and
+their identity cells pass. Every Python result file of the 41 cells of 0.3
+is byte-identical to the 0.3.0 run, and the 1768 rows of the 0.3.0
+`summary.csv` are unchanged. The 30 cells of 0.2.0 reproduce the 0.2.0 run
+exactly (all 1248 rows of its `summary.csv`, which had 18 of 774
+comparisons flagged); on the baseline it was 184 of 738. The documentation
+page "Validation against R mice" (`docs/source/r_mice/validation.rst`) has
+the tables and the cause.
 
 midastouch cannot run on S5 in either engine: R's `midastouch` imputes
 level codes, which R turns into `NA` ("invalid factor level"), and mice-py's

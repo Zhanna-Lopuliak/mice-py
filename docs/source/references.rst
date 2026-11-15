@@ -79,7 +79,7 @@ Citing mice-py
      author = {Lopuliak, Zhanna and Vu, The Anh and Haensch, Anna-Carolina},
      year = {2025},
      url = {https://github.com/Zhanna-Lopuliak/mice-py},
-     version = {0.3.0}
+     version = {0.4.0}
    }
 
 and R mice, which mice-py ports:

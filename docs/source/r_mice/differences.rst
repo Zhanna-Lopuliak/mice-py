@@ -46,15 +46,26 @@ difference there is a text column, which R does not impute (see
      - ``"logreg"`` or ``"polyreg"``, by its number of distinct values
      - ``"pmm"``; the setup step then finds the column constant, so it is
        not imputed
-   * - Method of a complete column
+   * - Method of a column without cells to impute (by default a complete
+       column)
      - ``""``
      - ``""``
+   * - Cells imputed
+     - ``where=None``: the missing cells
+     - ``where = NULL``: the missing cells (``is.na(data)``)
+   * - Rows the models are fitted on
+     - ``ignore=None``: every row with an observed target and complete
+       predictors
+     - ``ignore = NULL``: the same
+   * - Changes to the imputations
+     - ``post=None``: none
+     - ``post = NULL``: none
    * - Predictor matrix
      - all ones, zero diagonal
      - all ones, zero diagonal
    * - Visit sequence
-     - ``"roman"`` (data order)
-     - ``"roman"``
+     - ``visit_sequence=None``: data order, passive columns last
+     - ``visitSequence = NULL``: the same
    * - Initial values
      - random draws from the observed values
      - random draws from the observed values
@@ -116,8 +127,29 @@ Names
      - the same names, dots included
    * - ``mice(data, defaultMethod = c(...))``
      - ``impute(default_method=(...))``
-   * - ``make.method(data)``
-     - ``imputation.make_method(data)``
+   * - ``make.method(data)``, ``make.method(data, where = w)``
+     - ``imputation.make_method(data)``, ``imputation.make_method(data,
+       where=w)``
+   * - ``mice(data, where = w)``
+     - ``impute(where=w)``: a keyword, a boolean DataFrame or a boolean
+       array
+   * - ``make.where(data, "missing")``, ``"all"``, ``"observed"``,
+       ``"none"``
+     - the keywords themselves, ``where="missing"`` (the default),
+       ``"all"``, ``"observed"``, ``"none"``; as a frame to edit,
+       ``data.isna()``, ``data.notna()``
+   * - ``mice(data, ignore = v)``
+     - ``impute(ignore=v)``
+   * - ``post["tv"] <- "imp[[j]][, i] <- squeeze(imp[[j]][, i], c(1, 25))"``
+     - ``impute(post={"tv": lambda imp, data: imp.clip(1, 25)})``
+   * - ``squeeze(x, c(1, 25))``
+     - ``Series.clip(1, 25)``
+   * - passive imputation, ``meth["bmi"] <- "~ I(wgt / (hgt / 100)^2)"``
+     - ``impute(passive={"bmi": lambda d: d["wgt"] / (d["hgt"] / 100) **
+       2})``; ``mice.method["bmi"]`` is ``"passive"``
+   * - ``imp <- mice(data, maxit = 2)``; ``imp <- mice.mids(imp, maxit =
+       3)``
+     - ``mice.impute(maxit=2)``; ``mice.continue_chains(3)``
    * - ``mice(data, donors = 3)`` (passed to every method)
      - ``impute(pmm_donors=3)`` (method name as prefix)
    * - ``ls.meth``, ``ridge`` of the norm methods
@@ -136,6 +168,9 @@ Names
        ``imp$loggedEvents``
      - ``mice.method``, ``mice.predictor_matrix``, ``mice.visit_sequence``,
        ``mice.logged_events``
+   * - ``imp$where``, ``imp$ignore``, ``imp$post``, ``imp$iteration``
+     - ``mice.where``, ``mice.ignore``, ``mice.post``, ``mice.iteration``;
+       the functions of the passive columns are in ``mice.passive``
    * - ``imp$chainMean``, ``imp$chainVar`` (array variable × iteration ×
        imputation)
      - ``mice.chain_mean``, ``mice.chain_var`` (dict of arrays iteration ×
@@ -179,34 +214,39 @@ Names
 Methods and arguments that mice-py does not have
 -------------------------------------------------
 
-Version 0.3 ports fourteen of R's univariate methods (the names above) and
-the core of ``mice()``; the rest is not ported yet.
+mice-py ports fourteen of R's univariate methods (the names above), passive
+imputation, and of ``mice()`` the arguments in the tables above, among them
+``where``, ``ignore`` and ``post``; ``mice.mids()`` is
+``continue_chains()``. Not ported:
 
 - **Methods**: R's other methods, among them ``lda``, the multilevel methods
   (``2l.*``, ``2lonly.*``), ``quadratic``, ``ri`` and the ``lasso.*``
-  methods; and passive imputation (``"~ I(...)"``).
-- **Arguments of mice()**: ``where``, ``blocks``, ``formulas``, ``blots``,
-  ``post``, ``ignore`` and ``calltype``. ``data.init`` (a complete data set
-  of starting values) is replaced by ``initial`` (see below).
-- **Continuing a run**: there is no ``mice.mids()``; each ``impute()`` call
-  starts new chains.
+  methods.
+- **Arguments of mice()**: ``blocks``, ``formulas``, ``blots`` and
+  ``calltype``. ``data.init`` (a complete data set of starting values) is
+  replaced by ``initial`` (see below).
+- **New data for a finished run**: ``mice.mids(newdata = )``.
+  ``continue_chains()`` has no ``newdata``; to impute new rows with models
+  fitted on the old ones only, impute both together and ignore the new rows
+  (:ref:`the recipe <train-and-test>`).
 - **Arguments of the methods**: pmm's ``exclude``, ``trim`` and
   ``use.matcher``; midastouch's ``neff`` and ``debug``; rf's ``rfPackage``
   (mice-py always uses scikit-learn).
 - **Other functions**: ``ampute``, ``md.pairs``, ``flux``, ``fluxplot``,
   ``pool.r.squared``, and the model comparisons ``D1``, ``D2``, ``D3``.
+  ``make.where()`` and ``squeeze()`` are not needed: ``data.isna()`` and the
+  keywords of ``where`` give the frames of ``make.where()``, and
+  ``Series.clip`` does what ``squeeze()`` does.
 
 Arguments that behave differently
 ---------------------------------
 
-- **maxit must be at least 1** (R allows 0). ``impute()`` always runs the
-  chains; the setup it decided on is in ``method``, ``predictor_matrix`` and
-  ``logged_events`` after any run.
 - **Random numbers never equal R's.** ``seed`` seeds a NumPy
   ``SeedSequence``, from which each chain gets its own stream; R uses
   ``set.seed`` and one stream. The generators differ, so runs agree with R
-  in distribution, not draw by draw; single method calls were also compared
-  draw by draw, with R's random numbers fed to mice-py (:doc:`validation`).
+  in distribution, not draw by draw; single method calls, and whole chains
+  from R's start values, were also compared draw by draw, with R's random
+  numbers fed to mice-py (:doc:`validation`).
 - **Method parameters carry the method name** (``pmm_donors=3``,
   ``cart_cp=0.001``) and an unknown keyword argument raises ``TypeError``. R
   passes ``...`` to every method and ignores names a method does not use; the
@@ -215,16 +255,20 @@ Arguments that behave differently
   observed value closest to the mean, or the most frequent value) exists only
   in mice-py. It was part of mice-py 0.1 and is kept.
 - **visit_sequence="random"** exists only in mice-py, kept from 0.1. It is
-  drawn once per ``impute()`` call from the seed.
-- **visit_sequence after a run** holds the order actually used. R's
-  ``visitSequence`` can list variables it never imputes (complete ones, and
-  variables whose method the setup step set to ``""``); mice-py lists only
-  the variables it visits.
+  drawn once per ``impute()`` call from the seed; ``continue_chains()``
+  keeps it.
+- **visit_sequence after a run** holds the order actually used, a column
+  named twice included twice. R's ``visitSequence`` can list variables it
+  never imputes (complete ones, and variables whose method the setup step
+  set to ``""``); mice-py lists only the variables it visits.
 - **A predictor matrix may cover only some columns**; missing entries count
   as 0, and ``predictor_matrix`` after a run is the full square matrix. R
-  requires a square matrix. Every incomplete column still needs a row.
+  requires a square matrix. Every column that is imputed still needs a row;
+  a passive column needs none.
 - **Logged events** produce one ``UserWarning`` ("Number of logged events:
   n") and log records; R prints a message. A library should not print.
+  ``continue_chains()`` warns when its iterations logged an event; R's
+  ``mice.mids()`` prints nothing.
 - **Nothing is printed** during the iterations (R's ``printFlag``); use
   :doc:`../user_guide/logging` to follow progress.
 
@@ -258,6 +302,154 @@ Data handling
   Parity with R was preferred here.
 - **Ordered categoricals** are coded with polynomial contrasts as in R;
   checked against R up to six levels.
+
+where, ignore, post and passive columns
+---------------------------------------
+
+The chain loop follows R's ``sampler`` and ``sampler.univ``. For a column,
+the model is fitted on the rows where the column is observed, its
+predictors are complete and ``ignore`` keeps the row; the method imputes the
+where-cells whose predictors are complete. As in R, the method receives
+**all rows**, also those in neither set (an ignored row with an observed
+cell, a missing cell that ``where`` leaves out, a row with a missing
+predictor value); only ``logreg``, ``polyreg`` and ``polr`` use such rows,
+in their augmentation. The imputations are kept per where-cell; the data the
+chains work on hold them only in the missing where-cells, so an observed
+where-cell keeps its observed value there, and the completed datasets get
+the imputation in every where-cell. ``post`` runs right after each
+univariate imputation, a passive column is computed at each of its visits,
+and the chain statistics are taken over all where-cells at the end of each
+iteration. Whole chains with these arguments were compared with R's, from
+R's start values and with R's draws (:doc:`validation`).
+
+mice-py deliberately differs from R in these cases:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 36 32 32
+
+   * - Case
+     - R mice 3.19.0
+     - mice-py
+   * - A where-cell that cannot be imputed: its predictors are incomplete in
+       its row, or its column has no method
+     - ``NA`` in the completed data, also over an observed value, silently
+     - the same, and a ``UserWarning`` with the number of observed values
+       lost per column and the reason
+   * - ``where`` as a data frame with the columns in another order
+     - takes the columns by position, silently misaligned
+     - aligns the columns by label; other labels raise ``ValueError``
+   * - ``where`` as a data frame with another index or its rows in
+       another order
+     - takes the rows by position
+     - ``ValueError``: the index must be that of the data, the same labels
+       in the same order (rows are not reordered)
+   * - ``where`` of another shape, with missing values, or with the numbers
+       0 and 1
+     - stops; stops; accepted
+     - ``ValueError`` for all three: booleans only
+   * - ``ignore`` not logical (also 0 and 1), of another length, or with a
+       missing value
+     - stops ("Argument ignore not a logical.", or a missing value in an
+       ``if``)
+     - ``ValueError`` for all three; also for a Series with another index
+       than the data
+   * - Every observed value of a column that is imputed lies in an ignored
+       row
+     - starts the column from ``rnorm()``, then stops in iteration 1 ("0
+       (non-NA) cases")
+     - ``ValueError`` before the chains start, naming the column
+   * - ``post`` for a passive column
+     - kept in ``imp$post`` and never run, silently
+     - ``ValueError`` before the chains start
+   * - A ``post`` command or a passive formula that fails
+     - stops with R's error, a failing formula in iteration 1
+     - a passive function is called once on the data before the chains
+       start, and its error raised as ``ValueError`` naming the column; an
+       error inside a chain is raised as ``ValueError`` naming the column,
+       ``post`` or ``passive``, the iteration and the imputation (the
+       original exception is its cause)
+   * - A passive formula with an aggregate, such as ``~ I((chl -
+       mean(chl))^2)``
+     - evaluated on the rows of the where-cells only, so the mean is taken
+       over them (197.56 in the fixture case)
+     - the function gets all rows, so the mean is that of the whole column
+       (193.86 in the same case)
+   * - A passive formula with two terms
+     - uses the first, with a warning
+     - ``ValueError``: the function must return one value per row
+   * - A passive column without any observed value (in the rows that
+       ``ignore`` keeps)
+     - starts from ``rnorm()``, then holds the formula
+     - the same for a function that returns numbers; otherwise
+       ``ValueError`` before the chains start
+   * - A column named twice in a visit sequence vector
+     - ``initialize.imp()`` draws its start values twice and keeps the
+       second draw
+     - draws them once (the same distribution)
+   * - A visit sequence vector that leaves out a column that is imputed
+     - the column is never imputed and stays ``NA``
+     - ``ValueError`` naming the column
+   * - ``logreg.boot`` with a row that is both fitted on and imputed (an
+       observed where-cell)
+     - predicts the row from the predictors of the bootstrap row that
+       replaced it
+     - predicts the row from its own predictors (7 of 30 labels differ in
+       the fixture case)
+   * - ``polyreg`` where the augmentation is skipped (no predictor, or
+       exactly one row outside the fit rows) and a label occurs only
+       outside the fit rows, for example in an ignored row
+     - ``nnet::multinom`` drops the label and ``polyreg`` stops (``dims
+       ... do not match``)
+     - imputes; the label gets probability 0. ``polr`` matches R here
+   * - ``logreg``, ``logreg.boot`` with a third label in a row outside the
+       fit rows, for example an ignored row
+     - stops in ``glm.fit``
+     - ``ValueError`` for more than two categories, before the chains start
+   * - A run that stops with an error
+     - ``mice()`` returns nothing; after a failing ``mice.mids()`` the
+       earlier ``mids`` object is unchanged and can be continued
+     - the ``MICE`` object is changed in place: its chains are dropped, and
+       ``continue_chains()`` raises ``ValueError``; call ``impute()``
+       again
+   * - Logged events in a continued run
+     - ``mice.mids()`` prints nothing
+     - ``continue_chains()`` warns "Number of logged events" when its
+       iterations logged an event
+   * - The diagnostic plots under ``where``
+     - group the cells by whether they are missing in the data
+       (``is.na(data)``)
+     - group them by the frame passed; with ``~mice.where``, by whether
+       they were imputed (see `Plots`_)
+
+Further points:
+
+- **Dtypes are fixed before the chains start.** A NumPy integer or boolean
+  column with where-cells (possible only under ``where``, since it is
+  complete) becomes ``Int64`` or ``boolean`` in the completed datasets,
+  because a where-cell can end up missing; an integer column imputed by a
+  norm method or ``mean`` becomes ``Float64``, as R turns it into double. A
+  passive column takes its dtype from what its function returns on the
+  data.
+- **post and passive functions are checked.** A function that returns
+  another number of values, a Series with another index, or values the
+  column cannot hold (a number that is not whole in an integer column, a
+  label that is not a category) raises ``ValueError`` naming the column.
+- **post gets no random generator.** R's ``post`` code draws from R's one
+  stream; mice-py gives a function no generator, so a function that draws
+  random numbers must own a seeded one, and then a run split between
+  ``impute()`` and ``continue_chains()`` equals one run only if the
+  function draws the same numbers each time.
+- **continue_chains() has no newdata** (see above). Like R's
+  ``mice.mids()``, it goes on from the current imputations and the
+  generator state of each chain, keeps the visit sequence, the methods, the
+  predictor matrix, ``where``, ``ignore``, ``post`` and the passive
+  functions, checks "df set to 1" only in the first iteration of the run,
+  and does not check ``ignore`` again, so it does not repeat the warning
+  about fewer than 10 rows.
+- **quickpred** gives a complete column no predictors, as R's does, so under
+  ``where="all"`` its matrix imputes the complete columns without
+  predictors; edit the matrix for them.
 
 Methods
 -------
@@ -374,7 +566,7 @@ deliberately does something else:
      - stops inside the chain (``Maximum number of categories (50)
        exceeded``)
      - ``ValueError`` before the chains start, naming the column and what
-       to do (a donor method, or removing an identifier column)
+       to do (removing an identifier column, or else a donor method)
 
 The order of the categories decides which label a given random number maps
 to. mice-py uses R's order after the augmentation (White, Daniel and
@@ -392,12 +584,13 @@ Royston 2010) for every target:
 
 R keeps the declared order of an unordered factor (in ``polr`` also its
 unused levels) where it skips the augmentation (no predictor, or exactly one
-missing value) and in ``logreg.boot``, which does not augment. For ``logreg``,
-``logreg.boot`` and ``polyreg`` that changes only which label a random
-number maps to, not the distribution of the imputations. For ``polr`` the
-order is part of the model: on an **unordered** factor with exactly one
-missing value, R fits the declared order and mice-py the sorted labels
-present, so the imputation differs in distribution. Declare the column as
+row outside the fit rows, by default exactly one missing value) and in
+``logreg.boot``, which does not augment. For ``logreg``, ``logreg.boot`` and
+``polyreg`` that changes only which label a random number maps to, not the
+distribution of the imputations. For ``polr`` the order is part of the
+model: on an **unordered** factor with exactly one row outside the fit rows,
+R fits the declared order and mice-py the sorted labels present, so the
+imputation differs in distribution. Declare the column as
 an ordered Categorical to choose the order ``polr`` assumes.
 
 Further points:
@@ -415,13 +608,13 @@ Further points:
 - **Integer columns become float**: a nullable integer column (``Int64``,
   ...) imputed by ``norm``, ``norm.nob``, ``norm.boot``, ``norm.predict`` or
   ``mean`` becomes ``Float64``, as R turns an integer column into double.
-- **Rows with an incomplete predictor**: where a predictor keeps missing
-  values (a column with method ``""``), mice-py leaves the rows in which it
-  is missing out of the data it passes to the method. R's augmentation then
-  computes the means, standard deviations and ranges of the predictors over
-  more rows than mice-py's, so the added rows, and with them the
-  imputations of ``logreg``, ``polyreg`` and ``polr``, can differ slightly
-  from R's. Not compared with R.
+- **Rows outside the masks**: as in R, the methods receive every row, also
+  rows in neither the fit rows nor the rows to impute (see
+  `where, ignore, post and passive columns`_). The augmentation of
+  ``logreg``, ``polyreg`` and ``polr`` takes the means, standard deviations
+  and ranges of the predictors over all rows, column by column without
+  missing values, and the categories from all of the target, as R's
+  ``augment`` does.
 - **Where the fits stop**: ``polyreg`` and the fallback of ``polr`` stop
   where ``nnet::multinom`` stops (its tolerances ``abstol = 1e-4``,
   ``reltol = 1e-8``, at most ``maxit = 100`` iterations, no error at the
@@ -499,8 +692,12 @@ Analysis and pooling
 Plots
 -----
 
-- The plot functions take the list of completed datasets and a 0/1 data
-  frame of observed cells, not a fitted object.
+- The plot functions take the list of completed datasets and a data frame
+  that marks the cells that were not imputed (``~mice.where``, or a 0/1
+  frame), not a fitted object. R's plots group the cells by whether they
+  are missing in the data (``is.na(data)``); mice-py's group them by the
+  frame passed, so with ``~mice.where`` an observed cell that was imputed
+  under ``where`` is drawn as imputed.
 - ``plot_chain_stats`` draws markers on the lines (R draws lines only) and
   plots every column it is given; R's ``plot.mids`` leaves out variables
   whose chain means contain missing values. Chain statistics exist for

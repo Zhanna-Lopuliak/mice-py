@@ -34,19 +34,26 @@ What it has:
 - **R's model set-up**: full predictor matrix by default, ``quickpred``,
   removal of constant and collinear variables with logged events, R's dummy
   coding of categorical predictors.
+- **Control over the chains**, with R's arguments: which cells are imputed
+  (``where``), rows left out of the models (``ignore``), changes to the
+  imputations such as bounds (``post``), columns computed from others
+  (``passive``, R's passive imputation), and more iterations of a finished
+  run (``continue_chains``, R's ``mice.mids``).
 - **Pooling** with Rubin's rules and Barnard-Rubin degrees of freedom, for
   any statsmodels formula model, or for estimates you computed yourself.
 - **Diagnostic plots** after R mice: missing-data pattern, strip, box,
   density and scatter plots of observed and imputed values, trace plots.
 
 **Validated against R mice 3.19.0**: exact comparisons of the deterministic
-parts and, with R's random numbers replayed, of the model-based methods; the
-distribution of imputed values per method; and a simulation study in which
-both engines impute the same datasets. Every comparison agrees with R (within
-the tolerances of the tests, the random ones within Monte Carlo error)
-except random forests with categorical predictors; see
-:doc:`r_mice/validation`. Version 0.3 changes results for data with
-categorical columns, version 0.2 for users of 0.1; see :doc:`upgrading`.
+parts and, with R's random numbers replayed, of the model-based methods and
+of whole chains; the distribution of imputed values per method and of full
+chains; and a simulation study in which both engines impute the same
+datasets. Every comparison agrees with R (within the tolerances of the
+tests, the random ones within Monte Carlo error) except random forests with
+categorical predictors; see :doc:`r_mice/validation`. Version 0.4 removes
+the arguments of ``impute`` deprecated since 0.2 and changes results for two
+kinds of call only, version 0.3 for data with categorical columns, version
+0.2 for users of 0.1; see :doc:`upgrading`.
 
 A first example is on :doc:`quickstart`.
 

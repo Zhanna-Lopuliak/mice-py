@@ -3,7 +3,7 @@ Examples
 
 Jupyter notebooks in the `examples/ folder
 <https://github.com/Zhanna-Lopuliak/mice-py/tree/main/examples>`_ of the
-repository. They run from top to bottom with mice-py 0.3. All of them use
+repository. They run from top to bottom with mice-py 0.4. All of them use
 the ``nhanes`` data of R mice (25 rows, 4 columns), in
 ``examples/data/nhanes.csv``; its columns are numeric, so their default method
 is pmm. Notebook 07 also uses R mice's ``boys`` data (748 rows, 9 columns,

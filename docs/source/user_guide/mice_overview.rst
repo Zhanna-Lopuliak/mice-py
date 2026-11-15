@@ -15,7 +15,9 @@ follows R's ``mice()``:
 1. **Setup.** Variables that are constant or collinear are removed from the
    imputation model (details below). Each incomplete column gets a method,
    by default the one R chooses for its type (``"pmm"``, ``"logreg"``,
-   ``"polyreg"`` or ``"polr"``); complete columns get ``""``.
+   ``"polyreg"`` or ``"polr"``); complete columns get ``""``. (Under
+   ``where``, the columns with cells to impute get a method; see
+   :doc:`controlling_imputation`.)
 2. **Initial values.** Each chain fills the missing values of every column it
    imputes with random draws from that column's observed values
    (``initial="sample"``).
@@ -25,10 +27,12 @@ follows R's ``mice()``:
    coding categorical predictors as R's ``model.matrix``), drops predictors
    that are constant or linearly dependent, and calls the method, which
    fits its model to the observed rows and draws new values for the missing
-   cells.
+   cells. A missing cell whose predictors are themselves missing in its row
+   (a predictor that is not imputed) cannot be imputed and stays missing.
 4. **Several chains.** Steps 2 and 3 run ``n_imputations`` times, each chain
    with its own random stream. The final state of each chain is one
-   completed dataset.
+   completed dataset. ``continue_chains`` runs more iterations of the same
+   chains (see :doc:`convergence_diagnostics`).
 
 The last-iteration datasets are the result; earlier iterations are only
 recorded through their chain statistics (``chain_mean``, ``chain_var``).
@@ -57,7 +61,7 @@ Arguments of ``impute``
      - Number of completed datasets (R's ``m``).
    * - ``maxit``
      - 5
-     - Iterations per chain; at least 1.
+     - Iterations per chain; 0 gives the start of the chains, as in R.
    * - ``method``
      - ``None``
      - A method name (``"pmm"``, ``"norm"``, ``"logreg"``, ``"polyreg"``,
@@ -70,7 +74,7 @@ Arguments of ``impute``
    * - ``predictor_matrix``
      - ``None``
      - 0/1 data frame, rows are targets, columns predictors. ``None`` means
-       every other column predicts every incomplete column. See
+       every other column predicts every column. See
        :doc:`predictor_matrices`.
    * - ``initial``
      - ``"sample"``
@@ -78,10 +82,13 @@ Arguments of ``impute``
        ``"meanobs"``: the observed value closest to the mean of a numeric
        column, the most frequent observed value of any other (not in R).
    * - ``visit_sequence``
-     - ``"roman"``
-     - ``"roman"`` (data order), ``"arabic"`` (reverse), ``"monotone"``
-       (fewest missing values first, ties in data order), ``"revmonotone"``,
-       ``"random"`` (drawn once per call), or a list of column labels.
+     - ``None``
+     - ``None``: data order with the passive columns last, as R's default.
+       ``"roman"`` (data order), ``"arabic"`` (reverse), ``"monotone"``
+       (fewest missing values first, ties in data order; with ``maxit=1``
+       it also edits the predictor matrix, see :doc:`predictor_matrices`),
+       ``"revmonotone"``, ``"random"`` (drawn once per call), or a list of
+       column labels, which may name a column twice.
    * - ``seed``
      - ``None``
      - Seed of the random number generators. ``None``: different results on
@@ -91,6 +98,23 @@ Arguments of ``impute``
      - ``("pmm", "logreg", "polyreg", "polr")``
      - The defaults by column type, in the order above (R's
        ``defaultMethod``).
+   * - ``where``
+     - ``None``
+     - The cells to impute: the missing ones, ``"all"``, ``"observed"``,
+       ``"none"`` or a boolean frame (R's ``where``). See
+       :doc:`controlling_imputation`.
+   * - ``ignore``
+     - ``None``
+     - One boolean per row: the rows the models leave out; they are still
+       imputed (R's ``ignore``).
+   * - ``post``
+     - ``None``
+     - ``{column: f(imp, data)}``: a function that changes the imputations
+       of a column after each draw, for example bounds (R's ``post``).
+   * - ``passive``
+     - ``None``
+     - ``{column: f(data)}``: columns computed from the others at each
+       visit (R's passive imputation).
    * - ``<method>_<parameter>``
      -
      - A parameter of a method, for example ``pmm_donors=3``,
@@ -134,7 +158,18 @@ After a run
        ``loggedEvents``); empty if nothing.
    * - ``chain_mean``, ``chain_var``
      - For each imputed numeric column, the mean and variance of its imputed
-       values, arrays of shape ``(maxit, n_imputations)``.
+       values, arrays of shape ``(iteration, n_imputations)``.
+   * - ``iteration``
+     - The number of iterations the chains have run (R's
+       ``imp$iteration``): ``maxit``, plus those of every
+       ``continue_chains`` since.
+   * - ``where``, ``ignore``, ``post``, ``passive``
+     - The cells imputed (a boolean frame), the rows left out of the models
+       (a boolean array), and the functions in effect; see
+       :doc:`controlling_imputation`.
+   * - ``model_results``
+     - The fits of the last ``fit``; ``impute`` and ``continue_chains``
+       empty it (see :doc:`pooling_analysis`).
 
 The setup step and logged events
 --------------------------------
@@ -204,4 +239,5 @@ Next steps
 
 - :doc:`imputation_methods`
 - :doc:`predictor_matrices`
+- :doc:`controlling_imputation`
 - :doc:`convergence_diagnostics`

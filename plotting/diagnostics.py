@@ -100,9 +100,9 @@ def _columns_to_plot(
     numeric_plot: str | None = None,
 ) -> list[Hashable]:
     """
-    The columns to plot: the requested ones that have at least one missing value.
+    The columns to plot: the requested ones that have at least one imputed cell (a 0 in `missing_pattern`).
 
-    By default the numeric columns with missing values, as R's plots take
+    By default the numeric columns with imputed cells, as R's plots take
     the variables that are not factors. ``numeric_plot`` names a plot that
     can draw numeric columns only: a requested column that is not numeric
     then raises ValueError. Warns when no column is left to plot.
@@ -161,12 +161,16 @@ def stripplot(
     imputed_datasets : sequence of pd.DataFrame
         List of DataFrames containing imputed values
     missing_pattern : pd.DataFrame
-        DataFrame indicating missing values (0 where missing, 1 where observed)
+        The cells that were not imputed, with the columns of the data: True
+        (or 1) for a cell that was not imputed, False (or 0) for an imputed
+        one. After ``MICE.impute`` pass ``~mice.where``; with the default
+        ``where`` that is ``data.notna()``, the observed cells. A cell
+        that is missing in a dataset is not drawn.
     columns : list of str, optional
         List of column names to plot. If None, plots the numeric columns with
-        missing values, as R's ``stripplot`` takes the variables that are not
-        factors. A categorical column can be named here; its levels are drawn
-        on the y-axis.
+        imputed cells (False or 0 in `missing_pattern`), as R's ``stripplot``
+        takes the variables that are not factors. A categorical column can be
+        named here; its levels are drawn on the y-axis.
     merge_imputations : bool, default False
         If True, shows two columns: one with only observed values and another with observed and imputed values overlaid.
         If False, shows separate plots for each imputation.
@@ -181,8 +185,8 @@ def stripplot(
     Returns
     -------
     matplotlib.figure.Figure or None
-        The figure, or None (with a warning) when no column to plot has
-        missing values.
+        The figure, or None (with a warning) when no column to plot has an
+        imputed cell.
     """
     columns = _columns_to_plot(imputed_datasets, missing_pattern, columns)
 
@@ -326,11 +330,15 @@ def bwplot(
     imputed_datasets : sequence of pd.DataFrame
         List of DataFrames containing imputed values
     missing_pattern : pd.DataFrame
-        DataFrame indicating missing values (0 where missing, 1 where observed)
+        The cells that were not imputed, with the columns of the data: True
+        (or 1) for a cell that was not imputed, False (or 0) for an imputed
+        one. After ``MICE.impute`` pass ``~mice.where``; with the default
+        ``where`` that is ``data.notna()``, the observed cells. A cell
+        that is missing in a dataset is not drawn.
     columns : list of str, optional
         List of numeric column names to plot. If None, plots the numeric
-        columns with missing values, as R's ``bwplot`` takes the variables
-        that are not factors.
+        columns with imputed cells (False or 0 in `missing_pattern`), as R's
+        ``bwplot`` takes the variables that are not factors.
     merge_imputations : bool, default False
         If True, combines all imputed values into a single boxplot. If False,
         shows separate boxplots for each imputation.
@@ -345,8 +353,8 @@ def bwplot(
     Returns
     -------
     matplotlib.figure.Figure or None
-        The figure, or None (with a warning) when no column to plot has
-        missing values.
+        The figure, or None (with a warning) when no column to plot has an
+        imputed cell.
 
     Raises
     ------
@@ -518,11 +526,15 @@ def densityplot(
     imputed_datasets : sequence of pd.DataFrame
         List of DataFrames containing imputed values
     missing_pattern : pd.DataFrame
-        DataFrame indicating missing values (0 where missing, 1 where observed)
+        The cells that were not imputed, with the columns of the data: True
+        (or 1) for a cell that was not imputed, False (or 0) for an imputed
+        one. After ``MICE.impute`` pass ``~mice.where``; with the default
+        ``where`` that is ``data.notna()``, the observed cells. A cell
+        that is missing in a dataset is not drawn.
     columns : list of str, optional
         List of numeric column names to plot. If None, plots the numeric
-        columns with missing values, as R's ``densityplot`` takes the
-        variables that are not factors.
+        columns with imputed cells (False or 0 in `missing_pattern`), as R's
+        ``densityplot`` takes the variables that are not factors.
     observed_color : str, default 'blue'
         Color for observed values
     imputed_color : str, default 'red'
@@ -534,8 +546,8 @@ def densityplot(
     Returns
     -------
     matplotlib.figure.Figure or None
-        The figure, or None (with a warning) when no column to plot has
-        missing values.
+        The figure, or None (with a warning) when no column to plot has an
+        imputed cell.
 
     Raises
     ------
@@ -601,7 +613,11 @@ def densityplot_split(
     imputed_datasets : sequence of pd.DataFrame
         List of DataFrames containing imputed values
     missing_pattern : pd.DataFrame
-        DataFrame indicating missing values (0 where missing, 1 where observed)
+        The cells that were not imputed, with the columns of the data: True
+        (or 1) for a cell that was not imputed, False (or 0) for an imputed
+        one. After ``MICE.impute`` pass ``~mice.where``; with the default
+        ``where`` that is ``data.notna()``, the observed cells. A cell
+        that is missing in a dataset is not drawn.
     column : str
         Name of the numeric column to plot
     observed_color : str, default 'blue'
@@ -616,7 +632,7 @@ def densityplot_split(
     -------
     matplotlib.figure.Figure or None
         The figure, or None (with a warning) when the column is not in
-        ``missing_pattern`` or has no missing values.
+        ``missing_pattern`` or has no imputed cell there.
 
     Raises
     ------
@@ -695,7 +711,11 @@ def xyplot(
     imputed_datasets : sequence of pd.DataFrame
         List of DataFrames containing imputed values
     missing_pattern : pd.DataFrame
-        DataFrame indicating missing values (0 where missing, 1 where observed)
+        The cells that were not imputed, with the columns of the data: True
+        (or 1) for a cell that was not imputed, False (or 0) for an imputed
+        one. After ``MICE.impute`` pass ``~mice.where``; with the default
+        ``where`` that is ``data.notna()``, the observed cells. A cell
+        that is missing in a dataset is not drawn.
     x : str
         Name of the column to plot on x-axis
     y : str
@@ -818,7 +838,7 @@ def plot_chain_stats(
     chain_mean : dict of str to np.ndarray
         Dictionary where each key is a column name and each value is a 2-D
         array of shape (n_iter, n_imputations) containing the means of the
-        newly imputed values.
+        imputations at the end of each iteration (``MICE.chain_mean``).
     chain_var : Dict[str, np.ndarray]
         Same structure as `chain_mean` but for the variance of the imputed
         values (``MICE.chain_var``). The plot shows its square root.
