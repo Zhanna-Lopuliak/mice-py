@@ -1,8 +1,10 @@
 Controlling the Imputation
 ==========================
 
-Four arguments of ``impute()`` change what the chains do, as the arguments
-of the same names do in R's ``mice()``:
+Four arguments of ``impute()`` change what the chains do. ``where``,
+``ignore`` and ``post`` have the names of the arguments of R's ``mice()``;
+``passive`` is R's passive imputation, which R writes as a formula in
+``method``:
 
 - ``where``: which cells get an imputation;
 - ``ignore``: which rows the imputation models leave out;

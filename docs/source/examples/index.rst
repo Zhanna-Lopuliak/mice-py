@@ -3,13 +3,14 @@ Examples
 
 Jupyter notebooks in the `examples/ folder
 <https://github.com/Zhanna-Lopuliak/mice-py/tree/main/examples>`_ of the
-repository. They run from top to bottom with mice-py 0.4. All of them use
-the ``nhanes`` data of R mice (25 rows, 4 columns), in
+repository. They run from top to bottom with mice-py 0.4. Notebooks 01 to 07
+use the ``nhanes`` data of R mice (25 rows, 4 columns), in
 ``examples/data/nhanes.csv``; its columns are numeric, so their default method
-is pmm. Notebook 07 also uses R mice's ``boys`` data (748 rows, 9 columns,
+is pmm. Notebooks 07 and 08 use R mice's ``boys`` data (748 rows, 9 columns,
 among them ordered categorical and text columns), in
-``examples/data/boys.csv``, for the default methods of categorical columns and
-the model-based methods.
+``examples/data/boys.csv``: 07 for the default methods of categorical columns
+and the model-based methods, 08 for ``passive``, ``post``, ``where``,
+``ignore`` and ``continue_chains``.
 
 .. list-table::
    :header-rows: 1
@@ -23,8 +24,8 @@ the model-based methods.
        completed datasets, the trace plot.
    * - `02_imputation_methods.ipynb
        <https://github.com/Zhanna-Lopuliak/mice-py/blob/main/examples/02_imputation_methods.ipynb>`_
-     - pmm, cart and rf for all columns, a method per column, comparing the
-       results in plots.
+     - pmm, cart, rf and midas for all columns, a method per column,
+       comparing the results in plots.
    * - `03_advanced_parameters.ipynb
        <https://github.com/Zhanna-Lopuliak/mice-py/blob/main/examples/03_advanced_parameters.ipynb>`_
      - Method parameters, predictor matrices and ``quickpred``, number of
@@ -46,6 +47,12 @@ the model-based methods.
        ``polr`` and ``polyreg``, method dicts and ``default_method``, the
        model-based methods for numeric columns, method parameters, the checks
        before the chains start, fit and pool.
+   * - `08_controlling_imputation.ipynb
+       <https://github.com/Zhanna-Lopuliak/mice-py/blob/main/examples/08_controlling_imputation.ipynb>`_
+     - A passive ``bmi`` and its predictor matrix, bounds and rules with
+       ``post``, the cells that get an imputation (``where``), a training and
+       a test set with ``ignore``, more iterations with ``continue_chains``,
+       fit and pool, and the names in R.
 
 Running the notebooks
 ---------------------
