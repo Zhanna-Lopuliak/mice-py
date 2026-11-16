@@ -22,7 +22,11 @@ Fit and pool
 
 ``fit`` is R's ``with(imp, lm(...))``: it fits the formula to each completed
 dataset with ``statsmodels.formula.api.ols`` and keeps the fits in
-``mice.model_results``. ``pool`` combines the latest fits.
+``mice.model_results``. ``pool`` combines the fits of the last ``fit``.
+``impute`` and ``continue_chains`` replace the completed datasets and
+remove the fits of the earlier ones (``model_results`` is emptied and
+``pooled_result`` removed), so call ``fit`` again after either; ``pool``
+without fits raises ``ValueError``.
 
 The pooled table
 ~~~~~~~~~~~~~~~~

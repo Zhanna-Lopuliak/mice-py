@@ -6,6 +6,271 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.4.0] - 2026-11-16
+
+This release adds four arguments of R's `mice()` to `impute()`: `where`
+(the cells that get imputations), `ignore` (rows left out of the model fits
+and still imputed), `post` (a function applied to the imputations of a
+column right after they are drawn) and `passive` (columns computed from
+other columns, R's passive imputation); and `MICE.continue_chains()`, which
+runs more iterations of the chains of the last `impute()`, as R's
+`mice.mids()`. `impute(maxit=0)` is allowed, as in R. The chain loop was
+rewritten after R's `sampler`. **Results change** for three kinds of call
+only: where a column with method `""` keeps missing values and predicts a
+column imputed by `logreg`, `polyreg` or `polr` (these methods now take the
+rows in which the predictor is missing into their augmentation, as R does);
+`visit_sequence="monotone"` with `maxit=1` (the predictor matrix is now
+edited as in R); and calls with the arguments `min_cor`, `min_puc`,
+`include`, `exclude`, `correlation_method` or `output_dir`, which were
+removed and now raise `TypeError`. Every other call gives the same results
+for the same seed. The documentation page "Upgrading from 0.3 to 0.4"
+(`docs/source/upgrading.rst`) says what to change; "Differences from R mice"
+lists where the new arguments deliberately differ from R; the new user
+guide page "Controlling the imputation" shows how to use them.
+
+The new arguments were checked against R mice 3.19.0 in the layers of 0.3.
+Exact parity: the imputers, called with the masks R's `sampler.univ`
+builds (fit rows and rows to impute overlapping, rows in neither), give R's
+imputations with R's random numbers replayed; whole chains, started from
+R's start values and given R's draws, give R's imputations, completed data,
+chain statistics and logged events in 51 cases with `where`, `ignore`,
+`post`, passive columns and continued runs (largest difference 3.3e-11);
+and the setup gives R's methods, visit sequences and predictor matrices.
+Distribution parity: the donor methods on a new input with overlapping
+masks (F8), and full chains with `where="all"`, with `ignore` and with a
+passive column and `post` (200 chains in R, 120 in Python; largest |z|
+2.40, 1.56 and 1.69, limit 5.5). Simulation study: a new scenario S9 and
+six new cells; none of their 114 paired comparisons is flagged (largest
+|z| 3.08, limit 4.2), both identity cells give R's estimates within
+2.9e-15, and every Python result file of the 41 earlier cells is
+byte-identical to that of the 0.3 run. See
+"Validation against R mice" (`docs/source/r_mice/validation.rst`).
+
+### Changed
+
+- **Every row reaches the imputer**, as R's `sampler.univ` passes them, and
+  the chain loop follows R's `sampler`. The imputers
+  (`imputation.norm.norm` and the other functions behind the methods)
+  accept every row: `id_obs` (the rows the model is fitted on) and `id_mis`
+  (the rows to impute) may overlap, and a row may be in neither mask. The
+  predictors must be complete in the rows of the two masks only; a row in
+  neither may have missing values. Such rows are not used, except by the
+  augmentation of `logreg`, `polyreg` and `polr`, which takes its means,
+  standard deviations and ranges over all rows, column by column without
+  missing values, and its categories from all of the target, as R's
+  `augment` does; `logreg.boot` takes its categories from the rows of the
+  two masks. `impute()` left out the rows in which a predictor keeps a
+  missing value (a column with method `""` that predicts another column);
+  it now passes them in neither mask. In that case the imputations of
+  `logreg`, `polyreg` and `polr` can change, and with them those of the
+  columns they predict. Every other call, and every direct call with
+  complementary masks and complete predictors, gives the same results for
+  the same seed.
+- `cart` and `rf` raise `ValueError` for a missing predictor value in a row
+  they fit on or impute; they passed it to scikit-learn before, whose trees
+  accepted it. Every imputer that reads the predictors checks them in the
+  same way, with the same message: `pmm`, `midas`, `cart` and `rf` also
+  take `x=None` for no predictor and refuse `x` with another number of rows
+  than `y`, as the norm methods did.
+- `impute(visit_sequence="monotone", maxit=1)` edits the predictor matrix
+  as R's `mice.edit.predictorMatrix` does: in the order of all columns by
+  their number of where-cells (the missing cells by default; columns
+  without any first), each column keeps as predictors only the columns
+  before it, so that one iteration imputes a monotone pattern without using
+  start values. `MICE.predictor_matrix` shows the edited matrix. This call
+  gives other results than in 0.3; every other `maxit` and visit sequence
+  gives the same.
+- The default of `impute(visit_sequence=)` is `None`, R's
+  `visitSequence = NULL`: data order with the passive columns (see
+  `impute(passive=)`) last. Without passive columns this is the order of
+  `"roman"`, the default before, so every call without `passive` gives the
+  same results. `imputation.constants.DEFAULT_VISIT_SEQUENCE` and
+  `VisitSequence.get_default_sequence()` are `None`;
+  `imputation.validators.check_visit_sequence` accepts `None`. The keywords
+  place a passive column like any other column, as in R.
+- `impute()` and `continue_chains()` empty `model_results` and remove
+  `pooled_result`, so that `pool()` cannot combine the fits of earlier
+  datasets: call `fit()` again after either. Before, `pool()` combined the
+  fits of the last `fit()`.
+- A `predictor_matrix` given to `impute()` needs a row for every column
+  that is imputed (with where-cells and a method other than `""`; a
+  passive column needs none), not for every incomplete column: an
+  incomplete column with method `""` may be a predictor without a row, its
+  missing cells stay missing as before. The errors say "the columns that
+  are imputed": "predictor_matrix has no row for the columns that are
+  imputed [...]" and, for a list `visit_sequence` that leaves one out,
+  "Visit sequence is missing columns that are imputed: [...]".
+  `imputation.validators.validate_predictor_matrix` takes
+  `imputed_columns=`, and the third parameter of
+  `imputation.validators.check_visit_sequence` is now `imputed_columns`
+  (was `columns_with_missing`).
+- The error for a column with more than 50 distinct observed values under
+  `logreg`, `logreg.boot`, `polyreg` or `polr` names removing the column
+  from the data first, for a column that identifies the rows, and then a
+  donor method (`pmm`, `cart`, `rf`, `sample`), under which the column
+  stays a predictor of the other columns, with one dummy column per value,
+  unless the predictor matrix excludes it. It recommended the donor method
+  first.
+- `plotting.stripplot` and `plotting.bwplot` keep every strip and box in
+  its place, also one without values to draw, and leave out missing
+  values. Before, a column without any cell that was not imputed (every
+  cell imputed, as with `where="all"`) had no strip or box of observed
+  values, which moved the others to its place, and the median points of
+  `bwplot` were drawn beside the wrong boxes; a group of missing values
+  (cells that could not be imputed) made pandas and NumPy warn.
+
+### Added
+
+- `impute(where=)`, R's `where`: the cells that get an imputation
+  (where-cells). `None` or `"missing"` (the missing cells, the default),
+  `"all"`, `"observed"`, `"none"`, a boolean DataFrame with the index and
+  the column labels of the data (columns aligned by label; R takes them by
+  position), or a boolean NumPy array of the shape of the data. As in R, an
+  observed where-cell gets an imputation in the completed data but keeps
+  its observed value in the data the chains work on, a missing cell left
+  out stays missing, a column without where-cells gets method `""` and a
+  complete column with where-cells the default method of its type, the
+  visit sequence lists the columns with where-cells and a method, and the
+  chain statistics are taken over all where-cells. A where-cell that cannot
+  be imputed (its column has no method, or its predictors are incomplete in
+  its row) is missing in the completed data, also where it was observed, as
+  in R; `impute()` and `continue_chains()` then warn with the number of
+  observed values lost per column and the reason (R is silent). A NumPy
+  integer or boolean column with where-cells becomes `Int64` (the nullable
+  integer dtype of its width) or `boolean` in the completed datasets, since
+  a where-cell can end up missing; under a norm method or `mean` the
+  integer column becomes `Float64`, as an incomplete `Int64` column does.
+  `imputation.validators.check_where` checks the argument: another shape,
+  other column labels, another index, values that are not booleans (also
+  0 and 1, which R accepts) or missing values raise `ValueError`.
+- `MICE.where`: the boolean DataFrame of where-cells of the last
+  `impute()`, with the index and the columns of the data. `~mice.where` is
+  the frame of cells that were not imputed, to pass to the diagnostic plots
+  of `plotting`.
+- `imputation.make_method(data, default_method=..., where=None)`: with
+  `where`, as R's `make.method(where = )`, a column without where-cells
+  gets `""` and every other column the default method of its type.
+- `impute(ignore=)`, R's `ignore`: the rows that the imputation models leave
+  out, one boolean per row (a list, a tuple, a NumPy or pandas array, or a
+  Series with the index of the data). As in R, an ignored row is left out
+  of the fit rows of every column in every iteration and of the values the
+  chains start from (`initial="meanobs"` too), and its where-cells are
+  imputed like any other; the setup step, the methods and the visit
+  sequence use all rows, "df set to 1" and the predictors dropped in each
+  iteration count the fit rows only, and `logreg`, `polyreg` and `polr`
+  still take the ignored rows into their augmentation. `continue_chains()`
+  keeps the rows of the run. `imputation.validators.check_ignore` checks
+  the argument: another type or length, a Series with another index, values
+  that are not booleans (also 0 and 1) or missing values raise
+  `ValueError`; fewer than 10 rows left for the fits give R's warning
+  "Fewer than 10 rows for fitting the imputation model. Are you sure?" and
+  the imputation goes on. A column that is imputed and has no observed
+  value outside the ignored rows raises `ValueError` before the chains
+  start, naming the column (R starts it from random normal values and stops
+  in the first iteration).
+- `MICE.ignore`: the boolean array of the rows that the last `impute()`
+  left out of the fits, all `False` by default.
+- `impute(post=)`, R's `post`: a mapping from a column to a function
+  `f(imp, data)`, for example bounds `{"tv": lambda imp, data:
+  imp.clip(1, 25)}` (R's `squeeze`). After each univariate imputation of
+  the column, in every iteration and chain, `f` gets copies of the
+  imputations of all its where-cells (a Series indexed by their row labels)
+  and of the working data in the same rows, and returns the values to keep:
+  a Series with the index of `imp` or a sequence of its length. They
+  replace the imputations, and the next columns are imputed from them; the
+  chain statistics are taken after them, as in R. As in R, `f` is not
+  called for a column that is not imputed, also one removed by the setup
+  step, and it is called also when no where-cell of the column could be
+  imputed. `imputation.validators.check_post` checks the argument (a
+  mapping of columns to callables); a `post` entry for a passive column
+  raises (R ignores it). A function that raises, returns another number of
+  values, a Series with another index, or values the column cannot hold
+  (a number that is not whole in an integer column, a label that is not a
+  category, ...) raises `ValueError` naming the column, the iteration and
+  the imputation.
+- `impute(passive=)`, R's passive imputation (a method `"~ I(...)"`): a
+  mapping from a column to a function `f(data)`, for example
+  `{"bmi": lambda d: d["wgt"] / (d["hgt"] / 100) ** 2}`. At each visit of
+  the column, `f` gets a copy of the working data (all rows; R evaluates
+  the formula on the rows being imputed) and returns one value per row;
+  the where-cells of the column take the values of their rows (in the
+  working data the missing ones only), nothing is drawn or logged.
+  `MICE.method` shows `"passive"` for the column
+  (`imputation.constants.PASSIVE_METHOD`); the name is reserved and
+  `method` does not take it, nor a `method` dict another method for a
+  passive column. As in R, a passive column starts from sampled observed
+  values (from standard normal draws when it has none in the rows that
+  `ignore` keeps), is visited after the imputed columns under the default
+  visit sequence, gets `""` without where-cells, is skipped by the constant
+  check of the setup step and takes part in the collinearity check, and
+  counts for the chain statistics; it needs no row in the predictor
+  matrix. Each function is called once on the data before the chains
+  start (`imputation.validators.check_passive`), so a function that fails
+  or does not return one value per row raises `ValueError` naming the
+  column before any imputation; the dtype of the column is fixed from that
+  call (an integer column whose function returns floats becomes
+  `Float64`; an entirely missing column takes the dtype of the result).
+  A column that has no observed value to start from and whose function
+  does not return numbers raises `ValueError`. The warning about observed
+  values lost in the completed data gives the reason "passive function
+  missing in these rows" for a passive column.
+- `MICE.post` and `MICE.passive`: the functions of the last `impute()` in
+  effect, without the columns that are not imputed or that the setup step
+  removed. `continue_chains()` uses them, and `impute(maxit=a + b)` equals
+  `impute(maxit=a)` plus `continue_chains(b)` with them too.
+- A list `visit_sequence` may name a column more than once, as in R; the
+  column is then visited each time (a passive column after each of its
+  inputs, for example), and its chain statistics are those at the end of
+  the iteration. It raised `ValueError` before. `MICE.visit_sequence` is
+  the order used, repeats included.
+- `MICE.continue_chains(maxit=1)`, as R's `mice.mids`: runs `maxit` more
+  iterations of the chains of the last `impute()`, each from its current
+  imputations and with its own generator where it stopped. The start, the
+  visit sequence (also a random one), the methods, the predictor matrix,
+  the setup step, `where`, `ignore`, `post` and `passive` are kept, and
+  "df set to 1" is checked in the first iteration of the run only.
+  `chain_mean` and `chain_var` get one row per new iteration, and
+  `logged_events` the new events, numbered by the iteration they happened
+  in. `impute(maxit=a + b, seed=s)` gives the same results as
+  `impute(maxit=a, seed=s)` followed by `continue_chains(b)`. It warns
+  "Number of logged events" only when the new iterations logged an event.
+  It raises `ValueError` before `impute()` and after a call that stopped
+  with an error. R's `newdata` argument is not ported; the user guide
+  shows how to impute new rows with `ignore` instead.
+- `impute(maxit=0)`, as in R: no iteration runs, the completed datasets
+  hold the start of each chain, and `chain_mean` and `chain_var` have no
+  rows; `continue_chains()` goes on from there. It raised `ValueError`
+  before; `imputation.validators.check_maxit` accepts 0.
+- `MICE.iteration`, R's `imp$iteration`: the number of iterations the
+  chains have run, the `maxit` of `impute()` plus that of every
+  `continue_chains()` since.
+- Tests: fixtures and parity tests for the imputers under R's masks
+  (`l1_masks`, and the input F8 of layer 2), for whole chains from R's
+  start with R's draws (`l1_chain`), for the setup under `where` and with
+  passive columns (`l1_setup`) and for chains with `where`, `ignore`,
+  `post` and a passive column in distribution (`l2_chain_where`,
+  `l2_chain_ignore`, `l2_chain_passive`); defects put back on purpose at
+  unit, chain and distribution level; property tests of the new arguments
+  and of `continue_chains` (`tests/test_properties`). Simulation study:
+  variants of a cell (`ignore_half`, `where_all`, `clip`,
+  `passive_product`), the scenario S9 and six cells (`simulations/`).
+- Documentation: the user guide page "Controlling the imputation",
+  "Upgrading from 0.3 to 0.4", a section on `where`, `ignore`, `post` and
+  passive columns in "Differences from R mice", and the new evidence in
+  "Validation against R mice".
+
+### Removed
+
+- `impute(min_cor=, min_puc=, include=, exclude=, correlation_method=)`,
+  deprecated since 0.2. Build the predictor matrix with
+  `imputation.quickpred(data, mincor=..., minpuc=..., include=...,
+  exclude=..., method=...)` and pass it as `predictor_matrix`. Passing one
+  of them raises the `TypeError` of an unknown keyword argument, which says
+  so.
+- `impute(output_dir=)`, deprecated and ignored since 0.2; it never had an
+  effect. Passing it raises `TypeError`.
+
+
 ## [0.3.0] - 2026-11-13
 
 This release ports nine model-based methods of R `mice` 3.19.0 (`norm`,

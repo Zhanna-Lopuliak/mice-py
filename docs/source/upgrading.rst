@@ -4,7 +4,118 @@ Upgrading
 This page lists what an existing user has to know when moving from one
 version to the next; the complete list is in the `changelog
 <https://github.com/Zhanna-Lopuliak/mice-py/blob/main/CHANGELOG.md>`_. To
-move from 0.1 to 0.3, read both sections.
+move across several versions, read the sections from your version upwards.
+
+Upgrading from 0.3 to 0.4
+-------------------------
+
+Version 0.4.0 adds four arguments of R's ``mice()`` to ``impute()``:
+``where``, ``ignore``, ``post`` and ``passive``, and the method
+``continue_chains()``, R's ``mice.mids()``; see
+:doc:`user_guide/controlling_imputation`. Code written for 0.3 runs
+unchanged unless it passes one of the removed arguments below, and **gives
+the same results for the same seed**, with two exceptions (below).
+
+Removed arguments
+~~~~~~~~~~~~~~~~~
+
+The arguments of ``impute`` deprecated since 0.2 are gone. Passing one
+raises ``TypeError``, and the message says what replaces it.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - Call in 0.3
+     - Call in 0.4
+   * - ``impute(min_cor=0.2)``
+     - ``impute(predictor_matrix=imputation.quickpred(df, mincor=0.2))``
+   * - ``min_puc``, ``include``, ``exclude``, ``correlation_method``
+     - the arguments ``minpuc``, ``include``, ``exclude`` and ``method`` of
+       ``imputation.quickpred``, whose result goes to ``predictor_matrix``
+   * - ``impute(output_dir=...)``
+     - leave it out; it never had an effect
+
+In 0.3 these arguments called ``quickpred`` in the same way, so the
+results stay the same.
+
+Calls that give other results
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The chain loop was rewritten after R's ``sampler``. Every call gives the
+same results as in 0.3 for the same seed, except these two:
+
+- **A predictor that keeps missing values, and a target imputed by**
+  ``logreg``, ``polyreg`` **or** ``polr``. A column with method ``""``
+  keeps its missing values; where it predicts another column, 0.3 left the
+  rows in which it is missing out of the data it passed to the method.
+  0.4 passes them, as R does, in neither the rows the model is fitted on
+  nor the rows to impute. Only ``logreg``, ``polyreg`` and ``polr`` use
+  such rows: their augmentation (R's ``augment``) takes its statistics and
+  categories over them too. Their imputations, and those of the columns
+  they predict, can change: on a test frame, over 40 seeds, 8, 13 and 11
+  of 600 imputed cells changed for ``logreg``, ``polyreg`` and ``polr``.
+  To see whether a run is affected:
+
+  .. code-block:: python
+
+     no_method = [col for col, meth in mice.method.items() if meth == "" and df[col].isna().any()]
+     affected = [
+         col
+         for col, meth in mice.method.items()
+         if meth in ("logreg", "polyreg", "polr") and mice.predictor_matrix.loc[col, no_method].any()
+     ]
+     print(affected)   # empty: the run gives the results of 0.3
+
+- **visit_sequence="monotone" with maxit=1.** R edits the predictor
+  matrix for this call so that each column is predicted only by the
+  columns visited before it, and one iteration imputes a monotone pattern
+  without using start values; 0.4 does the same (see
+  :doc:`user_guide/predictor_matrices`). ``mice.predictor_matrix`` shows
+  the edited matrix. The edit applies to the keyword only: to keep the
+  results of 0.3, pass the order as a list, for example
+  ``visit_sequence=["sex", "bmi", "chl"]`` for the example data (the
+  ``visit_sequence`` of a run with ``"monotone"``).
+
+Earlier fits are cleared
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+``impute()`` and the new ``continue_chains()`` empty ``mice.model_results``
+and remove ``mice.pooled_result``, so that ``pool()`` cannot combine fits
+of datasets that have been replaced. In 0.3, ``pool()`` after a new
+``impute()`` combined the fits of the old datasets. Call ``fit()`` again
+after imputing; ``pool()`` without fits raises ``ValueError``.
+
+Other changes
+~~~~~~~~~~~~~
+
+- **The default visit sequence** is ``visit_sequence=None``, R's
+  ``visitSequence = NULL``: data order with the passive columns last.
+  Without passive columns this is the order of ``"roman"``, the default of
+  0.3, so nothing changes; ``"roman"`` given explicitly places a passive
+  column in data order, as in R.
+- **A list visit sequence may name a column twice**; the column is then
+  visited twice in each iteration. 0.3 raised ``ValueError``.
+- **Predictor matrices**: a row is needed for every column that is imputed,
+  not for every incomplete column. An incomplete column with method ``""``
+  may now be a predictor without a row.
+- **More than 50 categories**: the ``ValueError`` for a text or categorical
+  column with more than 50 distinct values now names removing the column
+  first, for a column that identifies the rows, and then a donor method.
+- **Direct calls of the methods**: ``id_obs`` and ``id_mis`` may overlap,
+  and a row may be in neither, as R passes them; ``cart`` and ``rf`` now
+  raise ``ValueError`` for a missing predictor value in a row they fit on or
+  impute, as the other methods do. The third parameter of
+  ``imputation.validators.check_visit_sequence`` is now called
+  ``imputed_columns`` (was ``columns_with_missing``).
+- **Plots**: ``stripplot`` and ``bwplot`` keep a strip or box in its place
+  when it has no values to draw.
+
+New warnings, both only with the new arguments: "Observed values replaced
+by missing values in the completed data, ..." when ``where`` marks an
+observed cell that cannot be imputed (R loses such values silently), and
+R's "Fewer than 10 rows for fitting the imputation model. Are you sure?"
+when ``ignore`` leaves fewer than 10 rows for the fits.
 
 Upgrading from 0.2 to 0.3
 -------------------------
@@ -80,9 +191,8 @@ Other changes that can affect a 0.2 script
   identifiers, now gets ``polyreg`` (``polr`` if it is ordered) by default,
   and R limits these methods to 50 categories. ``impute`` raises
   ``ValueError`` naming the column before the chains start (0.2 imputed it
-  with ``pmm``). Give the column a donor method,
-  ``method={"name": "pmm"}``, or remove it from the data if it only
-  identifies the rows.
+  with ``pmm``). Remove the column from the data if it only identifies the
+  rows; otherwise give it a donor method, ``method={"name": "pmm"}``.
 - **Text columns are unordered categorical variables**, as everywhere in
   mice-py, so an incomplete text column gets ``logreg`` or ``polyreg`` by its
   number of distinct values. R gives a character column ``pmm`` and then
@@ -117,7 +227,7 @@ Method parameters of the new methods carry the method name with every dot
 replaced by an underscore: ``norm_boot_ridge=1e-4``, ``polyreg_maxit=200``,
 ``polr_log_fallback=True``. The deprecated arguments ``min_cor``,
 ``min_puc``, ``include``, ``exclude`` and ``correlation_method`` of
-``impute`` still work in 0.3 and will be removed in version 0.4.
+``impute`` still worked in 0.3; version 0.4 removed them (see above).
 
 Upgrading from 0.1 to 0.2
 -------------------------
@@ -223,7 +333,8 @@ Names that moved or were removed
        exclude=..., correlation_method=...)``
      - ``imputation.quickpred(data, mincor=..., minpuc=..., include=...,
        exclude=..., method=...)``, passed as ``predictor_matrix``; the
-       ``impute`` arguments still work in 0.2 with a ``DeprecationWarning``
+       ``impute`` arguments worked in 0.2 and 0.3 with a
+       ``DeprecationWarning`` and were removed in 0.4
    * - ``imputation.PMM.quantify_cca``
      - ``imputation.PMM.quantify``
    * - ``imputation.PMM.matcherid``; ``pmm(..., matcher=...)``
@@ -241,7 +352,8 @@ Names that moved or were removed
    * - ``from imputation.MICE import pool_descriptive_statistics``
      - ``from imputation.pooling import pool_descriptive_statistics``
    * - ``impute(output_dir=...)``
-     - ignored with a ``DeprecationWarning`` (it never did anything)
+     - ignored with a ``DeprecationWarning`` (it never did anything);
+       removed in 0.4
    * - ``plot_missing_data_pattern(...)`` returned the pattern table
      - returns the ``Figure``; the table comes from ``md_pattern_like``
    * - plot functions returned ``None``
@@ -279,7 +391,8 @@ Calls that 0.1 accepted, and often ignored, now fail:
    * - A target without any observed value in the rows of its model (pmm,
        midas, cart, rf)
      - ``ValueError``
-   * - A predictor matrix without a row for an incomplete column
+   * - A predictor matrix without a row for an incomplete column (from 0.4:
+       for a column that is imputed)
      - ``ValueError`` (was ``KeyError``)
    * - ``estimice(..., ls_meth=<unknown>)``
      - ``ValueError``
@@ -289,7 +402,7 @@ Calls that 0.1 accepted, and often ignored, now fail:
 New warnings: "Number of logged events" (``UserWarning``) when the setup
 step changed the model; a ``UserWarning`` for rows without any observed
 value and for ``pool()`` with a single imputation; ``DeprecationWarning``
-for the deprecated arguments above.
+for the deprecated arguments above (removed in 0.4).
 
 Logging and plots
 ~~~~~~~~~~~~~~~~~

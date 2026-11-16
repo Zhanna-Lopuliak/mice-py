@@ -12,6 +12,7 @@ quick start: run that block first, then the blocks of a page in order.
    mice_overview
    imputation_methods
    predictor_matrices
+   controlling_imputation
    convergence_diagnostics
    diagnostic_plots
    pooling_analysis
@@ -31,8 +32,14 @@ quick start: run that block first, then the blocks of a page in order.
 **Predictor matrices**
    Which variables predict which, ``quickpred``, and the setup step.
 
+**Controlling the imputation**
+   Which cells are imputed (``where``), which rows the models leave out
+   (``ignore``), changes to the imputations (``post``), and derived columns
+   (``passive``).
+
 **Convergence diagnostics**
-   Chain statistics and trace plots.
+   Chain statistics, trace plots, and more iterations with
+   ``continue_chains``.
 
 **Diagnostic plots**
    All plot functions of the ``plotting`` package.

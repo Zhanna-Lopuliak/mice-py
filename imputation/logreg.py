@@ -113,19 +113,24 @@ def logreg(
     y : array-like of shape (n_samples,)
         Target with two categories: boolean, categorical (``pd.Categorical``,
         possibly ordered), text, or numeric with two distinct values.
-        Inside MICE the missing entries hold the current imputations; they
-        enter only through the categories they hold (see :func:`augment`),
-        not the fit.
+        Every entry counts for the categories (see :func:`augment`), also
+        those outside `id_obs` (inside MICE the missing entries hold the
+        current imputations); only the rows of `id_obs` enter the fit.
     id_obs : array-like of bool of shape (n_samples,)
-        True where `y` is observed.
+        The rows the model is fitted on (R's ``ry``), where `y` is
+        observed.
     x : array-like or pd.DataFrame of shape (n_samples, n_features)
-        Predictors without the intercept, without missing values; zero
-        columns (or None) for the intercept-only model. A DataFrame with
-        categorical, object, string or boolean columns is dummy-coded first
-        by :func:`imputation.design.obtain_design`, as MICE does.
+        Predictors without the intercept; zero columns (or None) for the
+        intercept-only model. They must be complete in the rows of `id_obs`
+        and `id_mis`; a row in neither may hold missing values and enters
+        only the means, standard deviations and ranges of :func:`augment`.
+        A DataFrame with categorical, object, string or boolean columns is
+        dummy-coded first by :func:`imputation.design.obtain_design`, as
+        MICE does.
     id_mis : array-like of bool of shape (n_samples,), optional
         The cells to impute (R's ``wy``). If None, those where `id_obs` is
-        False.
+        False. The two masks may overlap (a row both fitted on and imputed,
+        as under R's ``where``), and a row may be in neither.
     rng : np.random.Generator, optional
         Random number generator. If None, a fresh generator is used.
 
@@ -141,7 +146,7 @@ def logreg(
     ValueError
         If `y` has more than two categories, if `y` has no observed value
         and some value is to be imputed, or if `x` is not numeric or has
-        missing values.
+        missing values in a row of `id_obs` or `id_mis`.
 
     Notes
     -----
@@ -222,7 +227,10 @@ def logreg_boot(
     Parameters
     ----------
     y, id_obs, x, id_mis : array-like
-        As in :func:`logreg`.
+        As in :func:`logreg`, except that only the rows of `id_obs` and
+        `id_mis` are read, as R does without the augmentation: the
+        categories are those of these rows, and a row in neither mask is
+        not used at all.
     rng : np.random.Generator, optional
         As in :func:`logreg`.
 
@@ -247,10 +255,11 @@ def logreg_boot(
     the fit stops at the iteration limit or with large coefficients, and the
     probabilities are close to 0 or 1.
 
-    The categories are ordered as in :func:`logreg`. R's ``logreg.boot``,
-    which does not augment, takes the declared level order of an unordered
-    factor instead; the distribution of the imputations is the same, only
-    the label a given random number maps to can differ.
+    The categories are ordered as in :func:`logreg`, but they are those of
+    the rows of `id_obs` and `id_mis` only. R's ``logreg.boot``, which does
+    not augment, takes the declared level order of an unordered factor
+    instead; the distribution of the imputations is the same, only the
+    label a given random number maps to can differ.
 
     Where R fails or misbehaves, this port goes on:
 
@@ -259,7 +268,10 @@ def logreg_boot(
     - without predictors and with more than one cell to impute R stops
       (non-conformable arguments); here the intercept-only model is fitted;
     - columns aliased in the bootstrap sample: R imputes NA; here their
-      coefficients are 0.
+      coefficients are 0;
+    - a row to impute that is also a fit row (overlapping masks): R
+      predicts it from the predictors of the bootstrap row that took its
+      place in the fit rows; here from its own predictors.
 
     Examples
     --------
@@ -358,8 +370,11 @@ def augment(
     block ``j``, predictor ``j`` is ``mean_j + sd_j / 2`` and
     ``mean_j - sd_j / 2`` in turn, clamped to the range of predictor ``j``;
     the other predictors are at their means; the targets are the categories
-    in increasing code order, each twice. Means, standard deviations
-    (divisor ``n - 1``) and ranges are computed over all rows of `x`. The
+    in increasing code order, each twice. Means, standard deviations and
+    ranges are computed over all rows of `x`, whatever the masks, column by
+    column and skipping missing values: a row with a missing value in one
+    predictor counts for the others, and the standard deviation of a
+    predictor divides by its own count minus 1 (R's ``na.rm = TRUE``). The
     added rows count as observed, are not imputed, and have the weight
     ``(p + 1) / (2 p k)``; the input rows have weight 1.
 
@@ -368,13 +383,15 @@ def augment(
     y : array-like of int of shape (n_samples,)
         Category codes, for example ``target_categories(y).codes``; a
         negative code marks a missing entry. Every entry with a code counts
-        for the categories present, also the cells to impute.
+        for the categories present, in all rows: also the cells to impute
+        and the rows in neither mask.
     id_obs : array-like of bool of shape (n_samples,)
-        True where `y` is observed.
+        The rows the model is fitted on (R's ``ry``).
     x : array-like of shape (n_samples, n_features)
-        Predictors without the intercept, without missing values.
+        Predictors without the intercept, of all rows; missing values (NaN)
+        are skipped as described above.
     id_mis : array-like of bool of shape (n_samples,)
-        The cells to impute (R's ``wy``).
+        The cells to impute (R's ``wy``); it may overlap `id_obs`.
     max_categories : int, default=50
         More categories than this raise ``ValueError`` (R's ``maxcat``).
 
@@ -382,9 +399,9 @@ def augment(
     -------
     Augmented
         The augmented ``y``, ``id_obs``, ``x``, ``id_mis`` and the weights.
-        Without predictors, or when exactly one entry of `y` is not
-        observed, the input is returned unchanged with all weights 1, as R
-        does.
+        Without predictors, or when exactly one row lies outside `id_obs`
+        (whatever the number of cells to impute), the input is returned
+        unchanged with all weights 1, as R does.
 
     Raises
     ------
@@ -425,9 +442,7 @@ def augment(
     if _augmentation_skipped(n_predictors, int((~id_obs).sum())):
         return Augmented(y=y, id_obs=id_obs, x=x, id_mis=id_mis, weights=np.ones(n_rows))
 
-    mean = x.mean(axis=0)
-    with np.errstate(invalid="ignore", divide="ignore"):  # one row: sd is NaN, as R's NA
-        sd = np.sqrt(np.sum((x - mean) ** 2, axis=0) / (n_rows - 1))
+    mean, sd, low, high = _column_statistics(x)
     n_added = 2 * n_predictors * n_categories
     # shifts of +-1/2 sd on the block diagonal, 0 elsewhere (R's matrix b)
     shift = np.zeros((n_added, n_predictors))
@@ -435,7 +450,7 @@ def augment(
     for j in range(n_predictors):
         shift[2 * n_categories * j : 2 * n_categories * (j + 1), j] = half
     with np.errstate(invalid="ignore"):
-        added = _clamp(mean + shift * sd, x.min(axis=0), x.max(axis=0))
+        added = _clamp(mean + shift * sd, low, high)
     return Augmented(
         y=np.concatenate([y, np.tile(np.repeat(categories, 2), n_predictors)]),
         id_obs=np.concatenate([id_obs, np.ones(n_added, dtype=bool)]),
@@ -454,7 +469,7 @@ def _logreg(y: Any, id_obs: ArrayLike, x: Any, id_mis: ArrayLike | None, rng: np
     """`logreg`, returning its intermediate results too."""
     id_obs, id_mis = _masks(id_obs, id_mis, "logreg")
     categories = _two_categories(y, id_obs, "logreg")
-    design = _design_matrix(x, len(categories.codes), "logreg")
+    design = _design_matrix(x, len(categories.codes), id_obs | id_mis, "logreg")
     if not id_obs.any() or len(categories.levels) == 1:
         return _single_category(categories, id_mis)
     if rng is None:
@@ -471,10 +486,16 @@ def _logreg(y: Any, id_obs: ArrayLike, x: Any, id_mis: ArrayLike | None, rng: np
 def _logreg_boot(
     y: Any, id_obs: ArrayLike, x: Any, id_mis: ArrayLike | None, rng: np.random.Generator | None
 ) -> _Steps:
-    """`logreg_boot`, returning its intermediate results too."""
+    """`logreg_boot`, returning its intermediate results too.
+
+    R's ``logreg.boot`` does not augment and reads no row outside the two
+    masks, so the categories come from the rows of the masks only.
+    """
     id_obs, id_mis = _masks(id_obs, id_mis, "logreg.boot")
+    used = id_obs | id_mis
+    design = _design_matrix(x, len(y), used, "logreg.boot")[used]
+    y, id_obs, id_mis = _rows(y, used), id_obs[used], id_mis[used]
     categories = _two_categories(y, id_obs, "logreg.boot")
-    design = _design_matrix(x, len(categories.codes), "logreg.boot")
     if not id_obs.any() or len(categories.levels) == 1:
         return _single_category(categories, id_mis)
     if rng is None:
@@ -508,6 +529,13 @@ def _two_categories(y: Any, id_obs: np.ndarray, method: str) -> Categories:
     return categories
 
 
+def _rows(y: Any, rows: np.ndarray) -> Any:
+    """The entries of `y` in `rows` (a boolean mask); a Categorical stays one, with its categories."""
+    if isinstance(getattr(y, "dtype", None), pd.CategoricalDtype):
+        return pd.Categorical(y)[rows]
+    return np.asarray(y)[rows]
+
+
 def _single_category(categories: Categories, id_mis: np.ndarray) -> _Steps:
     """Every cell in `id_mis` gets the one category present (R invents labels here); no fit, no draws."""
     codes = np.zeros(int(id_mis.sum()), dtype=np.intp)
@@ -515,8 +543,27 @@ def _single_category(categories: Categories, id_mis: np.ndarray) -> _Steps:
 
 
 def _augmentation_skipped(n_predictors: int, n_not_observed: int) -> bool:
-    """R's ``augment`` leaves the data alone without predictors or with exactly one entry not observed."""
+    """R's ``augment`` leaves the data alone without predictors or with exactly one row outside the fit rows."""
     return n_predictors == 0 or n_not_observed == 1
+
+
+def _column_statistics(x: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Mean, standard deviation, minimum and maximum of each column of `x`, ignoring NaN.
+
+    R's ``apply(x, 2, f, na.rm = TRUE)``: column by column, so a row with a
+    missing value in one column counts for the others, and the variance of
+    a column divides by that column's count minus 1. A column with one
+    value has the standard deviation NaN (R's NA); one without values the
+    mean NaN, the minimum Inf and the maximum -Inf, as in R.
+    """
+    present = ~np.isnan(x)
+    count = present.sum(axis=0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean = np.where(present, x, 0.0).sum(axis=0) / count
+        sd = np.sqrt(np.sum(np.where(present, x - mean, 0.0) ** 2, axis=0) / (count - 1))
+    low = np.where(present, x, np.inf).min(axis=0)
+    high = np.where(present, x, -np.inf).max(axis=0)
+    return mean, sd, low, high
 
 
 def _clamp(values: np.ndarray, low: np.ndarray, high: np.ndarray) -> np.ndarray:

@@ -42,8 +42,10 @@ Common arguments and return value
 ---------------------------------
 
 The plots of imputed data take the list of completed datasets and a data
-frame of the same shape with **1 where a value was observed and 0 where it
-was missing** in the original data:
+frame of the same shape that is **True (or 1) for a cell that was not
+imputed and False (or 0) for a cell that was**. After a run that is
+``~mice.where``, the complement of the cells ``impute`` imputed; with the
+default ``where`` it equals ``df.notna()``, the observed cells:
 
 .. code-block:: python
 
@@ -53,7 +55,13 @@ was missing** in the original data:
    mice.impute(seed=1)
 
    datasets = mice.imputed_datasets
-   observed = df.notna().astype(int)    # 1 observed, 0 missing
+   observed = ~mice.where               # True: not imputed (here: observed)
+
+Under ``where`` (see :doc:`controlling_imputation`) pass ``~mice.where`` as
+well: an observed cell that was imputed is then drawn as imputed, and a
+missing cell that ``where`` left out is not drawn. R's plots group the cells
+by whether they are missing in the data instead. A 0/1 frame such as
+``df.notna().astype(int)`` works too.
 
 Further arguments:
 

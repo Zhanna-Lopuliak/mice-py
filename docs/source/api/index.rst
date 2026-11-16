@@ -22,12 +22,18 @@ packages: ``imputation`` (imputation and pooling) and ``plotting``
    * - Name
      - Purpose
    * - :class:`imputation.MICE`
-     - impute, fit and pool (:doc:`mice`)
+     - impute (with ``where``, ``ignore``, ``post`` and ``passive``),
+       continue the chains (``continue_chains``), fit and pool (:doc:`mice`)
    * - :func:`imputation.quickpred`
      - predictor matrix by R's ``quickpred`` rule (:doc:`design`)
    * - :func:`imputation.make_method`
-     - the default method of each column, by R's ``make.method`` rule
-       (``imputation.utils.make_method``, :doc:`utilities`)
+     - the default method of each column, by R's ``make.method`` rule, also
+       under ``where`` (``imputation.utils.make_method``, :doc:`utilities`)
+   * - ``imputation.validators.check_where``, ``check_ignore``,
+       ``check_post``, ``check_passive``
+     - the checks of the arguments ``where``, ``ignore``, ``post`` and
+       ``passive`` of ``impute``, in the forms ``impute`` uses
+       (:doc:`utilities`)
    * - ``imputation.PMM.pmm``, ``imputation.midas.midas``,
        ``imputation.cart.cart``, ``imputation.rf.rf``,
        ``imputation.sample.sample``

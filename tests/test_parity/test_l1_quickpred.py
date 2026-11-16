@@ -31,11 +31,10 @@ def _expected(case):
     )
 
 
-@pytest.mark.parametrize("case", QUICKPRED["cases"], ids=IDS)
-def test_quickpred_matches_r(case):
+def _quickpred(case):
     from imputation import quickpred
 
-    got = quickpred(
+    return quickpred(
         _data(case),
         mincor=case["mincor"],
         minpuc=case["minpuc"],
@@ -43,26 +42,22 @@ def test_quickpred_matches_r(case):
         exclude=str_list(case["exclude"]) or None,
         method=case["method"],
     )
+
+
+@pytest.mark.parametrize("case", QUICKPRED["cases"], ids=IDS)
+def test_quickpred_matches_r(case):
+    got = _quickpred(case)
     expected = _expected(case)
     pd.testing.assert_frame_equal(got.loc[expected.index, expected.columns].astype(int), expected, check_names=False)
 
 
-# The same rule is reached through the keyword arguments of impute()
-# (min_cor, min_puc, include, exclude, correlation_method). These stay, with a
-# deprecation warning, for one version.
+# The matrix of quickpred reaches impute() unchanged when passed as
+# predictor_matrix, the replacement of the keyword arguments min_cor, min_puc,
+# include, exclude and correlation_method removed in version 0.4.
 @pytest.mark.parametrize("case", QUICKPRED["cases"], ids=IDS)
-def test_impute_quickpred_arguments_match_r(case):
+def test_impute_with_quickpred_matrix_matches_r(case):
     mice = MICE(_data(case))
-    with pytest.warns(DeprecationWarning, match="imputation.quickpred"):
-        mice.impute(
-            n_imputations=1,
-            maxit=1,
-            min_cor=case["mincor"],
-            min_puc=case["minpuc"],
-            include=str_list(case["include"]) or None,
-            exclude=str_list(case["exclude"]) or None,
-            correlation_method=case["method"],
-        )
+    mice.impute(n_imputations=1, maxit=1, predictor_matrix=_quickpred(case))
     expected = _expected(case)
     pd.testing.assert_frame_equal(
         mice.predictor_matrix.loc[expected.index, expected.columns].astype(int),

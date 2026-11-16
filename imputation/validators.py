@@ -6,8 +6,8 @@ import logging
 import numbers
 import re
 import warnings
-from collections.abc import Hashable, Mapping
-from typing import Any
+from collections.abc import Collection, Hashable, Mapping
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -15,6 +15,7 @@ import pandas as pd
 from .constants import (
     DEFAULT_METHOD,
     DEFAULT_METHODS,
+    PASSIVE_METHOD,
     SUPPORTED_INITIAL_METHODS,
     SUPPORTED_METHODS,
     SUPPORTED_VISIT_SEQUENCES,
@@ -45,6 +46,32 @@ _TWO_CATEGORY_METHODS = frozenset((ImputationMethod.LOGREG.value, ImputationMeth
 _CATEGORICAL_METHODS = _TWO_CATEGORY_METHODS | {ImputationMethod.POLYREG.value, ImputationMethod.POLR.value}
 # Donor methods that impute a column of any type
 _DONORS = "a donor method (pmm, cart, rf, sample)"
+# R's keywords for `where` (make.where): the cells they mark
+_WHERE_KEYWORDS = ("missing", "all", "observed", "none")
+_WHERE_FORMS = (
+    f"None, one of {', '.join(repr(keyword) for keyword in _WHERE_KEYWORDS)}, a boolean DataFrame with the index "
+    "and the columns of the data, or a boolean NumPy array of the shape of the data"
+)
+_IGNORE_FORMS = (
+    "None or a sequence of booleans with one entry per row of the data: a list, a tuple, a NumPy or pandas array, "
+    "or a Series with the index of the data"
+)
+# R's warning of check.ignore when ignore leaves fewer than 10 rows
+_FEW_FIT_ROWS = "Fewer than 10 rows for fitting the imputation model. Are you sure?"
+# The forms of `post` and `passive`, with an example each
+_POST_FORM = (
+    "a mapping from column labels to functions f(imp, data), for example {'tv': lambda imp, data: imp.clip(1, 25)}"
+)
+_PASSIVE_EXAMPLE = "{'bmi': lambda d: d['wgt'] / (d['hgt'] / 100) ** 2}"
+_PASSIVE_FORM = f"a mapping from column labels to functions f(data), for example {_PASSIVE_EXAMPLE}"
+# What a passive and a post function must return, for the messages
+_PASSIVE_RESULT = "one value per row: a Series with the index of the data, or a sequence of its length"
+_POST_RESULT = "one value per entry of imp: a Series with the index of imp, or a sequence of its length"
+# The error for the reserved name "passive" in `method`
+_PASSIVE_NOT_A_METHOD = (
+    f"'{PASSIVE_METHOD}' is not an imputation method: a passive column is given with the argument passive, as a "
+    f"function of the data, for example passive={_PASSIVE_EXAMPLE}; MICE.method then shows '{PASSIVE_METHOD}' for it."
+)
 
 
 def _is_integer(value: Any) -> bool:
@@ -92,26 +119,420 @@ def check_maxit(maxit: int) -> None:
     Parameters
     ----------
     maxit : int
-        Maximum number of iterations for each imputation cycle (a Python or
-        NumPy integer)
+        Number of iterations of each chain (a Python or NumPy integer). 0 is
+        allowed, as in R: no iteration runs.
 
     Raises
     ------
     ValueError
-        If maxit is not a positive integer
+        If maxit is not a non-negative integer
     """
     if not _is_integer(maxit):
         raise ValueError("maxit must be an integer")
 
-    if maxit <= 0:
-        raise ValueError("maxit must be a positive integer")
+    if maxit < 0:
+        raise ValueError("maxit must be a non-negative integer")
 
     if maxit > 50:
         warnings.warn("maxit is greater than 50, imputations will take a lot of time", UserWarning, stacklevel=3)
 
 
+def _holds_booleans(values: Any, dtype: Any) -> bool:
+    """True if `values` (without missing values, of dtype `dtype`) are booleans.
+
+    A NumPy or pandas boolean dtype, or the object dtype with every value a
+    Python or NumPy bool; not numbers, also not 0 and 1.
+    """
+    return pd.api.types.is_bool_dtype(dtype) or (
+        pd.api.types.is_object_dtype(dtype)
+        and all(isinstance(value, (bool, np.bool_)) for value in np.asarray(values, dtype=object).ravel())
+    )
+
+
+def _boolean_values(values: Any, dtype: Any, place: str) -> np.ndarray:
+    """The values of one column of `where` (or of the whole array) as a bool array.
+
+    `place` names them in a message ("column 'x'", "the array"). Returns a
+    new array. Raises ValueError for a missing value, and for a value that
+    is not a boolean.
+    """
+    if isinstance(dtype, np.dtype) and dtype == np.bool_:
+        return np.array(values, dtype=bool)
+    if pd.isna(values).any():
+        raise ValueError(f"where contains missing values ({place}): every cell must be True or False.")
+    if _holds_booleans(values, dtype):
+        return np.array(values, dtype=bool)
+    raise ValueError(
+        f"where must hold booleans, True or False; {place} has dtype {dtype}. Numbers, also 0 and 1, are not "
+        "accepted: convert them with .astype(bool)."
+    )
+
+
+def check_where(where: Any, data: pd.DataFrame) -> pd.DataFrame:
+    """
+    Check the cells that get an imputation, as R's ``check.where``, and return them as a boolean DataFrame.
+
+    A cell that `where` marks (a where-cell) gets an imputation, also where
+    it is observed; a missing cell that it leaves out stays missing.
+
+    Parameters
+    ----------
+    where : None, str, pd.DataFrame or np.ndarray
+        The where-cells:
+
+        - None or ``"missing"``: the missing cells (R's default);
+        - ``"all"``: every cell; ``"observed"``: the observed cells;
+          ``"none"``: no cell (R's keywords of ``make.where``);
+        - a DataFrame of booleans with the index of `data` (the same
+          labels in the same order) and the column labels of `data` in any
+          order. Its columns are aligned with those of `data` by label (R
+          takes a data frame by position);
+        - a NumPy array of booleans of the shape of `data`, its columns in
+          the order of the columns of `data`.
+    data : pd.DataFrame
+        The data.
+
+    Returns
+    -------
+    pd.DataFrame
+        A new frame of dtype bool with the index and the columns of `data`,
+        in data order.
+
+    Raises
+    ------
+    ValueError
+        For another keyword or another type; for a DataFrame or an array of
+        another shape than `data`; for a DataFrame with other column labels
+        or another index; for values that are not booleans (also the
+        numbers 0 and 1, which R accepts) or missing values. The message
+        says what is expected.
+
+    Examples
+    --------
+    >>> import numpy as np, pandas as pd
+    >>> df = pd.DataFrame({"x": [1.0, np.nan, 3.0], "y": [np.nan, 2.0, 5.0]})
+    >>> check_where(None, df)
+           x      y
+    0  False   True
+    1   True  False
+    2  False  False
+    >>> check_where("all", df).sum().tolist()
+    [3, 3]
+    >>> where = pd.DataFrame({"y": [True, False, False], "x": [False, True, True]})
+    >>> check_where(where, df)["x"].tolist()
+    [False, True, True]
+    """
+    if where is None:
+        where = "missing"
+    if isinstance(where, str):
+        if where == "missing":
+            return data.isna()
+        if where == "observed":
+            return data.notna()
+        if where in ("all", "none"):
+            return pd.DataFrame(where == "all", index=data.index, columns=data.columns)
+        raise ValueError(f"where must be {_WHERE_FORMS}; got the string {where!r}.")
+
+    if isinstance(where, pd.DataFrame):
+        if where.shape != data.shape:
+            raise ValueError(
+                f"where has the shape {where.shape}, the data {data.shape}: where must have one entry per cell "
+                "of the data."
+            )
+        if set(where.columns) != set(data.columns):
+            unknown = [col for col in where.columns if col not in data.columns]
+            absent = [col for col in data.columns if col not in where.columns]
+            raise ValueError(
+                f"where must have the column labels of the data, in any order; it has the columns {unknown}, "
+                f"which are not in the data, and not the columns {absent}."
+            )
+        if not where.index.equals(data.index):
+            raise ValueError(
+                "where has another index than the data: it must have the index of the data, the same labels "
+                "in the same order."
+            )
+        values = np.zeros(data.shape, dtype=bool)
+        for j, col in enumerate(data.columns):
+            column = where[col]
+            values[:, j] = _boolean_values(column.to_numpy(), column.dtype, f"column {col!r}")
+        return pd.DataFrame(values, index=data.index, columns=data.columns)
+
+    if isinstance(where, np.ndarray):
+        if where.shape != data.shape:
+            raise ValueError(
+                f"where has the shape {where.shape}, the data {data.shape}: the array must have one entry per "
+                "cell of the data."
+            )
+        return pd.DataFrame(_boolean_values(where, where.dtype, "the array"), index=data.index, columns=data.columns)
+
+    raise ValueError(f"where must be {_WHERE_FORMS}; got {type(where).__name__}.")
+
+
+def check_ignore(ignore: Any, data: pd.DataFrame) -> np.ndarray:
+    """
+    Check the rows that the imputation models leave out, as R's ``check.ignore``, and return them as a bool array.
+
+    An ignored row is left out of every model fit and of the values the
+    chains start from, and its where-cells are still imputed (see
+    `MICE.impute`).
+
+    Parameters
+    ----------
+    ignore : None or sequence of bool
+        One entry per row of `data`, True for a row that the models leave
+        out:
+
+        - None: no row (R's default);
+        - a list or tuple of booleans, a NumPy array of booleans or a
+          pandas array of dtype ``"boolean"``, in the order of the rows of
+          `data`;
+        - a Series of booleans with the index of `data` (the same labels in
+          the same order).
+    data : pd.DataFrame
+        The data.
+
+    Returns
+    -------
+    np.ndarray
+        A new array of dtype bool with one entry per row of `data`.
+
+    Raises
+    ------
+    ValueError
+        For another type (a string, a DataFrame, a single value, ...); for
+        another number of entries than rows (also a two-dimensional array);
+        for a Series with another index; for missing values; for values that
+        are not booleans, also the numbers 0 and 1 (R accepts no numbers
+        either). The message says what is expected.
+
+    Warns
+    -----
+    UserWarning
+        When `ignore` is given and leaves fewer than 10 rows for the model
+        fits, with R's text "Fewer than 10 rows for fitting the imputation
+        model. Are you sure?". As in R, the imputation goes on.
+
+    Examples
+    --------
+    >>> import numpy as np, pandas as pd
+    >>> df = pd.DataFrame({"x": [1.0, np.nan, 3.0] * 5})
+    >>> check_ignore(None, df).tolist() == [False] * 15
+    True
+    >>> check_ignore([False] * 13 + [True] * 2, df).nonzero()[0].tolist()
+    [13, 14]
+    >>> check_ignore(df["x"].isna(), df).nonzero()[0].tolist()
+    [1, 4, 7, 10, 13]
+    """
+    n_rows = len(data)
+    if ignore is None:
+        return np.zeros(n_rows, dtype=bool)
+    if isinstance(ignore, pd.Series):
+        values = ignore.array if isinstance(ignore.dtype, pd.api.extensions.ExtensionDtype) else ignore.to_numpy()
+    elif isinstance(ignore, (np.ndarray, pd.api.extensions.ExtensionArray)):
+        values = ignore
+    elif isinstance(ignore, (list, tuple)):
+        try:
+            values = np.asarray(ignore)
+        except ValueError:  # entries of different lengths
+            values = np.asarray(ignore, dtype=object)
+    else:
+        raise ValueError(f"ignore must be {_IGNORE_FORMS}; got {type(ignore).__name__}.")
+
+    if values.ndim != 1 or len(values) != n_rows:
+        size = f"{len(values)} entries" if values.ndim == 1 else f"the shape {values.shape}"
+        raise ValueError(
+            f"ignore has {size}, the data has {n_rows} rows: ignore must have one entry per row of the data."
+        )
+    if isinstance(ignore, pd.Series) and not ignore.index.equals(data.index):
+        raise ValueError(
+            "ignore has another index than the data: a Series must have the index of the data, the same labels "
+            "in the same order."
+        )
+    if not (isinstance(values.dtype, np.dtype) and values.dtype == np.bool_):
+        if pd.isna(values).any():
+            raise ValueError("ignore contains missing values: every entry must be True or False.")
+        if not _holds_booleans(values, values.dtype):
+            raise ValueError(
+                f"ignore must hold booleans, True or False; it has dtype {values.dtype}. Numbers, also 0 and 1, "
+                "are not accepted, as in R: convert them to booleans first."
+            )
+    rows = np.array(values, dtype=bool)
+    if (~rows).sum() < 10:
+        warnings.warn(_FEW_FIT_ROWS, UserWarning, stacklevel=3)
+    return rows
+
+
+def _function_mapping(functions: Any, data: pd.DataFrame, name: str, form: str, signature: str) -> dict:
+    """The mapping `functions` (the argument `name`) as a new dict, checked; for `check_post` and `check_passive`.
+
+    Raises ValueError for something that is not a mapping, for a key that is
+    not a column of `data`, and for a value that is not callable.
+    """
+    if not isinstance(functions, Mapping):
+        raise ValueError(f"{name} must be None or {form}; got {type(functions).__name__}.")
+    unknown = [col for col in functions if col not in data.columns]
+    if unknown:
+        raise ValueError(f"{name} names columns that are not in the data: {unknown}.")
+    for col, function in functions.items():
+        if not callable(function):
+            raise ValueError(
+                f"{name} must map each column to a function {signature}; the entry of the column {col!r} is a "
+                f"{type(function).__name__}, which cannot be called."
+            )
+    return dict(functions)
+
+
+def check_post(post: Any, data: pd.DataFrame) -> dict[Hashable, Callable]:
+    """
+    Check the functions applied to the imputations of a column after each imputation, as R's ``post``.
+
+    `MICE.impute` calls ``f(imp, data)`` right after each univariate
+    imputation of the column, in every iteration and chain: `imp` holds the
+    imputations of the where-cells of the column, `data` the data the
+    chains work on in the same rows, and the values `f` returns replace
+    `imp` (see `MICE.impute`). Only the form is checked here; what a
+    function returns is checked where it is written.
+
+    Parameters
+    ----------
+    post : None or mapping of column label to callable
+        For each listed column, its function ``f(imp, data)``. None (R's
+        default) or an empty mapping: no column.
+    data : pd.DataFrame
+        The data.
+
+    Returns
+    -------
+    dict
+        A new dict with the entries of `post`; empty for None.
+
+    Raises
+    ------
+    ValueError
+        For something that is not a mapping, a key that is not a column of
+        `data`, a value that is not callable.
+
+    Examples
+    --------
+    >>> import numpy as np, pandas as pd
+    >>> df = pd.DataFrame({"tv": [3.0, np.nan, 25.0], "age": [9.0, 12.0, 15.0]})
+    >>> list(check_post({"tv": lambda imp, data: imp.clip(1, 25)}, df))
+    ['tv']
+    >>> check_post(None, df)
+    {}
+    """
+    if post is None:
+        return {}
+    return _function_mapping(post, data, "post", _POST_FORM, "f(imp, data)")
+
+
+def _values_per_entry(result: Any, index: pd.Index, context: str, expected: str, units: str) -> pd.Series:
+    """What a function of `post` or `passive` returned, as a Series with `index`.
+
+    `result` must be a Series with the index `index` (the same labels in
+    the same order), or a one-dimensional sequence of its length: a list, a
+    tuple, a NumPy or pandas array, or a pandas Index. `context` starts each
+    message ("Column 'bmi', passive (iteration 1, imputation 1)"),
+    `expected` says what is expected, `units` names the entries of `index`
+    ("rows of the data"). Raises ValueError otherwise.
+    """
+    if isinstance(result, pd.Series):
+        if len(result) != len(index):
+            raise ValueError(
+                f"{context}: the function returned {len(result)} values for the {len(index)} {units}; it must "
+                f"return {expected}."
+            )
+        if not result.index.equals(index):
+            raise ValueError(
+                f"{context}: the function returned a Series with another index; it must return {expected} (the same "
+                "labels in the same order)."
+            )
+        return result
+    if not isinstance(result, (list, tuple, np.ndarray, pd.api.extensions.ExtensionArray, pd.Index)):
+        raise ValueError(f"{context}: the function returned a {type(result).__name__}; it must return {expected}.")
+    try:
+        shape = np.shape(result)
+    except ValueError:  # a list of entries of different lengths: one entry each
+        shape = (len(result),)
+    if len(shape) != 1:
+        raise ValueError(f"{context}: the function returned an array of shape {shape}; it must return {expected}.")
+    if len(result) != len(index):
+        raise ValueError(
+            f"{context}: the function returned {len(result)} values for the {len(index)} {units}; it must "
+            f"return {expected}."
+        )
+    # a list or tuple gets the dtype pandas infers for it, as pd.Series(list) does
+    return pd.Series(list(result) if isinstance(result, (list, tuple)) else result, index=index)
+
+
+def check_passive(passive: Any, data: pd.DataFrame) -> dict[Hashable, pd.Series]:
+    """
+    Check the functions of the passive columns, and call each once on the data.
+
+    A passive column is a function of other columns, as R's passive
+    imputation (a method such as ``"~ I(wgt / (hgt / 100)^2)"``):
+    `MICE.impute` computes it at each of its visits from the data the chains
+    work on, instead of imputing it (see `MICE.impute`). Here each function
+    is called once, on a copy of `data` (missing values included), so that
+    a function that fails, or that does not return one value per row, stops
+    the imputation before the chains start, with the column named. R finds
+    such a formula in the first iteration.
+
+    Parameters
+    ----------
+    passive : None or mapping of column label to callable
+        For each passive column, its function ``f(data)``, which gets the
+        data (all rows) and returns one value per row: a Series with the
+        index of the data, or a sequence of its length. None or an empty
+        mapping: no column.
+    data : pd.DataFrame
+        The data.
+
+    Returns
+    -------
+    dict of column label to pd.Series
+        For each passive column, what its function returned on the data,
+        as a Series with the index of the data; empty for None. The dtype
+        of a passive column in the chains is fixed from it (see
+        `MICE.impute`).
+
+    Raises
+    ------
+    ValueError
+        For something that is not a mapping, a key that is not a column of
+        `data`, a value that is not callable; for a function that raises
+        (the original exception is the cause), or that returns something
+        else than one value per row: a scalar, a DataFrame (R's formula
+        with two terms), a two-dimensional array, a sequence of another
+        length, a Series with another index. The message names the column.
+
+    Examples
+    --------
+    >>> import numpy as np, pandas as pd
+    >>> df = pd.DataFrame({"hgt": [150.0, 180.0, 170.0], "wgt": [50.0, 81.0, np.nan], "bmi": [22.2, np.nan, np.nan]})
+    >>> values = check_passive({"bmi": lambda d: d["wgt"] / (d["hgt"] / 100) ** 2}, df)
+    >>> values["bmi"].round(1).tolist()
+    [22.2, 25.0, nan]
+    """
+    if passive is None:
+        return {}
+    functions = _function_mapping(passive, data, "passive", _PASSIVE_FORM, "f(data)")
+    values = {}
+    for col, function in functions.items():
+        context = f"Column {col!r}, passive (called once on the data before the chains start)"
+        try:
+            result = function(data.copy(deep=True))
+        except Exception as err:
+            raise ValueError(f"{context}: the function raised {type(err).__name__}: {err}") from err
+        values[col] = _values_per_entry(result, data.index, context, _PASSIVE_RESULT, "rows of the data")
+    return values
+
+
 def check_method(
-    method: str | dict[str, str], columns: list[str], defaults: Mapping[Any, str] | None = None
+    method: str | dict[str, str],
+    columns: list[str],
+    defaults: Mapping[Any, str] | None = None,
+    passive: Collection[Hashable] = (),
 ) -> dict[str, str]:
     """
     Check and process the method parameter for MICE imputation.
@@ -129,13 +550,19 @@ def check_method(
           their method in `defaults`.
 
         A method is one of SUPPORTED_METHODS, or "" for a column that is
-        not imputed.
+        not imputed. ``"passive"`` is reserved for the passive columns,
+        which the argument `passive` of `MICE.impute` gives; `method` does
+        not take it.
     columns : list of str
         List of column names in the data
     defaults : mapping of column to str, optional
         The method of each column that a dict `method` does not list, as
         `imputation.make_method` returns it (the default of the column's
         type). If None, DEFAULT_METHOD (``"pmm"``) for every column.
+    passive : collection of column labels, default ()
+        The passive columns (the keys of the argument `passive` of
+        `MICE.impute`). A dict `method` must not name them; a str `method`
+        applies to the other columns (the caller sets the passive ones).
 
     Returns
     -------
@@ -145,10 +572,14 @@ def check_method(
     Raises
     ------
     ValueError
-        If method is invalid or references non-existent columns
+        If method is invalid or references non-existent columns; for the
+        name ``"passive"``, with a pointer to the argument `passive`; for a
+        dict that names a passive column, whatever its method (also ``""``).
     """
     # If method is a string, validate and use for all columns
     if isinstance(method, str):
+        if method == PASSIVE_METHOD:
+            raise ValueError(_PASSIVE_NOT_A_METHOD)
         if not _is_valid_method(method):
             raise ValueError(f"Unsupported method: {method}. Supported methods are: {SUPPORTED_METHODS}")
         return {col: method for col in columns}
@@ -159,6 +590,16 @@ def check_method(
         invalid_cols = [col for col in method.keys() if col not in columns]
         if invalid_cols:
             raise ValueError(f"Columns not found in data: {invalid_cols}")
+
+        if PASSIVE_METHOD in method.values():
+            raise ValueError(_PASSIVE_NOT_A_METHOD)
+        named = {col: m for col, m in method.items() if col in passive}
+        if named:
+            raise ValueError(
+                f"method names the passive columns {list(named)} (with the methods {list(named.values())}): a "
+                "column given in passive is computed by its function and has no other method. Remove it from "
+                "method, or from passive to impute it."
+            )
 
         # Check if all methods are supported
         invalid_methods = {col: m for col, m in method.items() if not _is_valid_method(m)}
@@ -255,7 +696,11 @@ def check_method_types(data: pd.DataFrame, method: Mapping[Hashable, str]) -> No
       distinct observed values;
     - ``"logreg"``, ``"logreg.boot"``, ``"polyreg"`` or ``"polr"`` on a
       column with more than 50 distinct observed values (R's limit, for
-      example a text column of names or identifiers).
+      example a text column of names or identifiers). The message names
+      the remedies in this order: remove the column from the data if it
+      identifies the rows; otherwise impute it with a donor method, under
+      which it stays a predictor of the other columns, with one dummy
+      column per value, unless the predictor matrix excludes it.
 
     A categorical method on a numeric column that passes these checks is
     allowed, with R's warning. ``"midas"`` is checked by its imputer.
@@ -271,7 +716,7 @@ def check_method_types(data: pd.DataFrame, method: Mapping[Hashable, str]) -> No
     ------
     ValueError
         For an impossible pairing; the message names the column and the
-        methods that suit it.
+        methods that suit it (for more than 50 values, the remedies above).
 
     Warns
     -----
@@ -301,9 +746,10 @@ def check_method_types(data: pd.DataFrame, method: Mapping[Hashable, str]) -> No
                 f"Column {col!r} has {n_categories} distinct observed values, more categories than {meth} can "
                 f"model: R's mice allows at most {MAX_CATEGORIES} ('Maximum number of categories "
                 f"({MAX_CATEGORIES}) exceeded'). Text columns of names or identifiers often look like this, and "
-                "the default method of a text column with more than two values is polyreg. Impute the column "
-                f"with a donor method instead, for example method={{{col!r}: 'pmm'}}, or remove it from the data "
-                "if it identifies the rows."
+                "the default method of a text column with more than two values is polyreg. If the column "
+                f"identifies the rows, remove it from the data. Otherwise impute it with {_DONORS}, for example "
+                f"method={{{col!r}: 'pmm'}}; the column then stays a predictor of the other columns, with one "
+                "dummy column per value, unless the predictor matrix excludes it."
             )
         if meth in _TWO_CATEGORY_METHODS and n_categories > 2:
             if kind == "numeric":
@@ -348,49 +794,59 @@ def check_initial_method(initial_method: str) -> None:
 
 
 def check_visit_sequence(
-    visit_sequence: str | list[str], columns: list[str], columns_with_missing: list[str] | None = None
+    visit_sequence: str | list[str] | None, columns: list[str], imputed_columns: list[str] | None = None
 ) -> tuple[list[str] | None, list[str]]:
     """
     Check and process the visit sequence parameter for MICE imputation.
 
     Parameters
     ----------
-    visit_sequence : str or list of str
+    visit_sequence : str, list of str or None
         Visit sequence specification:
 
+        - None: the default, data order with the passive columns last (R's
+          ``visitSequence = NULL``);
         - str: one of SUPPORTED_VISIT_SEQUENCES ("roman", "arabic",
           "monotone", "revmonotone", "random");
         - list of str: column names specifying the order to visit variables.
+          A column may appear more than once, as in R: it is visited each
+          time.
     columns : list of str
         List of all column names in the data
-    columns_with_missing : list of str, optional
-        List of columns that have missing values. If provided, will validate
-        that all these columns are included in a custom visit sequence.
+    imputed_columns : list of str, optional
+        The columns that are imputed: those with where-cells (see
+        `check_where`; by default the incomplete columns) and a method
+        other than ``""``, passive columns included. If provided, a list
+        `visit_sequence` must contain each of them, and the other columns
+        are dropped from it.
 
     Returns
     -------
     tuple
-        (validated_sequence, columns_without_missing) where:
+        (validated_sequence, columns_not_imputed) where:
 
-        - validated_sequence: the processed visit sequence (only for list input, None for string)
-        - columns_without_missing: list of columns in sequence that don't have missing values
+        - validated_sequence: the processed visit sequence (only for list input, None for None or a string),
+          repeats kept
+        - columns_not_imputed: the columns of a list `visit_sequence` that are not in `imputed_columns`, each once
 
     Raises
     ------
     ValueError
-        If visit_sequence is invalid or references non-existent columns
+        If visit_sequence is invalid, references non-existent columns, or
+        leaves out a column that is imputed
 
     Notes
     -----
-    For string visit sequences, the actual sequence will be generated in
-    MICE._set_visit_sequence() based on the data.
+    For None and string visit sequences, the actual sequence will be
+    generated in MICE._set_visit_sequence() based on the data.
 
     For list visit sequences, this function validates that:
 
     1. All columns exist in the data
-    2. No duplicate columns
-    3. All columns with missing values are included (if columns_with_missing provided)
+    2. All columns that are imputed are included (if imputed_columns provided)
     """
+    if visit_sequence is None:
+        return None, []
 
     if isinstance(visit_sequence, str):
         if not VisitSequence.is_valid_sequence(visit_sequence):
@@ -405,32 +861,32 @@ def check_visit_sequence(
         if invalid_cols:
             raise ValueError(f"Visit sequence contains columns not in data: {invalid_cols}")
 
-        if len(visit_sequence) != len(set(visit_sequence)):
-            duplicates = [col for col in visit_sequence if visit_sequence.count(col) > 1]
-            raise ValueError(f"Visit sequence contains duplicate columns: {set(duplicates)}")
-
-        if columns_with_missing is not None:
-            missing_from_sequence = [col for col in columns_with_missing if col not in visit_sequence]
+        if imputed_columns is not None:
+            missing_from_sequence = [col for col in imputed_columns if col not in visit_sequence]
             if missing_from_sequence:
                 raise ValueError(
-                    f"Visit sequence is missing columns with missing values: {missing_from_sequence}. "
-                    f"All columns with missing values must be included in the visit sequence. "
-                    f"Columns with missing values: {columns_with_missing}"
+                    f"Visit sequence is missing columns that are imputed: {missing_from_sequence}. "
+                    "Every column that is imputed (a column with where-cells, by default an incomplete column, "
+                    f"and a method other than '', passive columns included) must be in the visit sequence. "
+                    f"Columns that are imputed: {imputed_columns}"
                 )
 
-            cols_without_missing = [col for col in visit_sequence if col not in columns_with_missing]
+            cols_not_imputed = list(dict.fromkeys(col for col in visit_sequence if col not in imputed_columns))
 
-            validated_sequence = [col for col in visit_sequence if col in columns_with_missing]
+            validated_sequence = [col for col in visit_sequence if col in imputed_columns]
 
-            return validated_sequence, cols_without_missing
+            return validated_sequence, cols_not_imputed
 
         return visit_sequence, []
 
-    raise ValueError("visit_sequence must be either a string or a list of strings")
+    raise ValueError("visit_sequence must be None, a string or a list of column labels")
 
 
 def validate_predictor_matrix(
-    predictor_matrix: pd.DataFrame, data_columns: list[str], data: pd.DataFrame
+    predictor_matrix: pd.DataFrame,
+    data_columns: list[str],
+    data: pd.DataFrame,
+    imputed_columns: list[Hashable] | None = None,
 ) -> pd.DataFrame:
     """
     Validate predictor matrix for MICE imputation.
@@ -442,11 +898,21 @@ def validate_predictor_matrix(
         for each target variable. Rows represent target variables, columns represent predictors.
         A 1 indicates that the column variable is used as predictor for the index variable.
         It may cover a subset of the columns; absent entries count as 0. Every
-        incomplete column needs a row; rows of complete columns are unused.
+        column that is imputed needs a row; the rows of other columns (also
+        of passive columns) are unused. A column that is not imputed may be a predictor without a
+        row, also if it is incomplete: its missing cells stay missing, and
+        the rows in which it is missing are not used to fit or impute the
+        columns it predicts.
     data_columns : list of str
         List of column names in the data to validate against
     data : pd.DataFrame
         The data to check for missing values
+    imputed_columns : list of column labels, optional
+        The columns that are imputed: those with where-cells (see
+        `check_where`) and a method other than ``""``, as
+        :meth:`imputation.MICE.impute` passes them; it leaves out the
+        passive columns, which have no predictors. If None, the incomplete
+        columns of `data`.
 
     Returns
     -------
@@ -457,8 +923,7 @@ def validate_predictor_matrix(
     ------
     ValueError
         If predictor_matrix has invalid structure, column names don't match
-        data, an incomplete column is a predictor without being a target, or
-        an incomplete column has no row
+        data, or a column that is imputed has no row
     """
     if not isinstance(predictor_matrix, pd.DataFrame):
         raise ValueError("predictor_matrix must be a pandas DataFrame")
@@ -479,23 +944,15 @@ def validate_predictor_matrix(
     if not predictor_matrix.isin([0, 1]).all().all():
         raise ValueError("predictor_matrix must contain only 0s and 1s")
 
-    # Rows of complete variables are allowed and unused, as in R: a complete
-    # variable is never imputed.
+    # Rows of columns that are not imputed are allowed and unused, as in R
 
-    # Check for columns with missing data that are used as predictors but not imputed (error)
-    predictor_only_vars = [col for col in predictor_cols if col not in target_vars]
-    incomplete_predictors = [var for var in predictor_only_vars if data[var].isna().any()]
-    if incomplete_predictors:
-        raise ValueError(
-            f"Predictor variables with missing data are not being imputed: {incomplete_predictors}. "
-            "All predictors must be complete or included as targets."
-        )
-
-    # Every incomplete column needs a row: it says which predictors impute it
-    without_row = [col for col in data_columns if col not in target_vars and data[col].isna().any()]
+    # Every column that is imputed needs a row: it says which predictors impute it
+    if imputed_columns is None:
+        imputed_columns = [col for col in data_columns if data[col].isna().any()]
+    without_row = [col for col in imputed_columns if col not in target_vars]
     if without_row:
         raise ValueError(
-            f"predictor_matrix has no row for the incomplete columns {without_row}. "
+            f"predictor_matrix has no row for the columns that are imputed {without_row}. "
             "Add a row for each (all zeros to impute it without predictors)."
         )
 

@@ -56,9 +56,12 @@ def target(inp):
     return pd.Categorical(values, categories=str_list(inp["levels"]), ordered=inp["kind"] == "ordered")
 
 
-def _inputs(case):
-    """(y, ry, wy, x) of a case; wy is None where R used ``!ry``."""
-    inp = FIXTURE["inputs"][case["input"]]
+def _inputs(case, inputs=None):
+    """(y, ry, wy, x) of a case; wy is None where R used ``!ry``.
+
+    `inputs` maps input names to inputs; None means those of l1_polyreg.
+    """
+    inp = (FIXTURE["inputs"] if inputs is None else inputs)[case["input"]]
     y = target(inp)
     ry = as_bool(inp["ry"])
     wy = None if inp["wy"] is None else as_bool(inp["wy"])
@@ -71,13 +74,13 @@ def _scripted(case):
     return ScriptedGenerator(uniforms=as_array(case["uniforms"]), strict=True)
 
 
-def replay(case):
+def replay(case, inputs=None):
     """Run the port on the inputs of `case` with R's draws; return (steps, rng).
 
     The step function is looked up when called, so that a patched module
-    attribute takes effect.
+    attribute takes effect. `inputs`: see `_inputs`.
     """
-    y, ry, wy, x = _inputs(case)
+    y, ry, wy, x = _inputs(case, inputs)
     rng = _scripted(case)
     steps = imputation.polyreg._polyreg(y, ry, x, wy, case["maxit"], case["max_weights"], rng)
     return steps, rng
@@ -121,9 +124,9 @@ def check_draws(case, rng):
     assert rng.order == [tuple(pair) for pair in case["order"]]
 
 
-def check_case(case):
-    """Every L1 check of one case."""
-    steps, rng = replay(case)
+def check_case(case, inputs=None):
+    """Every L1 check of one case; `inputs`: see `_inputs`."""
+    steps, rng = replay(case, inputs)
     check_labels(case, steps)
     if case["value"] is not None:
         check_fit(case, steps)

@@ -3,23 +3,27 @@
 #
 # Run from the repository root, after `study.py generate`:
 #   Rscript simulations/run_r.R [--scenarios S1,S4] [--methods pmm,default]
-#                               [--reps N] [--jobs 8]
+#                               [--variants none,clip] [--reps N] [--jobs 8]
 #
 # Reads   simulations/work/data/manifest.json and data/<scenario>/rep_<k>.csv
-# Writes  simulations/work/results/r_<scenario>_<method>.csv
+# Writes  simulations/work/results/r_<scenario>_<label>.csv
 #         (scenario, method, rep, term, qbar, ubar, b, m, n, dfcom),
-#         r_<scenario>_<method>_status.csv and r_meta.json.
+#         r_<scenario>_<label>_status.csv and r_meta.json.
 #
-# The cells (study method x scenario, with their replications) and the
-# method of every incomplete column come from the manifest that study.py
-# wrote, so both engines run the same cells; --scenarios and --methods
-# select cells, --reps caps their replications. A cell without column
-# methods (`default`) calls mice() without `method`, so mice chooses by
-# column type (make.method). Full predictor matrix; visit sequence =
-# incomplete columns in column order; m = 5; maxit from the manifest; seed =
-# scenario_index * 100000 + rep. The status file records imp$method. The
-# pseudo-method `complete` analyses the data before deletion and must
-# reproduce the Python numbers exactly (same data, same OLS).
+# The cells (study method x scenario, optionally with a variant, with their
+# replications) and the method of every incomplete column come from the
+# manifest that study.py wrote, so both engines run the same cells;
+# --scenarios, --methods and --variants (`none` for the cells without one)
+# select cells, --reps caps their replications. The label of a cell (the
+# `method` column of the results) is its study method, followed by
+# `+<variant>` if it has one. A cell without column methods (`default`)
+# calls mice() without `method`, so mice chooses by column type
+# (make.method). Full predictor matrix; visit sequence = the columns with
+# cells to impute, in column order; m = 5; maxit from the manifest; seed =
+# scenario_index * 100000 + rep. A variant adds arguments, as _adapter.py
+# does for mice-py (variant_arguments() below). The status file records
+# imp$method. The pseudo-method `complete` analyses the data before deletion
+# and must reproduce the Python numbers exactly (same data, same OLS).
 #
 # This script calls mice rather than copying mice source, so that its
 # results are those of the installed mice. mice-py, like mice, is licensed
@@ -47,7 +51,7 @@ script_dir <- function() {
 
 parse_options <- function(args) {
   opts <- list(
-    scenarios = NULL, methods = NULL, reps = NULL,
+    scenarios = NULL, methods = NULL, variants = NULL, reps = NULL,
     jobs = max(1L, parallel::detectCores()),
     work_dir = file.path(script_dir(), "work")
   )
@@ -67,6 +71,7 @@ parse_options <- function(args) {
     switch(key,
       "--scenarios" = opts$scenarios <- split_list(value),
       "--methods" = opts$methods <- split_list(value),
+      "--variants" = opts$variants <- split_list(value),
       "--reps" = opts$reps <- as.integer(value),
       "--jobs" = opts$jobs <- as.integer(value),
       "--work-dir" = opts$work_dir <- normalizePath(value, mustWork = TRUE),
@@ -94,11 +99,15 @@ normalise_spec <- function(spec) {
 }
 
 # A cell of the manifest: `columns` (method of each incomplete column) is
-# NULL for `default`.
+# NULL for `default`, `variant` NULL for a cell without one. Manifests
+# written before variants existed have neither `variant` nor `label`.
 normalise_cell <- function(cell) {
   cols <- cell$columns
   cell$columns <- if (is.null(cols)) NULL else vapply(cols, as.character, character(1))
   cell$reps <- as.integer(cell$reps)
+  if (is.null(cell$label)) {
+    cell$label <- if (is.null(cell$variant)) cell$method else paste0(cell$method, "+", cell$variant)
+  }
   cell
 }
 
@@ -163,35 +172,85 @@ analyse <- function(df, spec) {
   out
 }
 
-# `columns`: the method of each incomplete column (names), or NULL for no
-# `method` argument (mice's make.method chooses by column type).
-impute <- function(data, columns, spec, seed) {
+# Arguments of mice() for a cell's variant, besides the methods (study.py
+# VARIANTS; _adapter.variant_arguments gives mice-py the same): `where`,
+# `ignore`, `post`, the passive formulas and the predictor matrix. NULL
+# leaves an argument at mice's default.
+variant_arguments <- function(variant, data, pred) {
+  out <- list(where = NULL, ignore = NULL, post = NULL, passive = NULL, pred = pred)
+  if (is.null(variant)) {
+    return(out)
+  }
+  n <- nrow(data)
+  if (variant == "ignore_half") {
+    # Rows n/2 + 1 to n
+    out$ignore <- seq_len(n) > n %/% 2L
+  } else if (variant == "where_all") {
+    out$where <- "all"
+  } else if (variant == "clip") {
+    # squeeze() to the range of the observed values. The bounds are written
+    # in hexadecimal, which R parses exactly; a 17-digit decimal is not
+    # always parsed back to the same double.
+    out$post <- mice::make.post(data)
+    for (col in names(data)) {
+      if (anyNA(data[[col]]) && is.numeric(data[[col]])) {
+        bounds <- range(data[[col]], na.rm = TRUE)
+        out$post[col] <- sprintf("imp[[j]][, i] <- squeeze(imp[[j]][, i], c(%a, %a))", bounds[1], bounds[2])
+      }
+    }
+  } else if (variant == "passive_product") {
+    out$passive <- c(p = "~ I(x1 * x2)")
+    out$pred["x2", "p"] <- 0L
+  } else {
+    stop("unknown variant ", variant)
+  }
+  out
+}
+
+# `cell$columns`: the method of each incomplete column (names), or NULL for
+# no `method` argument (mice's make.method chooses by column type);
+# `cell$variant`: see variant_arguments(). Under `where = "all"` a complete
+# column gets its default method (make.method); a passive column gets its
+# formula, so a `default` cell with a passive column gets make.method's
+# methods for the others.
+impute <- function(data, cell, spec, seed) {
+  columns <- cell$columns
   incomplete <- names(data)[colSums(is.na(data)) > 0]
   pred <- matrix(1L, ncol(data), ncol(data),
     dimnames = list(names(data), names(data))
   )
   diag(pred) <- 0L
-  # Column positions, not names: mice reads a single name as a keyword
-  # ("roman", "monotone", ...) and stops.
-  visit <- match(incomplete, names(data))
-  if (is.null(columns)) {
-    imp <- mice::mice(data,
-      m = M_IMPUTATIONS, maxit = spec$maxit,
-      predictorMatrix = pred, visitSequence = visit,
-      printFlag = FALSE, seed = seed
-    )
-  } else {
-    unassigned <- setdiff(incomplete, names(columns))
+  va <- variant_arguments(cell$variant, data, pred)
+  where <- if (is.null(va$where)) is.na(data) else mice::make.where(data, va$where)
+  # The columns with cells to impute, in column order. Column positions,
+  # not names: mice reads a single name as a keyword ("roman", "monotone",
+  # ...) and stops.
+  imputed <- names(data)[colSums(where) > 0]
+  visit <- match(imputed, names(data))
+  meth <- NULL
+  if (!is.null(columns)) {
+    active <- setdiff(incomplete, names(va$passive))
+    unassigned <- setdiff(active, names(columns))
     if (length(unassigned)) stop("no method for the incomplete column(s) ", paste(unassigned, collapse = ", "))
-    meth <- stats::setNames(rep("", ncol(data)), names(data))
-    meth[incomplete] <- columns[incomplete]
-    imp <- mice::mice(data,
-      m = M_IMPUTATIONS, maxit = spec$maxit, method = meth,
-      predictorMatrix = pred, visitSequence = visit,
-      printFlag = FALSE, seed = seed
-    )
+    meth <- if (is.null(va$where)) {
+      stats::setNames(rep("", ncol(data)), names(data))
+    } else {
+      mice::make.method(data, where = where)
+    }
+    meth[active] <- columns[active]
   }
-  if (!identical(unname(imp$visitSequence), incomplete)) {
+  if (!is.null(va$passive)) {
+    if (is.null(meth)) meth <- mice::make.method(data, where = where)
+    meth[names(va$passive)] <- va$passive
+  }
+  # NULL (method, where, ignore, post) is mice's default for each
+  imp <- mice::mice(data,
+    m = M_IMPUTATIONS, maxit = spec$maxit, method = meth,
+    predictorMatrix = va$pred, visitSequence = visit,
+    where = va$where, ignore = va$ignore, post = va$post,
+    printFlag = FALSE, seed = seed
+  )
+  if (!identical(unname(imp$visitSequence), imputed)) {
     stop("unexpected visit sequence: ", paste(imp$visitSequence, collapse = ", "))
   }
   imp
@@ -199,10 +258,10 @@ impute <- function(data, columns, spec, seed) {
 
 one_line <- function(x) substr(gsub("\\s+", " ", paste(x, collapse = " ")), 1L, 300L)
 
-# `cell`: list(method, columns) from the manifest; method "complete" for the
-# complete-data analysis.
+# `cell`: list(method, label, columns, variant) from the manifest; method
+# and label "complete" for the complete-data analysis.
 run_one <- function(spec, cell, rep, data_dir) {
-  method <- cell$method
+  method <- cell$label
   t0 <- proc.time()[["elapsed"]]
   status <- list(
     scenario = spec$id, method = method, rep = rep, status = "ok",
@@ -222,7 +281,7 @@ run_one <- function(spec, cell, rep, data_dir) {
           list(analyses = list(analyse(df, spec)), m = 1L, n = nrow(df))
         } else {
           df <- read_dataset(file.path(data_dir, spec$id, sprintf("rep_%d.csv", rep)), spec)
-          imp <- impute(df, cell$columns, spec, replication_seed(spec, rep))
+          imp <- impute(df, cell, spec, replication_seed(spec, rep))
           status$methods <- paste0(names(imp$method), "=", unname(imp$method), collapse = ";")
           ev <- imp$loggedEvents
           status$n_events <- if (is.null(ev)) 0L else nrow(ev)
@@ -318,16 +377,23 @@ main <- function() {
   missing_sc <- setdiff(scenarios, names(manifest$scenarios))
   if (length(missing_sc)) stop("not generated: ", paste(missing_sc, collapse = ", "))
 
-  # The cells of the manifest, selected by --scenarios and --methods, with
-  # their replications capped by --reps
+  # The cells of the manifest, selected by --scenarios, --methods and
+  # --variants ("none": the cells without a variant), with their
+  # replications capped by --reps
   cells <- lapply(manifest$cells, normalise_cell)
   known <- unique(vapply(cells, `[[`, character(1), "method"))
   bad <- setdiff(opts$methods, known)
   if (length(bad)) stop("unknown study method(s): ", paste(bad, collapse = ", "))
+  variant_of <- function(cl) if (is.null(cl$variant)) "none" else cl$variant
+  known <- unique(c("none", vapply(cells, variant_of, character(1))))
+  bad <- setdiff(opts$variants, known)
+  if (length(bad)) stop("unknown variant(s): ", paste(bad, collapse = ", "))
   cells <- Filter(function(cl) {
-    cl$scenario %in% scenarios && (is.null(opts$methods) || cl$method %in% opts$methods)
+    cl$scenario %in% scenarios &&
+      (is.null(opts$methods) || cl$method %in% opts$methods) &&
+      (is.null(opts$variants) || variant_of(cl) %in% opts$variants)
   }, cells)
-  if (!length(cells)) stop("no cell matches --scenarios and --methods")
+  if (!length(cells)) stop("no cell matches --scenarios, --methods and --variants")
   if (!is.null(opts$reps)) {
     cells <- lapply(cells, function(cl) {
       cl$reps <- min(cl$reps, opts$reps)
@@ -348,7 +414,7 @@ main <- function() {
     if (spec$reps < need) {
       stop(sid, ": ", spec$reps, " datasets generated, ", need, " needed")
     }
-    own <- c(own, list(list(method = "complete", columns = NULL, reps = need)))
+    own <- c(own, list(list(method = "complete", label = "complete", columns = NULL, reps = need)))
     # All cells of a scenario in one pool, in chunks of CHUNK_SIZE
     # replications handed out dynamically: cores of different speed stay
     # busy, and results do not depend on scheduling (one seed per rep).
@@ -367,7 +433,7 @@ main <- function() {
     }
     outs <- unlist(unname(outs), recursive = FALSE)
     for (k in seq_along(own)) {
-      mth <- own[[k]]$method
+      mth <- own[[k]]$label
       write_outputs(results_dir, spec, mth, outs[tasks$cell == k])
       plan[[paste0(sid, "/", mth)]] <- own[[k]]$reps
     }

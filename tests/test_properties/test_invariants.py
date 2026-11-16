@@ -5,6 +5,7 @@ individual invariants can be reported separately without re-running MICE.
 """
 
 import functools
+import re
 
 import numpy as np
 import pandas as pd
@@ -224,3 +225,88 @@ def test_univariate_imputes_only_the_requested_cells(method):
     out = np.asarray(_imputer(method)(y, ry, x, id_mis=id_mis, rng=np.random.default_rng(2)))
     assert out.shape == (2,)
     _assert_imputations_of_kind(method, out, y, ry)
+
+
+# Methods whose imputer reads no row outside its two masks: all but those
+# with R's augmentation (logreg, polyreg, polr)
+NOT_AUGMENTED = (*DONOR_METHODS, *NUMERIC_MODEL_METHODS, "logreg.boot")
+# Methods that read the predictors (mean and sample, like R's, ignore x)
+READING_X = tuple(m for m in METHODS if m not in ("mean", "sample"))
+
+
+def _with_rows_in_neither_mask(y, ry, x):
+    """The problem (y, ry, x) with five rows in neither mask inserted among its rows; also returns id_mis.
+
+    The added rows have NaN in one predictor or in both, predictors far
+    outside their range elsewhere, and a decoy target: an extreme number,
+    or for labels a label of its own, or a missing value.
+    """
+    positions = [0, 7, 7, 19, len(ry)]
+    x_added = np.array([[np.nan, 50.0], [np.nan, np.nan], [-40.0, np.nan], [60.0, -70.0], [np.nan, np.nan]])
+    labels = y.dtype == object
+    y_added = ["decoy", None, "decoy", "zzz", None] if labels else [1e6, np.nan, -1e6, 2e6, np.nan]
+    y = np.insert(y, positions, y_added)
+    x = np.insert(x, positions, x_added, axis=0)
+    return y, np.insert(ry, positions, False), x, np.insert(~ry, positions, False)
+
+
+@pytest.mark.parametrize("x_as_frame", [False, True], ids=["ndarray", "DataFrame"])
+@pytest.mark.parametrize("method", NOT_AUGMENTED)
+def test_univariate_ignores_rows_in_neither_mask(method, x_as_frame):
+    """Rows outside both masks (NaN or extreme predictors, decoy targets)
+    change nothing for a method without augmentation: the same seed gives
+    the same imputations."""
+    y, ry, x = _univariate_problem(method=method)
+    plain = _imputer(method)(y, ry, x, id_mis=~ry, rng=np.random.default_rng(3))
+    y2, ry2, x2, id_mis2 = _with_rows_in_neither_mask(y, ry, x)
+    if x_as_frame:
+        x2 = pd.DataFrame(x2, columns=["x1", "x2"])
+    out = _imputer(method)(y2, ry2, x2, id_mis=id_mis2, rng=np.random.default_rng(3))
+    np.testing.assert_array_equal(np.asarray(out), np.asarray(plain))
+
+
+@pytest.mark.parametrize("method", METHODS)
+def test_univariate_imputes_every_row_of_overlapping_masks(method):
+    """``id_mis`` may include fit rows (R's ``where = "all"``): one imputation
+    per row of ``id_mis``, of the method's kind."""
+    y, ry, x = _univariate_problem(method=method)
+    id_mis = np.ones_like(ry)
+    out = np.asarray(_imputer(method)(y, ry, x, id_mis=id_mis, rng=np.random.default_rng(4)))
+    assert out.shape == (len(ry),)
+    _assert_imputations_of_kind(method, out, y, ry)
+
+
+@pytest.mark.parametrize("x_as_frame", [False, True], ids=["ndarray", "DataFrame"])
+@pytest.mark.parametrize("row", ["fit", "imputed"])
+@pytest.mark.parametrize("method", READING_X)
+def test_univariate_rejects_a_missing_predictor_in_a_row_it_uses(method, row, x_as_frame):
+    """NaN in x in a fit row or in a row to impute raises ``ValueError``
+    naming the method (cart and rf too, whose scikit-learn trees would take
+    it); NaN in a row in neither mask does not."""
+    y, ry, x = _univariate_problem(method=method)
+    target_row = np.flatnonzero(ry if row == "fit" else ~ry)[0]
+    x = x.copy()
+    x[target_row, 1] = np.nan
+    id_mis = ~ry
+    if x_as_frame:
+        x = pd.DataFrame(x, columns=["x1", "x2"])
+    message = f"Predictors must not contain missing values for {re.escape(method)} in the rows it fits or imputes"
+    if x_as_frame:
+        message += r".* Columns with missing values: \['x2'\]"
+    with pytest.raises(ValueError, match=message):
+        _imputer(method)(y, ry, x, id_mis=id_mis, rng=np.random.default_rng(5))
+    # the same row left out of both masks is not checked
+    used = np.ones_like(ry)
+    used[target_row] = False
+    out = _imputer(method)(y, ry & used, x, id_mis=id_mis & used, rng=np.random.default_rng(5))
+    assert np.asarray(out).shape == ((id_mis & used).sum(),)
+
+
+@pytest.mark.parametrize("method", ["mean", "sample"])
+def test_univariate_mean_and_sample_do_not_read_the_predictors(method):
+    """mean and sample, like R's, do not read x: NaN anywhere changes nothing."""
+    y, ry, x = _univariate_problem(method=method)
+    x_nan = np.full_like(x, np.nan)
+    plain = _imputer(method)(y, ry, x, rng=np.random.default_rng(6))
+    out = _imputer(method)(y, ry, x_nan, rng=np.random.default_rng(6))
+    np.testing.assert_array_equal(out, plain)

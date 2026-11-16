@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
-from .cart import _design_matrix, _draw_pooled_donors, _is_numeric_target, _label_codes
+from .cart import _draw_pooled_donors, _is_numeric_target, _label_codes
+from .design import _predictor_values
 
 logger = logging.getLogger(__name__)
 
@@ -42,15 +43,20 @@ def rf(
     y : pd.Series or np.ndarray
         Target variable with missing values
     id_obs : np.ndarray
-        Boolean mask of observed values in y (True = observed, False = missing)
+        Boolean mask of the rows the forest is fitted on and the donors are
+        drawn from (R's ``ry``), where `y` is observed.
     x : pd.DataFrame or np.ndarray
-        Predictor variables (should be the current completed columns). A
-        DataFrame with categorical, object, string or boolean columns is
-        dummy-coded first by :func:`imputation.design.obtain_design`, as MICE
-        does. Without any predictor, the imputations are draws from the
-        observed values, as with ``cart``.
+        Predictor variables (should be the current completed columns),
+        complete in the rows of `id_obs` and `id_mis`; a row in neither may
+        hold missing values and is not used. A DataFrame with categorical,
+        object, string or boolean columns is dummy-coded first by
+        :func:`imputation.design.obtain_design`, as MICE does. Without any
+        predictor, the imputations are draws from the observed values, as
+        with ``cart``.
     id_mis : np.ndarray, optional
-        Boolean mask of missing values. If None, uses ~id_obs.
+        Boolean mask of the cells to impute (R's ``wy``). If None, uses
+        ~id_obs. The two masks may overlap (a row both fitted on and
+        imputed, as under R's ``where``), and a row may be in neither.
     n_estimators : int, default=10
         Number of trees in the forest (R mice's ``ntree``).
     max_depth : int, optional
@@ -85,7 +91,9 @@ def rf(
     Raises
     ------
     ValueError
-        If `y` has no observed value and some value is to be imputed.
+        If `y` has no observed value and some value is to be imputed, or if
+        `x` is not numeric or has missing values in a row of `id_obs` or
+        `id_mis` (scikit-learn's forests would accept them silently).
 
     Notes
     -----
@@ -118,11 +126,12 @@ def rf(
     if rng is None:
         rng = np.random.default_rng()
 
-    x = _design_matrix(x)
     id_obs = np.asarray(id_obs, bool)
     if id_mis is None:
         id_mis = ~id_obs
     id_mis = np.asarray(id_mis, bool)
+    # scikit-learn's forests accept NaN, so the check matters here
+    x = _predictor_values(x, len(id_obs), id_obs | id_mis, "rf")
 
     is_numeric = _is_numeric_target(y)
     x_obs, y_obs = x[id_obs], np.asarray(y)[id_obs]

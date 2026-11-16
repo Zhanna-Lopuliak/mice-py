@@ -3,7 +3,8 @@
 ``impute`` edits the imputation model as R's ``mice`` does: before the chains
 (``mice.edit.setup``: constant and collinear variables) and around each
 univariate call (``sampler.univ``: dummy-coded design matrix, rows with an
-incomplete design left out, ``remove.lindep``, ``check.df``). Every change is
+incomplete design neither fitted on nor imputed, ``remove.lindep``,
+``check.df``). Every change is
 a row of ``MICE.logged_events``.
 
 The expected logged events below are what R mice 3.19.0 returns for the same
@@ -227,15 +228,18 @@ def _empty_method_predictor_frame():
 @pytest.mark.parametrize("method", ["pmm", "cart", "rf", "midas", "sample", "norm", "mean"])
 def test_predictor_with_empty_method_leaves_its_missing_rows_untouched(method, monkeypatch):
     """``z`` has method "" but predicts ``y``. As in R's sampler.univ, a row
-    whose design has a missing value is left out of the model (also as a
-    donor) and its ``y`` is not imputed."""
+    whose design has a missing value is not in the model (also not as a
+    donor) and its ``y`` is not imputed. The imputer still receives it, with
+    NaN in ``x``, in neither mask."""
     import imputation.utils as utils
 
     seen = []
     original = utils._IMPUTER_MAP[method]
 
     def recording(y, id_obs, x, id_mis=None, **kwargs):
-        seen.append((len(y), int(np.sum(id_obs)), int(np.sum(id_mis)), np.isnan(np.asarray(x, float)).any()))
+        incomplete = np.isnan(np.asarray(x, float)).any(axis=1)
+        in_a_mask = (np.asarray(id_obs) | np.asarray(id_mis))[incomplete].any()
+        seen.append((len(y), int(np.sum(id_obs)), int(np.sum(id_mis)), int(incomplete.sum()), bool(in_a_mask)))
         return original(y=y, id_obs=id_obs, x=x, id_mis=id_mis, **kwargs)
 
     from imputation import MICE
@@ -255,8 +259,9 @@ def test_predictor_with_empty_method_leaves_its_missing_rows_untouched(method, m
     both = df["y"].isna() & df["z"].isna()
     assert both.sum() == 3
     assert mice.visit_sequence == ["y"]
-    # the imputer saw only the 53 rows with z observed: 50 donors, 3 cells to impute
-    assert seen and all(call == (53, 50, 3, False) for call in seen)
+    # the imputer saw all 60 rows: 50 donors, 3 cells to impute, and the 7
+    # rows with z missing, which have NaN in x and are in neither mask
+    assert seen and all(call == (60, 50, 3, 7, False) for call in seen)
     for completed in out:
         assert completed.loc[both, "y"].isna().all()
         assert completed.loc[df["y"].isna() & ~both, "y"].notna().all()

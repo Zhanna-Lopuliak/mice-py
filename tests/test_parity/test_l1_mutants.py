@@ -85,6 +85,26 @@ The mutants of ``polr`` and ``polr_fit`` run the checks of test_l1_polr:
   draw nothing, so the numbers are the same wherever the fit succeeds; only
   where the fit stops (the fallback with too many weights, before which R
   draws nothing) the port draws numbers R did not.
+
+The mutants of the imputers called with every row (rows to impute that are
+also fit rows, rows in neither mask with decoys, NA in x there) run the
+checks of test_l1_masks:
+
+* (ae) ``augment`` with listwise deletion: the statistics of the predictors
+  over the rows without any NaN. A row with NA in one predictor only no
+  longer counts for the other.
+* (af) ``augment`` with the variance divisor of all rows (``n_rows - 1``)
+  instead of each column's count minus 1.
+* (ag) ``augment`` taking the categories from the fit rows only: a category
+  held only outside them gets no added rows, and polyreg cannot impute it.
+* (ah) ``augment`` skipped where exactly one row is to be imputed instead of
+  where exactly one row lies outside the fit rows: both directions show.
+* (ai) an imputer filling the rows outside ``id_obs`` instead of ``id_mis``
+  (norm, mean and polyreg): with overlapping masks it imputes too few rows,
+  and leaves R's draws over.
+* (aj) ``logreg`` dropping the rows in neither mask before ``augment``, as
+  MICE 0.3 drops the rows whose predictors are incomplete: the added rows,
+  and so the fit, change.
 """
 
 import numpy as np
@@ -93,6 +113,7 @@ import pytest
 
 import imputation.fitting
 import imputation.logreg
+import imputation.mean
 import imputation.norm
 import imputation.polr
 import imputation.polyreg
@@ -100,7 +121,7 @@ import imputation.sampler
 from imputation.fitting import PolrError
 
 from ..test_imputation import test_methods
-from . import test_l1_augment, test_l1_logreg, test_l1_polr, test_l1_polyreg
+from . import test_l1_augment, test_l1_logreg, test_l1_masks, test_l1_norm, test_l1_polr, test_l1_polyreg
 from .test_l1_norm import CASES, check_draws, check_imputations, replay
 
 pytestmark = pytest.mark.parity
@@ -197,7 +218,11 @@ def test_norm_boot_with_short_index_range_is_caught_by_the_logged_bounds(monkeyp
     imputed, rng = replay(case)
     assert calls, "mutant not applied: norm_boot does not call imputation.norm._bootstrap_sample"
     check_imputations(case, imputed)  # the same scripted indices: invisible here
-    with pytest.raises(AssertionError, match=r"'high': 13"):
+    # The bounds themselves, not the text of the failure: pytest renders the
+    # comparison differently with colour and when the CI variable is set
+    bounds = [call.args for call in rng.calls if call.method == "integers"]
+    assert bounds == [{"low": 0, "high": case["n_obs"] - 1, "endpoint": False}]
+    with pytest.raises(AssertionError):
         check_draws(case, rng)
 
 
@@ -721,3 +746,170 @@ def test_polr_drawing_before_the_fit_is_caught_where_the_fit_stops(monkeypatch):
     test_l1_polr.check_draws(case, rng)
     with pytest.raises(AssertionError, match="code asked for 10 random draws, only 0 scripted left"):
         run(POLR["polr_too_many_weights"])
+
+
+# ---------------------------------------------------------------------------
+# The imputers called with every row (l1_masks)
+# ---------------------------------------------------------------------------
+
+MASKS_INPUTS = test_l1_masks.INPUTS
+MASKS_AUGMENT = test_l1_masks.AUGMENT
+
+
+def _masks_augment_mismatch(name):
+    """Replay augment case `name` of l1_masks; return the AssertionError of `check_augmented`."""
+    case = MASKS_AUGMENT[name]
+    y, aug = test_l1_augment.replay(case)
+    with pytest.raises(AssertionError) as info:
+        test_l1_augment.check_augmented(case, y, aug)
+    return str(info.value)
+
+
+def test_augmentation_with_listwise_deletion_is_caught(monkeypatch):
+    calls = []
+    original = imputation.logreg._column_statistics
+
+    def listwise(x):
+        return original(x[~np.isnan(x).any(axis=1)])
+
+    monkeypatch.setattr(imputation.logreg, "_column_statistics", _counted(calls, listwise))
+    test_l1_augment.check_case(MASKS_AUGMENT["outside_only_category"])  # no NaN in x: invisible
+    assert "Not equal to tolerance" in _masks_augment_mismatch("na_one_predictor")
+    assert calls, "mutant not applied: augment does not call imputation.logreg._column_statistics"
+    case = test_l1_masks.LOGREG["logreg_na_rows"]
+    steps, rng = test_l1_logreg.replay(case, MASKS_INPUTS)
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_logreg.check_fit(case, steps)
+    test_l1_logreg.check_draws(case, rng)  # the draws themselves are right
+
+
+def test_augmentation_with_the_variance_divisor_of_all_rows_is_caught(monkeypatch):
+    calls = []
+    original = imputation.logreg._column_statistics
+
+    def divisor_of_all_rows(x):
+        mean, sd, low, high = original(x)
+        count = (~np.isnan(x)).sum(axis=0)
+        return mean, sd * np.sqrt((count - 1) / (len(x) - 1)), low, high
+
+    monkeypatch.setattr(imputation.logreg, "_column_statistics", _counted(calls, divisor_of_all_rows))
+    test_l1_augment.check_case(MASKS_AUGMENT["outside_only_category"])  # every column counts all rows
+    assert "Not equal to tolerance" in _masks_augment_mismatch("na_one_predictor")
+    assert calls, "mutant not applied: augment does not call imputation.logreg._column_statistics"
+
+
+def test_augmentation_with_the_categories_of_the_fit_rows_is_caught(monkeypatch):
+    calls, polyreg_calls = [], []
+    original = imputation.logreg.augment
+
+    def fit_rows_only(y, id_obs, x, id_mis, max_categories=50):
+        y, id_obs = np.asarray(y), np.asarray(id_obs, dtype=bool)
+        aug = original(np.where(id_obs, y, -1), id_obs, x, id_mis, max_categories)
+        return aug._replace(y=np.concatenate([y, aug.y[len(y) :]]))
+
+    # the same function under both names (polyreg imports it)
+    monkeypatch.setattr(imputation.logreg, "augment", _counted(calls, fit_rows_only))
+    monkeypatch.setattr(imputation.polyreg, "augment", _counted(polyreg_calls, fit_rows_only))
+    test_l1_augment.check_case(MASKS_AUGMENT["na_one_predictor"])  # every category has a fit row
+    assert "shapes (20,), (24,) mismatch" in _masks_augment_mismatch("outside_only_category")
+    assert calls, "mutant not applied: the augment cases do not call imputation.logreg.augment"
+    # "d" occurs only outside the fit rows: without added rows it gets probability 0
+    case = test_l1_masks.POLYREG["polyreg_outside"]
+    steps, rng = test_l1_polyreg.replay(case, MASKS_INPUTS)
+    assert polyreg_calls, "mutant not applied: polyreg does not call imputation.polyreg.augment"
+    assert np.all(steps.prob[:, 3] == 0)
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        test_l1_polyreg.check_prediction(case, steps)
+    test_l1_polyreg.check_draws(case, rng)
+
+
+def test_augmentation_skipped_by_the_rows_to_impute_is_caught(monkeypatch):
+    """R skips where exactly one row lies outside the fit rows; the mutant
+    where exactly one row is to be imputed. The original is called with no
+    fit row, so that its own rule never skips, and the fit rows are put back."""
+    calls = []
+    original = imputation.logreg.augment
+
+    def by_rows_to_impute(y, id_obs, x, id_mis, max_categories=50):
+        y, id_obs, id_mis = np.asarray(y), np.asarray(id_obs, dtype=bool), np.asarray(id_mis, dtype=bool)
+        x = np.asarray(x, dtype=float).reshape(len(y), -1)
+        if id_mis.sum() == 1:
+            return imputation.logreg.Augmented(y, id_obs, x, id_mis, np.ones(len(y)))
+        aug = original(y, np.zeros_like(id_obs), x, id_mis, max_categories)
+        return aug._replace(id_obs=np.concatenate([id_obs, aug.id_obs[len(y) :]]))
+
+    monkeypatch.setattr(imputation.logreg, "augment", _counted(calls, by_rows_to_impute))
+    test_l1_augment.check_case(MASKS_AUGMENT["all_observed_all_imputed"])  # not skipped either way
+    # R skips (one row outside the fit rows, two to impute); the mutant does not
+    assert "shapes (24,), (12,) mismatch" in _masks_augment_mismatch("one_outside_not_imputed")
+    # R augments (one row to impute, two ignored rows); the mutant does not
+    assert "shapes (12,), (24,) mismatch" in _masks_augment_mismatch("one_imputed_plus_ignored")
+    assert calls, "mutant not applied: the augment cases do not call imputation.logreg.augment"
+
+
+def _complement(calls, original):
+    """`_masks` that imputes the rows outside `id_obs`, whatever `id_mis` says."""
+
+    def complement(id_obs, id_mis, method):
+        id_obs = np.asarray(id_obs, dtype=bool)
+        return original(id_obs, ~id_obs, method)
+
+    return _counted(calls, complement)
+
+
+@pytest.mark.parametrize("name, module", [("norm_overlap", imputation.norm), ("mean_overlap", imputation.mean)])
+def test_norm_methods_imputing_the_complement_of_the_fit_rows_are_caught(monkeypatch, name, module):
+    calls = []
+    monkeypatch.setattr(module, "_masks", _complement(calls, module._masks))
+    case = test_l1_masks.NORM[name]
+    imputed, rng = test_l1_norm.replay(case, MASKS_INPUTS)
+    assert calls, f"mutant not applied: the imputer does not call {module.__name__}._masks"
+    assert imputed.shape == (7,)  # the 7 rows that are not fit rows instead of all 30
+    with pytest.raises(AssertionError, match=r"shapes \(7,\), \(30,\) mismatch"):
+        test_l1_norm.check_imputations(case, imputed)
+    if case["method"] == "norm":
+        with pytest.raises(AssertionError, match=r"scripted values left over: 23 normal"):
+            test_l1_norm.check_draws(case, rng)
+
+
+def test_norm_imputing_the_rows_in_neither_mask_is_caught(monkeypatch):
+    """With rows in neither mask, the mutant asks for more normals than R drew."""
+    calls = []
+    monkeypatch.setattr(imputation.norm, "_masks", _complement(calls, imputation.norm._masks))
+    with pytest.raises(AssertionError, match="code asked for 10 standard_normal draws, only 4 scripted left"):
+        test_l1_norm.replay(test_l1_masks.NORM["norm_outside"], MASKS_INPUTS)
+    assert calls, "mutant not applied: norm does not call imputation.norm._masks"
+
+
+def test_polyreg_imputing_the_complement_of_the_fit_rows_is_caught(monkeypatch):
+    calls = []
+    monkeypatch.setattr(imputation.polyreg, "_masks", _complement(calls, imputation.polyreg._masks))
+    case = test_l1_masks.POLYREG["polyreg_overlap"]
+    steps, rng = test_l1_polyreg.replay(case, MASKS_INPUTS)
+    assert calls, "mutant not applied: polyreg does not call imputation.polyreg._masks"
+    assert steps.labels.shape == (7,)
+    with pytest.raises(AssertionError, match=r"shapes \(7, 4\), \(30, 4\) mismatch"):
+        test_l1_polyreg.check_prediction(case, steps)
+    with pytest.raises(AssertionError, match=r"scripted values left over: 23 uniform"):
+        test_l1_polyreg.check_draws(case, rng)
+
+
+def test_logreg_dropping_the_rows_in_neither_mask_is_caught(monkeypatch):
+    calls = []
+    original = imputation.logreg.augment
+
+    def without_rows_in_neither_mask(y, id_obs, x, id_mis, max_categories=50):
+        y, id_obs, id_mis = np.asarray(y), np.asarray(id_obs, dtype=bool), np.asarray(id_mis, dtype=bool)
+        keep = id_obs | id_mis
+        x = np.asarray(x, dtype=float).reshape(len(y), -1)
+        return original(y[keep], id_obs[keep], x[keep], id_mis[keep], max_categories)
+
+    monkeypatch.setattr(imputation.logreg, "augment", _counted(calls, without_rows_in_neither_mask))
+    test_l1_logreg.check_case(test_l1_masks.LOGREG["logreg_overlap"], MASKS_INPUTS)  # no such row: invisible
+    for name in ("logreg_outside", "logreg_na_rows"):
+        case = test_l1_masks.LOGREG[name]
+        steps, rng = test_l1_logreg.replay(case, MASKS_INPUTS)
+        with pytest.raises(AssertionError, match="Not equal to tolerance"):
+            test_l1_logreg.check_fit(case, steps)
+        test_l1_logreg.check_draws(case, rng)  # the draws themselves are right
+    assert calls, "mutant not applied: logreg does not call imputation.logreg.augment"

@@ -85,12 +85,14 @@ Check the imputations
    from plotting import densityplot, plot_chain_stats
 
    plot_chain_stats(mice.chain_mean, mice.chain_var, save_path="trace.png")
-   densityplot(mice.imputed_datasets, df.notna().astype(int), columns=["bmi", "chl"], save_path="density.png")
+   densityplot(mice.imputed_datasets, ~mice.where, columns=["bmi", "chl"], save_path="density.png")
 
 The trace plot shows the mean and standard deviation of the imputed values
-per iteration and chain; the chains should mix and show no trend. The density
-plot compares the observed values (blue) with the imputed ones (red). In a
-notebook, leave out ``save_path`` to show the figures. See
+per iteration and chain; the chains should mix and show no trend, and
+``mice.continue_chains()`` runs more iterations if they do not. The density
+plot compares the observed values (blue) with the imputed ones (red);
+``~mice.where`` marks the cells that were not imputed. In a notebook, leave
+out ``save_path`` to show the figures. See
 :doc:`user_guide/convergence_diagnostics` and
 :doc:`user_guide/diagnostic_plots`.
 
@@ -100,7 +102,9 @@ Next steps
 - :doc:`user_guide/imputation_methods`: the fourteen methods, the defaults
   by column type, and the parameters.
 - :doc:`user_guide/predictor_matrices`: choosing the predictors.
+- :doc:`user_guide/controlling_imputation`: which cells are imputed, rows
+  left out of the models, bounds on the imputations, derived columns.
 - :doc:`user_guide/pooling_analysis`: other models, the pooled table, pooling
   without ``MICE``.
 - :doc:`r_mice/differences`: for users of R mice.
-- :doc:`upgrading`: for users of mice-py 0.1 and 0.2.
+- :doc:`upgrading`: for users of earlier versions of mice-py.

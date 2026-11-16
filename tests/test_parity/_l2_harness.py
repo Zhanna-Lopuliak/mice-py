@@ -25,6 +25,22 @@ For a numeric target the first two kinds give T2 (moments per cell) and T3
 T3 on the OLS coefficients of the 0/1 indicator of each level but the first
 in the completed target; there is no T2 for labels. A kind is one
 :class:`Kind` entry in ``KINDS``.
+
+An input has two masks, as R's ``sampler.univ`` passes them: ``ry``, the fit
+rows, and ``wy``, the rows to impute (``~ry`` unless the fixture stores
+``wy``); the imputer gets both. A cell is a row of ``wy``. F8 has general
+masks (rows in both, rows in neither) and is stored in the fixtures
+``l2_masks_<method>``. Under general masks the statistics mean:
+
+* donor counts (T1) count draws of the values of the fit rows, which
+  include the observed value of a fit row to impute (its own donor); an
+  imputation that is not the value of a fit row, such as the decoy ``y``
+  of a row in neither mask, is not recorded (``n_not_donor``);
+* the completed y of T3 holds the imputations in the rows of ``wy`` (in a
+  fit row to impute they replace its observed value, as R's ``complete()``
+  does under ``where``) and the observed values in the other fit rows; the
+  regression uses the rows of ``ry | wy`` only, so a row in neither mask
+  (which may have NaN in x or an ignored y) does not enter.
 """
 
 import functools
@@ -59,25 +75,32 @@ PY_SEED_OFFSET = 10_000
 
 @dataclass(frozen=True)
 class L2Input:
-    """One fixed input ``(y, ry, x)`` as stored in a layer-2 fixture."""
+    """One fixed input ``(y, ry, x, wy)`` as stored in a layer-2 fixture."""
 
     name: str
     type: str  # "numeric" or "factor"
     # float with NaN, or object with NaN, at the missing cells; an ordered
     # Categorical for an ordered factor
     y: np.ndarray
-    ry: np.ndarray  # bool, True where y is observed
-    x: np.ndarray  # float, n x p, no intercept
+    ry: np.ndarray  # bool, True in the fit rows
+    x: np.ndarray  # float, n x p, no intercept; NaN only in rows in neither mask
     x_names: tuple
-    donor_values: np.ndarray  # sorted distinct observed values, or the levels
+    donor_values: np.ndarray  # sorted distinct values of the fit rows, or the levels
+    wy: np.ndarray  # bool, True in the rows to impute
 
     @property
     def is_factor(self):
         return self.type == "factor"
 
     @property
-    def n_mis(self):
-        return int((~self.ry).sum())
+    def n_imp(self):
+        """The number of cells (rows to impute)."""
+        return int(self.wy.sum())
+
+    @property
+    def used(self):
+        """The rows of either mask, the rows the imputer reads."""
+        return self.ry | self.wy
 
 
 def load_input(payload):
@@ -85,9 +108,11 @@ def load_input(payload):
 
     A factor target is an object array of its labels, or, where the payload
     says ``ordered``, an ordered ``pd.Categorical`` whose categories are its
-    levels in R's order (``donor_values``).
+    levels in R's order (``donor_values``). ``wy`` is ``~ry`` unless the
+    payload stores it; ``x`` is NaN where R wrote NA.
     """
     ry = np.array(payload["ry"], dtype=bool)
+    wy = np.array(payload["wy"], dtype=bool) if "wy" in payload else ~ry
     if payload["type"] == "factor":
         y = np.array([np.nan if v is None else v for v in payload["y"]], dtype=object)
         donor_values = np.array(payload["donor_values"], dtype=object)
@@ -105,41 +130,50 @@ def load_input(payload):
         x=x,
         x_names=tuple(payload["x_names"]),
         donor_values=donor_values,
+        wy=wy,
     )
 
 
-def fixture_name(method):
-    """Name of the fixture of a method: ``l2_<method>``, dots as underscores."""
-    return "l2_" + method.replace(".", "_")
+# Inputs with general masks, stored in fixtures of their own
+MASK_INPUTS = ("F8",)
+
+
+def fixture_name(method, input_name=None):
+    """Name of the fixture of a method that holds ``input_name``:
+    ``l2_<method>``, or ``l2_masks_<method>`` for an input of ``MASK_INPUTS``;
+    dots as underscores."""
+    prefix = "l2_masks_" if input_name in MASK_INPUTS else "l2_"
+    return prefix + method.replace(".", "_")
 
 
 @functools.cache
-def r_fixture(method):
-    """The fixture of a method, as a dict."""
-    return load_fixture(fixture_name(method))
+def r_fixture(method, input_name=None):
+    """The fixture of a method that holds ``input_name``, as a dict."""
+    return load_fixture(fixture_name(method, input_name))
 
 
-def r_results(method):
-    """The ``results`` entry of the fixture of a method (dict keyed by input)."""
-    return r_fixture(method)["results"]
+def r_results(method, input_name=None):
+    """The ``results`` entry of the fixture of a method that holds
+    ``input_name`` (dict keyed by input)."""
+    return r_fixture(method, input_name)["results"]
 
 
-def r_kind(method):
+def r_kind(method, input_name=None):
     """The kind of a method, from its fixture; ``"donor"`` if none is stored."""
-    kind = r_fixture(method).get("kind", "donor")
+    kind = r_fixture(method, input_name).get("kind", "donor")
     if kind not in KINDS:
-        raise ValueError(f"fixture {fixture_name(method)} has unknown kind {kind!r}")
+        raise ValueError(f"fixture {fixture_name(method, input_name)} has unknown kind {kind!r}")
     return kind
 
 
 def r_reference(method, input_name):
     """Return ``(L2Input, R summary dict)`` for one method and input."""
-    res = r_results(method)[input_name]
+    res = r_results(method, input_name)[input_name]
     return load_input(res["input"]), res
 
 
 def python_seed(method, input_name):
-    return int(r_results(method)[input_name]["seed"]) + PY_SEED_OFFSET
+    return int(r_results(method, input_name)[input_name]["seed"]) + PY_SEED_OFFSET
 
 
 def imputer(method):
@@ -208,23 +242,23 @@ def donor_index(values, inp):
 
 
 def draw(func, inp, n_calls, seed, kind="donor", **kwargs):
-    """Call ``func(y, ry, x, rng=rng, **kwargs)`` ``n_calls`` times.
+    """Call ``func(y, ry, x, id_mis=wy, rng=rng, **kwargs)`` ``n_calls`` times.
 
     One ``np.random.default_rng(seed)`` is passed to every call.
 
-    Returns an ``n_calls x n_mis`` matrix with one row per call, recorded as
+    Returns an ``n_calls x n_imp`` matrix with one row per call, recorded as
     ``kind`` says: for ``"donor"`` and ``"category"`` integer donor (level)
-    indices (-1 where an imputation is not an observed value or level), for
-    ``"continuous"`` the imputed values as floats.
+    indices (-1 where an imputation is not the value of a fit row, or not a
+    level), for ``"continuous"`` the imputed values as floats.
     """
     handler = KINDS[kind]
     rng = np.random.default_rng(seed)
-    rows = np.empty((n_calls, inp.n_mis), dtype=handler.dtype)
+    rows = np.empty((n_calls, inp.n_imp), dtype=handler.dtype)
     for i in range(n_calls):
-        out = func(inp.y.copy(), inp.ry.copy(), inp.x.copy(), rng=rng, **kwargs)
+        out = func(inp.y.copy(), inp.ry.copy(), inp.x.copy(), id_mis=inp.wy.copy(), rng=rng, **kwargs)
         out = np.asarray(out).ravel()
-        if out.shape != (inp.n_mis,):
-            raise AssertionError(f"imputer returned shape {out.shape}, expected ({inp.n_mis},)")
+        if out.shape != (inp.n_imp,):
+            raise AssertionError(f"imputer returned shape {out.shape}, expected ({inp.n_imp},)")
         rows[i] = handler.record(out, inp)
     return rows
 
@@ -237,19 +271,22 @@ def summarise(draws, inp, kind="donor", r_sum=None):
 
 
 def _value_moments(imp, inp):
-    """Moments per cell (``cell``) of an ``n_calls x n_mis`` matrix of imputed
+    """Moments per cell (``cell``) of an ``n_calls x n_imp`` matrix of imputed
     values, and of the OLS coefficients of the completed y on ``[1, x]``,
-    one fit per call (``coef``)."""
-    x1 = np.column_stack([np.ones(len(inp.ry)), inp.x])
+    one fit per call (``coef``). The completed y holds the imputations in
+    the rows of ``wy`` and the observed values in the other fit rows; only
+    the rows of ``ry | wy`` enter the regression (see the module docstring)."""
+    used = inp.used
+    x1 = np.column_stack([np.ones(int(used.sum())), inp.x[used]])
     ycomp = np.repeat(inp.y[:, None], imp.shape[0], axis=1)
-    ycomp[~inp.ry, :] = imp.T
-    coef = np.linalg.solve(x1.T @ x1, x1.T @ ycomp)
+    ycomp[inp.wy, :] = imp.T
+    coef = np.linalg.solve(x1.T @ x1, x1.T @ ycomp[used])
     return {"cell": moments(imp), "coef": moments(coef.T)}
 
 
 def _summarise_donors(idx, inp, r_sum=None):
     """Donor counts per cell; for a numeric target whose imputations are all
-    observed values, also the moments (``_value_moments``)."""
+    values of fit rows, also the moments (``_value_moments``)."""
     k = len(inp.donor_values)
     valid = idx >= 0
     counts = np.stack([np.bincount(col[col >= 0], minlength=k) for col in idx.T])
@@ -267,7 +304,7 @@ def _summarise_donors(idx, inp, r_sum=None):
 def decile_bin_counts(vals, edges):
     """Per cell, the number of values in each of the bins cut at ``edges``.
 
-    ``vals`` is ``n_calls x n_mis``, ``edges`` is ``n_mis x 9`` (R's deciles).
+    ``vals`` is ``n_calls x n_imp``, ``edges`` is ``n_imp x 9`` (R's deciles).
     Bin j holds the values in ``[edge j-1, edge j)``, with -inf and inf as the
     outer edges, which is how R's ``findInterval`` counted R's own draws.
     """
@@ -280,7 +317,7 @@ def _summarise_values(vals, inp, r_sum):
     """Moments (``_value_moments``) and the counts in R's decile bins."""
     if r_sum is None:
         raise ValueError("the continuous kind needs R's summary for its decile edges")
-    edges = np.array(r_sum["bins"]["edges"], dtype=float).reshape(inp.n_mis, -1)
+    edges = np.array(r_sum["bins"]["edges"], dtype=float).reshape(inp.n_imp, -1)
     out = {"kind": "continuous", "n_calls": vals.shape[0], "bins": decile_bin_counts(vals, edges)}
     out.update(_value_moments(vals, inp))
     return out
@@ -289,10 +326,13 @@ def _summarise_values(vals, inp, r_sum):
 def _indicator_coef_moments(idx, inp):
     """Moments of the OLS coefficients of the 0/1 indicator of each level but
     the first in the completed target on ``[1, x]``, one fit per call; level
-    by level, terms in the order of ``[1, x]`` (R's ``coef$names``)."""
-    x1 = np.column_stack([np.ones(len(inp.ry)), inp.x])
+    by level, terms in the order of ``[1, x]`` (R's ``coef$names``). The
+    target is completed and the rows enter as in ``_value_moments``."""
+    used = inp.used
+    x1 = np.column_stack([np.ones(int(used.sum())), inp.x[used]])
     codes = np.repeat(donor_index(inp.y, inp)[:, None], idx.shape[0], axis=1)
-    codes[~inp.ry, :] = idx.T
+    codes[inp.wy, :] = idx.T
+    codes = codes[used]
     coef = [
         np.linalg.solve(x1.T @ x1, x1.T @ (codes == level).astype(float)) for level in range(1, len(inp.donor_values))
     ]
@@ -336,7 +376,7 @@ KINDS = {
         summarise=_summarise_donors,
         t1_counts=lambda r_sum, py_sum: (r_sum["counts"], py_sum["counts"]),
         t1_label="donor counts",
-        not_recorded="observed values",
+        not_recorded="values of fit rows",
     ),
     "continuous": Kind(
         dtype=float,
@@ -366,7 +406,7 @@ class Comparison:
     t3_z_mean: np.ndarray = None  # per coefficient
     t3_z_var: np.ndarray = None
     coef_names: tuple = ()
-    n_not_donor: int = 0  # imputations that are not observed values (donor) or levels (category)
+    n_not_donor: int = 0  # imputations that are not values of fit rows (donor) or levels (category)
     kind: str = "donor"
 
     @staticmethod
@@ -411,7 +451,7 @@ class Comparison:
 def _z_message(label, zm, zv, names, n_not_donor):
     if zm is None or zv is None:
         return (
-            f"{label}: not computed ({n_not_donor} imputations are not observed values or levels, "
+            f"{label}: not computed ({n_not_donor} imputations are not values of fit rows or levels, "
             "or the statistic does not apply to this kind and target)"
         )
 
@@ -433,7 +473,7 @@ def compare(r_sum, py_sum, inp):
     """
     kind = py_sum["kind"]
     counts_r, counts_p = KINDS[kind].t1_counts(r_sum, py_sum)
-    counts_r = np.array(counts_r, dtype=float).reshape(inp.n_mis, -1)
+    counts_r = np.array(counts_r, dtype=float).reshape(inp.n_imp, -1)
     t1_p = np.array([chi2_homogeneity(cr, cp)[2] for cr, cp in zip(counts_r, counts_p)])
     comp = Comparison(t1_p=t1_p, n_not_donor=py_sum.get("n_not_donor", 0), kind=kind)
     n_r, n_p = r_sum["n_calls"], py_sum["n_calls"]
@@ -459,7 +499,7 @@ def run_python(method, input_name, func=None, n_calls=None, **kwargs):
     Returns ``(L2Input, R summary, Python summary)``.
     """
     inp, r_sum = r_reference(method, input_name)
-    kind = r_kind(method)
+    kind = r_kind(method, input_name)
     func = imputer(method) if func is None else func
     draws = draw(
         func,

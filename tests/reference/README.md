@@ -74,6 +74,16 @@ Written by `write_fixture(name, payload)` in `r/_common.R` and read by
 - Fixtures carry their inputs (data generated in R with `set.seed`), so a test
   never depends on a random stream in Python to rebuild them.
 - No timestamps.
+- R's `post` is R code and a passive variable a formula, while mice-py takes
+  functions; a fixture cannot hold either, so it names a recipe with its
+  parameters (`{"recipe": "bounds", "lower": 1, "upper": 25}`). Each side
+  builds it: `post_command()` and `passive_formula()` in `r/_common.R`, which
+  lists the recipes, and `post_function()` and `passive_function()` in
+  `tests/test_parity/_helpers.py`. Post: `bounds` (R's `squeeze()`, pandas'
+  `clip`), `shift`, `rule` (a value where another variable is below a
+  threshold, in the rows of the where-cells), `fill_missing`. Passive:
+  `bmi`, `product`, `sum`, `multiple`, `centred_square` (an aggregate, whose
+  mean R takes over the rows of the where-cells and mice-py over all rows).
 
 ## Layer 1 fixtures
 
@@ -84,7 +94,7 @@ Written by `write_fixture(name, payload)` in `r/_common.R` and read by
 | `l1_quantify` | `mice:::quantify(y, ry, x)` | `imputation.PMM.quantify` (equal up to sign) |
 | `l1_pmm_one_donor` | `mice.impute.pmm(y, ry, x, donors = 1, matchtype)` with captured draws | `imputation.PMM.pmm` |
 | `l1_matchindex` | donors reached by 2000 calls of `matchindex(d, t, k)` | `imputation.PMM.matchindex` |
-| `l1_setup` | `mice(data, maxit = 0)`: method, predictorMatrix, visitSequence, loggedEvents | `MICE.impute`: `.method`, `.predictor_matrix`, `.visit_sequence`; `imputation.make_method` |
+| `l1_setup` | `mice(data, maxit = 0)`: method, predictorMatrix, visitSequence, loggedEvents. `where_cases`: `make.method(data, where = )` and `mice(data, maxit = 0, where = )` for the four keywords and a matrix (a complete column with where-cells, an incomplete one without, also with a method named by the user; where-counts that reorder `"monotone"`), with the visit sequence of each keyword. `monotone_cases`: `mice(data, m = 1, maxit, visitSequence, method = "norm.predict", where)`, the predictorMatrix that `mice.edit.predictorMatrix()` edits for `"monotone"` with `maxit = 1` (also under a `where` that changes the order) and leaves alone for `maxit = 2` and `"revmonotone"`; the completed data of the edited runs. `passive_cases`: `mice(data, maxit = 0, method, where)` with a passive formula in `method` (built from a recipe, see below): the methods, predictorMatrix and loggedEvents after the setup step and the visit sequence by default (passive variables last), for each keyword and for a vector that names a variable twice; a passive copy of a variable (collinear), a complete passive variable, an entirely missing one, a passive variable under `where` | `MICE.impute`: `.method` (`"passive"` for R's formula), `.predictor_matrix`, `.visit_sequence`, `.imputed_datasets`, `.logged_events`; `imputation.make_method` |
 | `l1_make_method` | `make.method(data)` and `make.method(data, defaultMethod = ...)` on one column of each type `assign.method` tells apart (numeric, integer 0/1, logical, factors with 1, 2 and 3 levels, a factor with 3 declared and 2 observed levels, ordered factors with 2 and 4 levels, character, complete), with `class()` of each column | `imputation.make_method` |
 | `l1_design` | `mice:::obtain.design`, `mice:::remove.lindep`, `mice:::find.collinear` | `imputation.design` |
 | `l1_quickpred` | `quickpred(data, ...)` on nhanes and boys | `imputation.quickpred` |
@@ -97,6 +107,8 @@ Written by `write_fixture(name, payload)` in `r/_common.R` and read by
 | `l1_vmmin` | `optim(par, fn, gr, method = "BFGS")` (R's C function `vmmin`, which `nnet` and `MASS::polr` call too) on a quadratic, Rosenbrock's function, a logistic likelihood, a function that is NaN outside its domain and one started at its minimum, with other `maxit`, `abstol` and `reltol`: parameters, value, function and gradient counts, convergence | `imputation.fitting.vmmin` |
 | `l1_polyreg` | `mice.impute.polyreg()` with its uniform numbers captured by re-seeding, rebuilt from `augment()`, `nnet::multinom()` and `predict()`: objective, convergence, coefficients, probabilities of every imputed cell, labels; R's errors where the port goes on or stops; direct `nnet::multinom()` fits (two classes on separated data, case weights) | `imputation.polyreg._polyreg` (the steps of `polyreg`), driven by a strict `ScriptedGenerator`; `imputation.fitting.multinom_fit` |
 | `l1_polr` | `mice.impute.polr()` with its uniform numbers captured by re-seeding, rebuilt from `augment()`, `MASS::polr()` or `nnet::multinom()` and the cumulative rule: the class of the fit R made and polr's error (the reason for the fallback), coefficients, cut points, deviance (objective), convergence, probabilities of every imputed cell, labels; R's errors or other results where the port goes on or stops; direct `MASS::polr()` fits (case weights, 3 and 5 levels, no predictor, an aliased column) and the conditions under which it stops | `imputation.polr._polr` (the steps of `polr`), driven by a strict `ScriptedGenerator`; `imputation.fitting.polr_fit` |
+| `l1_masks` | Direct calls of mice's imputers with the masks `sampler.univ()` produces: `wy` all true with 23 of 30 fit rows (`overlap`, R's `where = "all"`); 20 fit rows, 4 rows to impute and 6 rows in neither mask, 3 with an observed `y` (ignored) and 3 with `NA` (left out by `where`) (`outside`); the same with `NA` in one or both predictors of the rows in neither (`na_rows`). The rows in neither hold decoys (predictors far outside their range, an extreme `y`, or a label no fit row has). `norm`, `norm.nob`, `norm.boot`, `norm.predict`, `mean`, `logreg`, `logreg.boot`, `polyreg`, `polr` with every draw captured by re-seeding, `pmm` with one donor, the donor probabilities of `midastouch`, and `mice:::augment()` with such masks; the cases have the formats of `l1_norm`, `l1_logreg`, `l1_polyreg`, `l1_polr`, `l1_pmm_one_donor`, `l1_midastouch` and `l1_augment`. The script checks that every method but those that augment gives the same result without the rows in neither mask. R's errors where the port stops too (`port` `value_error`), and R's result where the port deliberately differs (`port` `rebuilt`: `logreg.boot` with overlapping masks, `r_imputed`, `r_prob`) | the imputers as for those fixtures, with `id_mis=wy` (`test_l1_masks.py`, with the replay helpers of their tests) |
+| `l1_chain` | Whole chains: `mice(data, m, maxit = 0)` for the start values and the generator state after them, `mice(data, m, maxit)` and `mice.mids()` for the run: `imp`, the completed data, `chainMean`, `chainVar`, method, visit sequence, predictor matrix, `loggedEvents`, `iteration` after each step. Deterministic cases (`norm.predict`, `mean`; nothing drawn after the start), scripted cases (`norm`, `logreg`, `polr`, one chain; every draw of the chain captured by replaying it from `lastSeedValue`, the state after each imputer call proving kind, number and order) and spy cases (a method `mice.impute.spy` records what `sampler.univ()` hands the imputer at every call). The cases with `where`: the keywords `"all"` (deterministic, spy, scripted `norm` and `logreg`), `"observed"` and `"none"`; matrices with missing cells left out, a complete column with where-cells, observed where-cells in predictor columns, where-cells without complete predictors (observed and missing; all of a column), a column with where-cells and method `""` (the user's, the setup step's), a continued run; for the cases whose completed data lose observed values, their number per variable after the start and each step (`lost_observed`). The cases with `ignore`: ignored rows with missing cells (imputed) and with observed ones (in neither mask) for the spy, deterministic (`norm.predict`, `mean`) and scripted `norm`; few fit rows ("df set to 1" counts them) and a predictor constant in the rows that are not ignored (dropped by `remove.lindep()`); scripted `logreg` with one cell to impute and ignored rows, with a category held only by ignored rows, with a predictor value of an ignored row outside the range of the others; scripted `polr` (also drawing `runif(n0)`) where `augment()` is skipped and a level is held only by an ignored row; `ignore` with a `where` matrix; a continued run; fewer than 10 rows left, with R's warning (`warnings`). `r_errors`: calls of `mice()` that stop, with the error and the warnings before it (`polyreg` where `augment()` is skipped and a level is held only by an ignored row; every observed value of a variable ignored; `ignore` with `NA`, numbers, another length). The cases with `post` and passive variables, given as recipes (`post` and `passive` of `args`): bounds on `norm` (scripted, 3 iterations) and on `norm.predict`, a shift, a rule that reads another variable, the next variable predicted from the processed values (spy), `where = "all"`, `ignore`, a variable none of whose where-cells can be imputed (post fills them), a variable the setup step removes (its post cleared, `post_columns`); passive bmi on a subset of `boys`, by default (last), under `"roman"` (before its inputs) and with a vector that names it twice; a passive predictor (spy), observed where-cells of a passive variable, an input with method `""`, a passive copy (collinear), a complete and an entirely missing passive variable; post and passive together in a continued scripted run. `differences`: a passive formula with an aggregate (`passive_aggregate`). `post_never_run`: a post for a passive variable | as above; `impute(post=, passive=)` with the functions of the recipes (`post_function`, `passive_function` in `tests/test_parity/_helpers.py`); `.post` against `post_columns`. For `differences`, the other variables against R's and the passive one against the function of all rows; for `post_never_run`, the `ValueError` of `MICE.impute` |
 
 Behaviours of R mice 3.19.0 that the fixtures pin down and that are easy to
 get wrong:
@@ -161,6 +173,129 @@ get wrong:
   where a search ends with a restart along the previous gradient; R's C code
   (fused multiply-adds) and NumPy then differ by a few evaluations. The
   cases of `l1_vmmin` avoid that ending (see the script).
+- `mice.impute.logreg.boot` draws its bootstrap sample from the fit rows and
+  overwrites the predictors of the fit rows with those of the sample before
+  it predicts, so a row that is both fitted on and imputed (overlapping
+  masks, under `where`) is predicted from the predictors of the bootstrap
+  row that replaced it. mice-py predicts it from its own predictors; the
+  fixture stores R's labels and probabilities (`l1_masks`, case
+  `logreg_boot_overlap`, 7 of 30 labels differ).
+- `augment()` is skipped when exactly one row lies outside `ry`, whatever
+  the number of cells to impute: a row in neither mask counts as outside
+  (`l1_masks`, augment cases). Its means, standard deviations and ranges
+  are taken over all rows of `x`, column by column without `NA`, and its
+  categories from all of `y`.
+- `sampler.univ()` hands the imputer every row, also those whose predictors
+  are incomplete (a predictor with method `""`); they are in neither mask,
+  and `augment()` takes its statistics over them. In the first iteration
+  `y` still holds the start values of the cells to impute in those rows;
+  after the visit those cells are `NA` in `imp` and in the data
+  (`l1_chain`, cases `spy_empty_method_predictor` and
+  `logreg_empty_method_predictor`).
+- `check.df()` runs only in iteration 1, counted over `mice()` and every
+  `mice.mids()` since: a `mice.mids()` after the first iteration does not
+  log "df set to 1" again, while `remove.lindep()` logs its events in every
+  iteration, numbered on from the earlier calls (`l1_chain`, case
+  `continue_events`).
+- Under `where`, `sampler()` writes into the data it works on only the
+  imputations of missing where-cells: an observed where-cell keeps its
+  observed value there, so the other variables are predicted from it, and
+  the model of its own variable is fitted on it, while `complete()` writes
+  the imputation (`l1_chain`, cases `spy_all`, `spy_observed_where_cells`).
+  A missing cell that `where` leaves out stays `NA` and puts the rows of
+  other variables in neither mask (`spy_left_out`).
+- `complete()` writes `imp` into every where-cell, so a where-cell without
+  an imputation is `NA` in the completed data, also over an observed value:
+  all where-cells of a variable with method `""`, given by the user or set
+  by the setup step for a constant variable (`user_empty_method`,
+  `constant_removed`), and the where-cells whose predictors are incomplete
+  at the visit (`incomplete_predictors`, `spy_observed`). R does this
+  silently; mice-py warns with the number of observed values lost per
+  variable, which the fixture records (`lost_observed`). When no where-cell
+  of a variable has complete predictors, `sampler.univ()` returns
+  `numeric(0)`, `imp` holds `NA` for all of them, `chainMean` is `NaN` and
+  `chainVar` `NA` (`no_complete_predictors`).
+- `chainMean` and `chainVar` are taken over all where-cells, observed ones
+  included: under `where = "all"` with `mean`, `chainMean` is the observed
+  mean and `chainVar` 0 (`all_mean_norm_predict`).
+- `make.method()` and `check.method()` count where-cells, not missing
+  values: a complete variable with where-cells gets the method of its type,
+  and a variable without where-cells gets `""`, also when the user names a
+  method for it (`l1_setup`, `where_cases`). With `where = "none"` every
+  method is `""` and `visitSequence` still lists every variable.
+- `"monotone"` orders all variables by their number of where-cells, those
+  without any included. With `maxit = 1` and `visitSequence = "monotone"`
+  (the keyword, given by the user), `mice.edit.predictorMatrix()` keeps for
+  each variable only the variables before it in that order, before the
+  methods are set; one such iteration uses no start value. `maxit = 2` and
+  `"revmonotone"` leave the matrix alone (`l1_setup`, `monotone_cases`).
+- `ignore` changes `ry` only, at the start (`initialize.imp()`: start
+  values drawn from the observed values of the rows that are not ignored)
+  and in every iteration (`sampler.univ()`): an ignored row with a missing
+  where-cell is imputed, one with an observed cell is in neither mask and
+  still reaches the imputer. `check.df()` and `remove.lindep()` work on
+  `ry`, so "df set to 1" counts the fit rows and a predictor that is
+  constant in the rows that are not ignored is dropped, while the setup
+  step uses all rows and keeps it (`l1_chain`, `spy_ignore`,
+  `spy_ignore_few_fit_rows`). `augment()` counts the ignored rows as rows
+  outside `ry`: with one cell to impute it is not skipped
+  (`logreg_one_cell_ignored`).
+- `check.ignore()` stops on a vector that is not logical ("Argument ignore
+  not a logical.", also for 0 and 1) or of another length; a missing value
+  passes it and stops `mice()` in an `if` ("missing value where TRUE/FALSE
+  needed"). When a given `ignore` leaves fewer than 10 rows (also one that
+  ignores none, on fewer than 10 rows) it warns "Fewer than 10 rows for
+  fitting the imputation model. Are you sure?" and goes on; `mice.mids()`
+  does not check `ignore` again (`l1_chain`, `ignore_fewer_than_10_rows`
+  and `r_errors`).
+- A variable whose observed values all lie in ignored rows starts from
+  `rnorm()` and stops `mice()` in iteration 1 with "0 (non-NA) cases"
+  (`r_errors`, `all_observed_ignored`); mice-py raises before the chains.
+- A category of a two-category target held only by ignored rows leaves the
+  target constant in `ry`: `remove.lindep()` then drops every predictor
+  without logging it, `augment()` is skipped for want of a predictor, and
+  the intercept fitted on one category grows with its standard error, so
+  every cell gets the label that the sign of the normal draw gives
+  (`logreg_category_only_ignored`; mice-py does the same).
+- Where `augment()` is skipped (no predictor, or one row outside `ry`) and
+  a level of a factor is held only by an ignored row, `nnet::multinom()`
+  drops it ("group 'c' is empty") and `mice.impute.polyreg` stops ("dims
+  [product 8] do not match the length of object [12]"); mice-py imputes,
+  that level with probability 0 (`r_errors`). `MASS::polr` counts the empty
+  level of an ordered factor and imputes (`polr_one_row_outside`).
+- `sampler()` evaluates the `post` command of a variable right after each
+  of its univariate imputations, in every iteration and imputation, on
+  `imp[[j]][, i]`: every where-cell, observed ones too (`post_where_all`).
+  It runs also when no where-cell could be imputed, and may fill those
+  cells (`post_no_imputation`). The working data are refreshed from its
+  result, so the next variables and the next iteration's fits see the
+  processed values (`spy_post`, `norm_post_bounds`); `chainMean` and
+  `chainVar` are taken after it, and `mice.mids()` keeps it
+  (`continue_post_passive`). `mice.edit.setup()` clears the post of a
+  variable it removes (`post_constant_removed`, `post_columns`); a post for
+  a passive variable stays in `imp$post` and is never run (`post_never_run`;
+  mice-py raises).
+- A passive variable is computed by `model.frame(formula, data[where[, j],
+  ])`: the formula sees the rows of its where-cells only, so an aggregate
+  such as `mean()` is taken over them (`differences`, `passive_aggregate`;
+  mice-py passes all rows). Its value is `NA` where an input is `NA`, which
+  spreads to the variables it predicts (`passive_input_missing`); an
+  observed where-cell gets the formula in the completed data and keeps its
+  observed value in the working data (`passive_where_observed`). It starts
+  from sampled observed values, or from `rnorm()` when it has none, and is
+  the formula after its first visit (`passive_all_missing`).
+- Without `visitSequence`, `mice.edit.setup()` moves the passive variables
+  to the end; a keyword or a vector places them where it puts them, so
+  under `"roman"` a passive variable before its inputs is computed from
+  their values of the previous iteration (`passive_roman`). A vector may
+  name a variable twice: it is visited twice, its chain statistics are
+  those of the end of the iteration (`passive_twice`), and
+  `initialize.imp()` draws its start values twice (the second draw is
+  kept). The constant check of the setup step skips passive variables, the
+  collinearity check does not: a passive copy of a variable gets `""` and is
+  logged, a complete passive variable gets `""` as it has no where-cell, an
+  entirely missing one keeps its formula (`passive_copy_complete`,
+  `l1_setup` `passive_cases`).
 
 ## Layer 2 fixtures
 
@@ -168,6 +303,9 @@ Each `l2_<method>` fixture comes from `l2_method_fixture()` in
 `r/_l2_common.R`: one `set.seed` per input, then many calls of
 `mice.impute.<method>(y, ry, x)` on fixed inputs with 40 observed and 20
 missing values (F1 to F7, defined in that file and stored in the fixture).
+The `l2_masks_<method>` fixtures (`r/l2_masks.R`) come from the same
+function on the input F8 with general masks, called as `sampler.univ()`
+calls the methods, `mice.impute.<method>(y, ry, x, wy)` (see F8 below).
 Per input it holds the input, the seed, `n_calls` and statistics whose form
 depends on the kind of the method (`kind` at the top of the fixture; a
 fixture without it is of the donor kind):
@@ -240,15 +378,41 @@ for the missing rows that differ by at least 0.15 (they differ by up to
 | `l2_logreg_boot` | category | F5 | 20,000 |
 | `l2_polyreg` | category | F3 | 20,000 |
 | `l2_polr` | category | F7 | 20,000 |
+| `l2_masks_pmm` | donor | F8 | 20,000 |
+| `l2_masks_midastouch` | donor | F8 | 20,000 |
+| `l2_masks_cart` | donor, plus the donors reached in the first 2,000 calls | F8 | 20,000 |
+| `l2_masks_rf` | donor | F8 | 5,000 |
+| `l2_masks_sample` | donor | F8 | 20,000 |
+
+F8 has the masks of `sampler.univ()` under `where` and `ignore`, for the
+donor methods: 60 rows, 40 fit rows (`ry`), 20 rows to impute (`wy`) of
+which 8 are fit rows too, and 8 rows in neither mask: 4 with an observed
+decoy `y` far above every `y` of the fit rows, 4 with `NA` in `y`, of which
+one has `NA` in one predictor and one in all three; the other predictors of
+the rows in neither lie far outside the range of the rows used. The input
+stores `wy` (inputs F1 to F7 have `wy = !ry` and do not store it, so their
+fixtures kept their bytes). A fit row that is imputed can be its own donor;
+R is the reference for how often. `l2_masks.R` stops if R ever imputes a
+value that is not the value of a fit row.
 
 `l2_chain` (200 full `mice()` chains with pmm), `l2_chain_default` (200 full
 `mice()` chains with the default methods pmm, logreg, polyreg and polr on a
 mixed frame of 100 rows: per statistic of the last iteration, the mean,
 variance and kurtosis over the chains of the mean and variance of the
 imputed numeric values and of the share of each level but the first among
-the imputed labels) and `l3_mini_s4` (scenario S4 of the simulation study
-with pmm, midastouch and norm, 20,000 replications) have their own formats,
-described at the top of their scripts.
+the imputed labels), `l2_chain_where` (the same with `where = "all"` on the
+same frame, the complete column imputed too, the statistics taken over all
+where-cells), `l2_chain_ignore` (the same frame with 40 added rows from a
+shifted distribution, ignored and with missing cells of their own, the
+statistics taken separately over the imputed cells of the rows that are not
+ignored and of the ignored rows), `l2_chain_passive` (200 chains on a
+numeric frame of 100 rows: `y1` and `y2` imputed by pmm, their product `p`
+passive and not predicting them, `y3` depending on `p`, imputed by pmm and
+bounded by `post`; the chain mean and variance of `y1`, `y2`, `p`, `y3` and
+the share of the imputations of `y3` at each bound) and `l3_mini_s4`
+(scenario S4 of the simulation study with pmm, midastouch and norm, 20,000
+replications) have their own formats, described at the top of their
+scripts.
 
 ## Licence
 

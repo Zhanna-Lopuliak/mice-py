@@ -116,7 +116,7 @@ def test_pmm_for_every_column_is_flagged(monkeypatch):
     mice_module = sys.modules["imputation.MICE"]
     calls = []
 
-    def pmm_everywhere(data, default_method):
+    def pmm_everywhere(data, default_method, where=None):
         calls.append(1)
         return {col: ("pmm" if data[col].isna().any() else "") for col in data.columns}
 

@@ -10,13 +10,16 @@ What it is
 A data frame of 0s and 1s with column labels as index and as columns:
 **rows are targets, columns are predictors**. A 1 in row ``chl``, column
 ``age`` means that ``age`` is a predictor in the imputation model of ``chl``.
-The diagonal is 0. Rows of complete columns are not used.
+The diagonal is 0. Only the rows of the columns that are imputed are used:
+by default the incomplete columns; under ``where`` (see
+:doc:`controlling_imputation`) the columns with where-cells, complete ones
+included.
 
 The default
 -----------
 
-Without ``predictor_matrix``, every other column predicts every incomplete
-column, as in R (all ones, zero diagonal). The setup step then removes
+Without ``predictor_matrix``, every other column predicts every column, as
+in R (all ones, zero diagonal). The setup step then removes
 constant and collinear variables (see :doc:`mice_overview`), and
 ``mice.predictor_matrix`` shows the matrix actually used:
 
@@ -46,8 +49,9 @@ Start from the full matrix and set entries to 0:
    print(mice.predictor_matrix.loc["bmi"])
 
 The matrix may also list only some rows and columns; missing entries count
-as 0. Every incomplete column that is imputed needs a row, otherwise
-``impute`` raises ``ValueError``:
+as 0. Every column that is imputed needs a row, otherwise ``impute`` raises
+``ValueError``; a column that is not imputed (method ``""``) and a passive
+column need none:
 
 .. code-block:: python
 
@@ -60,8 +64,50 @@ as 0. Every incomplete column that is imputed needs a row, otherwise
 
 An incomplete predictor is used with its current imputed values, so it has
 to be imputed itself. To use a variable as a predictor without imputing it,
-give it method ``""``: rows where it is missing are then left out of the
-models that use it, and their missing cells in the target are not imputed.
+give it method ``""``: the rows where it is missing are then not used to fit
+the models that use it, and the missing cells of the target in those rows
+are not imputed. As in R, the methods still receive those rows; only
+``logreg``, ``polyreg`` and ``polr`` use them, in the rows they add to the
+data (R's ``augment``).
+
+Passive columns
+---------------
+
+A passive column (see :doc:`controlling_imputation`) is computed by its
+function, not imputed, so its row is not used. Its column says which
+targets it predicts. Set its entries to 0 in the rows of the columns it is
+computed from, so that a column is not predicted from a function of itself:
+
+.. code-block:: python
+
+   df_int = df.assign(age_bmi=df["age"] * df["bmi"])
+
+   pred = pd.DataFrame(1, index=df_int.columns, columns=df_int.columns)
+   np.fill_diagonal(pred.values, 0)
+   pred.loc["bmi", "age_bmi"] = 0
+
+   mice_int = MICE(df_int)
+   mice_int.impute(predictor_matrix=pred, passive={"age_bmi": lambda d: d["age"] * d["bmi"]}, seed=1)
+   print(mice_int.predictor_matrix)
+
+One iteration of a monotone pattern
+-----------------------------------
+
+With ``visit_sequence="monotone"`` and ``maxit=1``, ``impute`` edits the
+predictor matrix as R does: in the order of all columns by their number of
+where-cells (columns without any first), each column keeps as predictors
+only the columns before it. If the missing values follow a monotone
+pattern, one iteration then imputes it without using start values.
+``mice.predictor_matrix`` shows the edited matrix:
+
+.. code-block:: python
+
+   mice.impute(visit_sequence="monotone", maxit=1, seed=1)
+   print(mice.visit_sequence)      # ['sex', 'bmi', 'chl']
+   print(mice.predictor_matrix)    # sex: age; bmi: age, sex; chl: age, sex, bmi
+
+Other ``maxit``, the other keywords and a list visit sequence leave the
+matrix as it is.
 
 quickpred
 ---------
@@ -107,11 +153,13 @@ missingness indicator, exceeds ``mincor``.
 
 Categorical columns enter the correlations through their level codes, as in
 R. Unlike R, ``include`` and ``exclude`` take exact labels, and an unknown
-label raises ``ValueError``.
+label raises ``ValueError``. As R's, ``quickpred`` gives the rows of
+complete columns no predictors; under ``where`` such a column can be
+imputed, so set the predictors of its row yourself.
 
 The arguments ``min_cor``, ``min_puc``, ``include``, ``exclude`` and
-``correlation_method`` of ``impute`` are deprecated: they call ``quickpred``
-and will be removed in version 0.4.
+``correlation_method`` of ``impute`` were removed in version 0.4: call
+``quickpred`` and pass its result as ``predictor_matrix``, as above.
 
 Guidelines
 ----------

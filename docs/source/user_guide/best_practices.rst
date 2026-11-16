@@ -18,10 +18,15 @@ Before imputing
   so that they get R's default method for their type. A text column with
   more than 50 distinct values, such as names, cannot be imputed with its
   default ``polyreg``.
-- Create derived variables (sums, ratios, transformations) **after**
-  imputation from the imputed variables, rather than imputing them as
-  separate columns: a derived column and its sources would be imputed
-  inconsistently, or the setup step removes the derived column as collinear.
+- Do not impute derived variables (sums, ratios, transformations,
+  interactions) as columns of their own: a derived column and its sources
+  would be imputed inconsistently, or the setup step removes the derived
+  column as collinear. Compute them **after** imputation from the imputed
+  variables, or, if they belong in the imputation model, make them passive
+  (``passive``, :doc:`controlling_imputation`).
+- Rows that must not influence the imputation models (a test set, for
+  example) can still be imputed: leave them out of the models with
+  ``ignore`` (:doc:`controlling_imputation`).
 
 Imputing
 --------
@@ -32,7 +37,9 @@ Imputing
 - Pass a ``seed`` so that the analysis can be reproduced.
 - Read the warnings. "Number of logged events" means a variable was removed
   from the model; see ``mice.logged_events``. "Type mismatch" means a
-  categorical method imputes a numeric column.
+  categorical method imputes a numeric column. "Observed values replaced by
+  missing values" means that ``where`` marks observed cells that could not
+  be imputed; see ``mice.where``.
 - Choose methods per column where the default is not suitable
   (:doc:`imputation_methods`); midas and the norm methods do not take
   categorical targets. Avoid the improper methods ``norm.nob``,
@@ -42,18 +49,22 @@ Imputing
 Checking
 --------
 
-- Check convergence with the trace plot; increase ``maxit`` if the chains
-  trend or do not mix (:doc:`convergence_diagnostics`).
+- Check convergence with the trace plot; run more iterations with
+  ``continue_chains`` if the chains trend or do not mix
+  (:doc:`convergence_diagnostics`).
 - Compare imputed and observed values with the strip, box, density and
   scatter plots; imputed values should be plausible
-  (:doc:`diagnostic_plots`).
+  (:doc:`diagnostic_plots`). Where they are not (for example outside the
+  possible range), bound them with ``post``
+  (:doc:`controlling_imputation`).
 
 Analyzing
 ---------
 
 - Fit the analysis model to every completed dataset and pool with Rubin's
   rules (``fit`` and ``pool``); never analyze a single completed dataset or
-  the average of the datasets (:doc:`pooling_analysis`).
+  the average of the datasets (:doc:`pooling_analysis`). Fit again after
+  every ``impute`` or ``continue_chains``, which remove earlier fits.
 - Report the number of imputations, the methods, and the fraction of missing
   information of the main estimates.
 - Use more imputations when standard errors and p-values matter and much is

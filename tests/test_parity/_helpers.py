@@ -66,6 +66,58 @@ def decode_frame(payload):
 _NONFINITE = {"Inf", "-Inf", "NaN"}
 
 
+# ---------------------------------------------------------------------------
+# Recipes for post and passive imputation
+# ---------------------------------------------------------------------------
+#
+# R's post is R code and a passive column a formula; MICE takes functions. A
+# fixture names a recipe with its parameters, which each side builds: R's
+# post_command() and passive_formula() in tests/reference/r/_common.R (where
+# the recipes are listed), the functions here.
+
+
+def post_function(recipe):
+    """The ``post`` function ``f(imp, data)`` of a recipe written by ``post_bounds()`` ... in ``_common.R``."""
+    kind = recipe["recipe"]
+    if kind == "bounds":
+        lower, upper = float(recipe["lower"]), float(recipe["upper"])
+        return lambda imp, data: imp.clip(lower, upper)
+    if kind == "shift":
+        delta = float(recipe["delta"])
+        return lambda imp, data: imp + delta
+    if kind == "rule":
+        column, below, value = str(recipe["column"]), float(recipe["below"]), float(recipe["value"])
+        return lambda imp, data: imp.mask(data[column] < below, value)
+    if kind == "fill_missing":
+        value = float(recipe["value"])
+        return lambda imp, data: imp.fillna(value)
+    raise ValueError(f"unknown post recipe {kind!r}")
+
+
+def passive_function(recipe):
+    """The ``passive`` function ``f(data)`` of a recipe written by ``passive_bmi()`` ... in ``_common.R``.
+
+    ``centred_square`` subtracts the mean of all rows it is given; R's formula, evaluated on the rows of the
+    where-cells, the mean of those.
+    """
+    kind = recipe["recipe"]
+    if kind == "bmi":
+        weight, height = str(recipe["weight"]), str(recipe["height"])
+        return lambda data: data[weight] / (data[height] / 100) ** 2
+    if kind in ("product", "sum"):
+        left, right = str(recipe["left"]), str(recipe["right"])
+        if kind == "product":
+            return lambda data: data[left] * data[right]
+        return lambda data: data[left] + data[right]
+    if kind == "multiple":
+        column, factor = str(recipe["column"]), float(recipe["factor"])
+        return lambda data: factor * data[column]
+    if kind == "centred_square":
+        column = str(recipe["column"])
+        return lambda data: (data[column] - data[column].mean()) ** 2
+    raise ValueError(f"unknown passive recipe {kind!r}")
+
+
 def str_list(values):
     """A JSON string or list of strings as a list of plain ``str``."""
     if values is None:

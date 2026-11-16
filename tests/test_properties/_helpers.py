@@ -376,6 +376,113 @@ def assert_chain_stats(mice, original, n_imputations, maxit):
             assert np.isfinite(var).all(), col
 
 
+def predictors_of(mice, column):
+    """The predictors of `column` in ``mice.predictor_matrix`` (after the setup step), in data order."""
+    row = mice.predictor_matrix.loc[column]
+    return [col for col in mice.predictor_matrix.columns if col != column and row[col] != 0]
+
+
+def nan_cascade(data, where, method, visit_sequence, predictors, maxit, passive=None):
+    """Which cells of a completed dataset are missing, from the masks alone: the specification of the NaN cascade.
+
+    Nothing is imputed; a where-cell holds a value or NaN. At the start each
+    where-cell of a column with a method holds a value, each where-cell of a
+    column without one NaN. The data the chains work on are missing in a
+    missing cell that is not a where-cell, and in a missing where-cell that
+    holds NaN; an observed cell is present there, also an observed where-cell
+    that holds NaN. In each of `maxit` iterations, each column of
+    `visit_sequence` in turn: ``cx`` marks the rows in which all its
+    predictors are present in those data; its where-cells outside ``cx``
+    hold NaN, those inside a value. A passive column (method ``"passive"``)
+    has no predictors: its where-cells hold NaN in the rows in which one of
+    its inputs is missing in those data, a value elsewhere. A completed
+    dataset is missing in a where-cell that holds NaN and in a missing cell
+    that is not a where-cell.
+
+    The rule for a passive column holds for a function that returns a
+    missing value exactly where one of the columns it reads is missing,
+    such as a sum or a product; a function that can return a missing value
+    from present inputs (a logarithm of a negative number, 0 / 0) is
+    outside this specification.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        The data.
+    where : pd.DataFrame of bool
+        The where-cells (``MICE.where``).
+    method : dict
+        The method of each column (``MICE.method``); ``""`` for none.
+    visit_sequence : list
+        The visited columns, in order (``MICE.visit_sequence``).
+    predictors : dict
+        For each visited column that is not passive, its predictors (see
+        `predictors_of`).
+    maxit : int
+        The number of iterations.
+    passive : dict, optional
+        For each passive column, the columns its function reads.
+
+    Returns
+    -------
+    pd.DataFrame of bool
+        True for a cell that is missing in every completed dataset.
+    """
+    columns = list(data.columns)
+    missing = data.isna().to_numpy()
+    cells = where.loc[:, columns].to_numpy()
+    holds_nan = np.zeros_like(cells)
+    for j, col in enumerate(columns):
+        if method[col] == "":
+            holds_nan[:, j] = cells[:, j]
+    for _ in range(maxit):
+        for col in visit_sequence:
+            absent = missing & (~cells | holds_nan)
+            inputs = passive[col] if method[col] == "passive" else predictors[col]
+            used = [columns.index(p) for p in inputs]
+            cx = ~absent[:, used].any(axis=1)
+            j = columns.index(col)
+            holds_nan[:, j] = cells[:, j] & ~cx
+    return pd.DataFrame((missing & ~cells) | holds_nan, index=data.index, columns=data.columns)
+
+
+def edit_iterate(monkeypatch, *pairs):
+    """Make ``MICE._iterate`` its own source with lines replaced, for one test; for the mutants of the loop.
+
+    Each pair ``(old, new)`` replaces `old`, which must occur once in the
+    dedented source (the loop body is indented by 8 spaces there), by `new`.
+    `new` may call ``_reached()``; returns the list that collects those
+    calls. As ``_edit_iterate`` in test_parity/test_l1_chain_mutants.
+    """
+    import __future__
+
+    import importlib
+    import inspect
+    import textwrap
+
+    from imputation import MICE
+
+    module = importlib.import_module("imputation.MICE")
+    reached = []
+    source = textwrap.dedent(inspect.getsource(MICE._iterate))
+    for old, new in pairs:
+        assert source.count(old) == 1, f"mutant not applied: MICE._iterate has no line {old!r}"
+        source = source.replace(old, new)
+    namespace = dict(vars(module), _reached=lambda: reached.append(1))
+    exec(compile(source, module.__file__, "exec", flags=__future__.annotations.compiler_flag), namespace)
+    monkeypatch.setattr(MICE, "_iterate", namespace["_iterate"])
+    return reached
+
+
+def assert_cells_outside_where_unchanged(original, where, completed):
+    """Every cell that is not a where-cell holds its value of `original` (missing stays missing)."""
+    for col in original.columns:
+        kept = ~where[col].to_numpy()
+        expected = [label_key(v) if not pd.isna(v) else "missing" for v in original[col][kept].tolist()]
+        got = [label_key(v) if not pd.isna(v) else "missing" for v in completed[col][kept].tolist()]
+        assert got == expected, f"cells outside where changed in column {col!r}"
+
+
 def constant_columns(df):
     """Incomplete columns whose observed values are all equal.
 

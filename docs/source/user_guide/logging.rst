@@ -103,11 +103,15 @@ script's own messages follow the same configuration.
 Warnings
 --------
 
-Independent of logging, ``impute`` issues a ``UserWarning`` when the setup
-step or a method changed the model ("Number of logged events"), for rows
-without any observed value, for a categorical method on a numeric column
-("Type mismatch"), and for more than 100 imputations or 50 iterations;
-``pool`` warns for a single imputation; the plot functions warn when there
-is nothing to plot. Control them with the :mod:`warnings` module, for
-example ``warnings.simplefilter("ignore", UserWarning)`` inside a
+Independent of logging, ``MICE(data)`` issues a ``UserWarning`` for rows
+without any observed value, and ``impute`` when the setup step or a method
+changed the model ("Number of logged events"), for a categorical method on
+a numeric column ("Type mismatch"), for more than 100 imputations or 50
+iterations, when observed cells that ``where`` marks could not be imputed
+("Observed values replaced by missing values") and when ``ignore`` leaves
+fewer than 10 rows for the models; ``continue_chains`` warns in the same
+way when its iterations log an event or lose observed values; ``pool`` warns
+for a single imputation; the plot functions warn when there is nothing to
+plot. Control them with the :mod:`warnings` module, for example
+``warnings.simplefilter("ignore", UserWarning)`` inside a
 ``warnings.catch_warnings()`` block.

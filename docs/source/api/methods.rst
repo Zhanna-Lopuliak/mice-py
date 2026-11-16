@@ -2,7 +2,10 @@ Imputation Methods
 ==================
 
 Each method can be called on its own: ``f(y, id_obs, x, id_mis=None, ...,
-rng=None)`` returns the imputations of the cells in ``id_mis``. Through
+rng=None)`` returns the imputations of the cells in ``id_mis``. As in R,
+``id_obs`` (the rows the model is fitted on) and ``id_mis`` (the rows to
+impute) may overlap, and a row may be in neither; the predictors must be
+complete in the rows of the two masks. Through
 :meth:`imputation.MICE.impute` their parameters are passed with a prefix:
 the method name with every dot replaced by an underscore (``pmm_donors=3``,
 ``norm_boot_ridge=1e-4`` for parameter ``ridge`` of ``norm.boot``,

@@ -154,13 +154,14 @@ class TestCheckParameters:
             assert check_maxit(10) is None
             assert check_maxit(1) is None
             assert check_maxit(50) is None
+            assert check_maxit(0) is None  # as in R: the start only
 
     def test_check_maxit_invalid(self):
         """Test invalid maxit values."""
-        with pytest.raises(ValueError, match="maxit must be a positive integer"):
-            check_maxit(0)
-        with pytest.raises(ValueError, match="maxit must be a positive integer"):
+        with pytest.raises(ValueError, match="maxit must be a non-negative integer"):
             check_maxit(-1)
+        with pytest.raises(ValueError, match="maxit must be an integer"):
+            check_maxit(1.5)
 
     def test_check_maxit_warning(self):
         """Test warning for large maxit values."""
@@ -284,10 +285,20 @@ class TestValidatePredictorMatrix:
         assert result is matrix
 
     def test_incomplete_column_without_row(self, sample_data_missing):
+        """Without `imputed_columns`, the incomplete columns are the columns that are imputed."""
         data = sample_data_missing[["age", "bmi", "cholesterol"]]
         matrix = pd.DataFrame([[0]], index=["bmi"], columns=["age"])
-        with pytest.raises(ValueError, match=r"no row for the incomplete columns \['cholesterol'\]"):
+        with pytest.raises(ValueError, match=r"no row for the columns that are imputed \['cholesterol'\]"):
             validate_predictor_matrix(matrix, list(data.columns), data)
+
+    def test_rows_are_needed_for_the_columns_that_are_imputed(self, sample_data_missing):
+        """A column that is not imputed may be a predictor without a row, also if incomplete; a complete column
+        that is imputed (under where) needs one."""
+        data = sample_data_missing[["age", "bmi", "cholesterol"]]
+        matrix = pd.DataFrame([[1, 1]], index=["bmi"], columns=["age", "cholesterol"])
+        assert validate_predictor_matrix(matrix, list(data.columns), data, imputed_columns=["bmi"]) is matrix
+        with pytest.raises(ValueError, match=r"no row for the columns that are imputed \['age'\]"):
+            validate_predictor_matrix(matrix, list(data.columns), data, imputed_columns=["age", "bmi"])
 
     def test_predictor_matrix_invalid_values(self, sample_data_complete):
         """Test error with invalid values in predictor matrix."""

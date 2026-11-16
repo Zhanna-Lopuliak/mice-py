@@ -98,3 +98,103 @@ encode_frame <- function(df) {
     ordered = ordered
   )
 }
+
+# ---------------------------------------------------------------------------
+# Recipes for post and passive imputation
+# ---------------------------------------------------------------------------
+#
+# R's post is R code that sampler() evaluates after each univariate
+# imputation of a variable j, with the imputations of chain i in
+# imp[[j]][, i] (one per where-cell) and the working data in `data`; a
+# passive variable has a formula as its method. mice-py takes functions
+# instead: post={column: f(imp, data)}, passive={column: f(data)}. A fixture
+# cannot hold functions, so a case names a recipe with its parameters, and
+# each side builds it: post_command() and passive_formula() here,
+# post_function() and passive_function() in tests/test_parity/_helpers.py.
+#
+#   post_bounds(lower, upper)    squeeze(imp, c(lower, upper))   imp.clip(lower, upper)
+#   post_shift(delta)            imp + delta                     imp + delta
+#   post_rule(column, below, value)
+#                                value where `column` of the data is below `below`, in the rows of the
+#                                where-cells                     imp.mask(data[column] < below, value)
+#   post_fill_missing(value)     value where imp is NA           imp.fillna(value)
+#
+#   passive_bmi(weight, height)  ~ I(weight / (height / 100)^2)
+#   passive_product(left, right) ~ I(left * right)
+#   passive_sum(left, right)     ~ I(left + right)
+#   passive_multiple(column, factor)
+#                                ~ I(factor * column)
+#   passive_centred_square(column)
+#                                ~ I((column - mean(column))^2); R evaluates the formula on the rows of
+#                                the where-cells only, so its mean is theirs; mice-py passes all rows
+
+recipe <- function(name, ...) list(recipe = name, ...)
+
+post_bounds <- function(lower, upper) recipe("bounds", lower = lower, upper = upper)
+post_shift <- function(delta) recipe("shift", delta = delta)
+post_rule <- function(column, below, value) recipe("rule", column = column, below = below, value = value)
+post_fill_missing <- function(value) recipe("fill_missing", value = value)
+
+passive_bmi <- function(weight, height) recipe("bmi", weight = weight, height = height)
+passive_product <- function(left, right) recipe("product", left = left, right = right)
+passive_sum <- function(left, right) recipe("sum", left = left, right = right)
+passive_multiple <- function(column, factor) recipe("multiple", column = column, factor = factor)
+passive_centred_square <- function(column) recipe("centred_square", column = column)
+
+# A number in R code, read back to the same double
+r_number <- function(x) sprintf("%.17g", x)
+
+# R's post command for a recipe. It indexes the where-cells of j through
+# where[, j] (sampler() has no wy of j at that point)
+post_command <- function(r) {
+  switch(r$recipe,
+    bounds = sprintf("imp[[j]][, i] <- squeeze(imp[[j]][, i], c(%s, %s))", r_number(r$lower), r_number(r$upper)),
+    shift = sprintf("imp[[j]][, i] <- imp[[j]][, i] + %s", r_number(r$delta)),
+    rule = sprintf("imp[[j]][data$%s[where[, j]] < %s, i] <- %s", r$column, r_number(r$below), r_number(r$value)),
+    fill_missing = sprintf("imp[[j]][is.na(imp[[j]][, i]), i] <- %s", r_number(r$value)),
+    stop("unknown post recipe: ", r$recipe)
+  )
+}
+
+# R's passive method for a recipe
+passive_formula <- function(r) {
+  switch(r$recipe,
+    bmi = sprintf("~ I(%s / (%s / 100)^2)", r$weight, r$height),
+    product = sprintf("~ I(%s * %s)", r$left, r$right),
+    sum = sprintf("~ I(%s + %s)", r$left, r$right),
+    multiple = sprintf("~ I(%s * %s)", r_number(r$factor), r$column),
+    centred_square = sprintf("~ I((%s - mean(%s))^2)", r$column, r$column),
+    stop("unknown passive recipe: ", r$recipe)
+  )
+}
+
+# The arguments of mice() for `args`, which may hold post and passive as
+# recipes (a list per variable): the passive formulas go into `method`, one
+# entry per variable in data order (a single method is given to every
+# variable first; methods by name must name every variable that is not
+# passive, so that mice-py, given them as a dict, has no default to add),
+# and the post commands into a post vector (make.post())
+with_recipes <- function(args, data) {
+  passive <- args$passive
+  post <- args$post
+  args$passive <- NULL
+  args$post <- NULL
+  if (!is.null(passive)) {
+    method <- args$method
+    stopifnot("a case with passive variables names the methods" = !is.null(method))
+    if (is.null(names(method))) method <- setNames(rep(method, ncol(data)), names(data))
+    stopifnot(
+      "the methods and the passive variables name every variable" =
+        setequal(union(names(method), names(passive)), names(data))
+    )
+    method <- setNames(method[names(data)], names(data))
+    for (j in names(passive)) method[[j]] <- passive_formula(passive[[j]])
+    args$method <- method
+  }
+  if (!is.null(post)) {
+    commands <- make.post(data)
+    for (j in names(post)) commands[[j]] <- post_command(post[[j]])
+    args$post <- commands
+  }
+  args
+}

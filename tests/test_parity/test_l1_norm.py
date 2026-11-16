@@ -34,9 +34,12 @@ IMPUTERS = {
 }
 
 
-def _inputs(case):
-    """(y, ry, wy, x) of a case; wy is None where R used ``!ry``."""
-    inp = FIXTURE["inputs"][case["input"]]
+def _inputs(case, inputs=None):
+    """(y, ry, wy, x) of a case; wy is None where R used ``!ry``.
+
+    `inputs` maps input names to inputs; None means those of l1_norm.
+    """
+    inp = (FIXTURE["inputs"] if inputs is None else inputs)[case["input"]]
     y = as_array(inp["y"])
     ry = as_bool(inp["ry"])
     wy = None if inp["wy"] is None else as_bool(inp["wy"])
@@ -52,9 +55,12 @@ def _scripted(case):
     )
 
 
-def replay(case):
-    """Run the port on the inputs of `case` with R's draws; return (imputed, rng)."""
-    y, ry, wy, x = _inputs(case)
+def replay(case, inputs=None):
+    """Run the port on the inputs of `case` with R's draws; return (imputed, rng).
+
+    `inputs`: see `_inputs` (test_l1_masks passes those of l1_masks).
+    """
+    y, ry, wy, x = _inputs(case, inputs)
     rng = _scripted(case)
     params = {} if case["method"] == "mean" else {"ls_meth": case["ls_meth"], "ridge": case["ridge"]}
     imputed = IMPUTERS[case["method"]](y, ry, x, id_mis=wy, rng=rng, **params)
